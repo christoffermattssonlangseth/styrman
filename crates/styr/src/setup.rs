@@ -265,8 +265,66 @@ fn rc_file() -> Option<(PathBuf, &'static str)> {
     }
 }
 
-fn alias_installed(rc: &Path) -> bool {
-    std::fs::read_to_string(rc).is_ok_and(|t| t.contains("styr claude"))
+const SHIM_PATH_MARK: &str =
+    "# Styrman: route claude/agy through Styrman (phone approvals and prompts)";
+
+fn shim_path_line(rc: &Path) -> &'static str {
+    if rc.extension().is_some_and(|e| e == "fish") {
+        "fish_add_path --prepend --move $HOME/.styrman/bin"
+    } else {
+        "export PATH=\"$HOME/.styrman/bin:$PATH\""
+    }
+}
+
+fn install_shims(agents: &[&str]) -> Result<()> {
+    let dir = crate::launch::shim_dir().context("HOME is not set")?;
+    std::fs::create_dir_all(&dir)?;
+    for a in agents {
+        let p = dir.join(a);
+        std::fs::write(&p, crate::launch::SHIM)?;
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755))?;
+    }
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Routing {
+    /// Shims installed and first on PATH in a new interactive shell.
+    Active,
+    NotInPath,
+    Missing,
+}
+
+/// What a new interactive shell would run for each agent.
+fn routing_state(agents: &[&str]) -> Routing {
+    let Some(dir) = crate::launch::shim_dir() else {
+        return Routing::Missing;
+    };
+    let installed = agents
+        .iter()
+        .all(|a| std::fs::read_to_string(dir.join(a)).is_ok_and(|s| s == crate::launch::SHIM));
+    if !installed {
+        return Routing::Missing;
+    }
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let out = Command::new(&shell)
+        .args(["-ic", "printf %s \"$PATH\""])
+        .stderr(Stdio::null())
+        .output();
+    let path = out
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default();
+    let dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
+    let shim_pos = dirs.iter().position(|d| d == &dir);
+    let first_real = |name: &str| {
+        dirs.iter().position(|d| {
+            d != &dir && d.join(name).is_file() && !d.to_string_lossy().contains("cmux")
+        })
+    };
+    match shim_pos {
+        Some(s) if agents.iter().all(|a| first_real(a).is_none_or(|r| s < r)) => Routing::Active,
+        _ => Routing::NotInPath,
+    }
 }
 
 fn diagnostics() -> Option<Response> {
@@ -398,73 +456,57 @@ pub fn setup(yes: bool) -> Result<()> {
         }
     }
 
-    // 3. Shell alias, so phone prompts appear in the terminal like typed input.
-    if let Some((rc, alias)) = rc_file() {
-        if alias_installed(&rc) {
-            line(
-                Mark::Ok,
-                "shell alias",
-                format!("claude → styr claude ({})", rc.display()),
-            );
-        } else if ask(
-            &format!(
-                "Add `{alias}` to {}? Phone messages then appear in the terminal like typed input.",
-                rc.display()
-            ),
-            yes,
-        ) {
-            let mut f = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&rc)?;
-            writeln!(
-                f,
-                "\n# Styrman: phone messages appear in the terminal like typed input\n{alias}"
-            )?;
-            line(
-                Mark::Ok,
-                "shell alias",
-                format!("added to {}; open a new terminal tab", rc.display()),
-            );
-        } else {
-            line(
-                Mark::Warn,
-                "shell alias",
-                format!("skipped; add `{alias}` yourself for the best experience"),
-            );
-        }
-        if agy_bin().is_some() {
-            let agy_alias = if alias.starts_with("alias claude '") {
-                "alias agy 'styr agy'"
-            } else {
-                "alias agy='styr agy'"
-            };
-            if std::fs::read_to_string(&rc).is_ok_and(|t| t.contains("styr agy")) {
-                line(Mark::Ok, "shell alias", "agy → styr agy");
-            } else if ask(
-                &format!(
-                    "Add `{agy_alias}` to {}? Needed to approve agy's tool calls and send prompts from the phone.",
-                    rc.display()
-                ),
-                yes,
-            ) {
-                let mut f = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&rc)?;
-                writeln!(f, "{agy_alias}")?;
+    // 3. Route `claude`/`agy` through Styrman with PATH shims (aliases don't
+    //    survive cmux's shell integration, which unaliases them).
+    let agents: Vec<&str> = std::iter::once("claude")
+        .chain(agy_bin().map(|_| "agy"))
+        .collect();
+    match routing_state(&agents) {
+        Routing::Active => line(
+            Mark::Ok,
+            "routing",
+            format!("{} → styr (phone approvals and prompts)", agents.join(", ")),
+        ),
+        state => {
+            install_shims(&agents)?;
+            let rc = rc_file().map(|(rc, _)| rc);
+            let has_path = rc.as_ref().is_some_and(|rc| {
+                std::fs::read_to_string(rc).is_ok_and(|t| t.contains(SHIM_PATH_MARK))
+            });
+            if has_path {
                 line(
                     Mark::Ok,
-                    "shell alias",
-                    format!("agy → styr agy added to {}", rc.display()),
+                    "routing",
+                    format!("{} → styr; open a new terminal tab", agents.join(", ")),
                 );
-            } else {
-                line(
-                    Mark::Warn,
-                    "shell alias",
-                    format!("skipped `{agy_alias}`: agy sessions will be read-only on the phone"),
-                );
+            } else if let Some(rc) = rc {
+                if ask(
+                    &format!(
+                        "Route {} through Styrman? Adds ~/.styrman/bin to PATH in {} (needed for approvals and prompts from the phone).",
+                        agents.join(" and "),
+                        rc.display()
+                    ),
+                    yes,
+                ) {
+                    let mut f = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&rc)?;
+                    writeln!(f, "\n{SHIM_PATH_MARK}\n{}", shim_path_line(&rc))?;
+                    line(
+                        Mark::Ok,
+                        "routing",
+                        format!("added to {}; open a new terminal tab", rc.display()),
+                    );
+                } else {
+                    line(
+                        Mark::Warn,
+                        "routing",
+                        "skipped: sessions are read-only on the phone unless started with `styr claude` / `styr agy`",
+                    );
+                }
             }
+            let _ = state;
         }
     }
 
@@ -620,16 +662,21 @@ pub fn doctor(live: bool) -> Result<bool> {
             )
         }
     }
-    if let Some((rc, _)) = rc_file() {
-        if alias_installed(&rc) {
-            line(Mark::Ok, "shell alias", "claude → styr claude");
-        } else {
-            line(
-                Mark::Warn,
-                "shell alias",
-                "missing: phone messages arrive as hook feedback instead of typed input",
-            );
-        }
+    let agents: Vec<&str> = std::iter::once("claude")
+        .chain(agy_bin().map(|_| "agy"))
+        .collect();
+    match routing_state(&agents) {
+        Routing::Active => line(Mark::Ok, "routing", format!("{} → styr", agents.join(", "))),
+        Routing::NotInPath => line(
+            Mark::Warn,
+            "routing",
+            "~/.styrman/bin isn't first on PATH in new shells: run `styr setup`",
+        ),
+        Routing::Missing => line(
+            Mark::Warn,
+            "routing",
+            "not set up: sessions are read-only on the phone; run `styr setup`",
+        ),
     }
     if agy_bin().is_some() {
         let v = agy_version().unwrap_or_else(|| "?".into());
@@ -641,15 +688,6 @@ pub fn doctor(live: bool) -> Result<bool> {
                 Mark::Warn,
                 "agy",
                 format!("version {v}: plugin missing or outdated, run `styr setup`"),
-            );
-        }
-        if let Some((rc, _)) = rc_file()
-            && !std::fs::read_to_string(&rc).is_ok_and(|t| t.contains("styr agy"))
-        {
-            line(
-                Mark::Warn,
-                "shell alias",
-                "agy → styr agy missing: agy sessions are read-only on the phone",
             );
         }
     }

@@ -412,7 +412,10 @@ impl AgentAdapter for ClaudeAdapter {
         LaunchSpec {
             program: "claude".into(),
             extra_args: vec![],
-            env: vec![("STYR_LAUNCHED".into(), "1".into())],
+            env: vec![
+                ("STYR_LAUNCHED".into(), "1".into()),
+                ("STYR_WRAPPED".into(), "1".into()),
+            ],
         }
     }
 }

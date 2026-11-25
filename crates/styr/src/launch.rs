@@ -35,7 +35,10 @@ pub fn find_on_path(
     self_exe: Option<&Path>,
 ) -> Option<PathBuf> {
     let me = self_exe.and_then(|p| p.canonicalize().ok());
+    let shims = shim_dir().and_then(|d| d.canonicalize().ok());
     std::env::split_paths(path_var)
+        // Our own shims (`~/.styrman/bin/<agent>` → `styr <agent>`) would loop.
+        .filter(|dir| shims.is_none() || dir.canonicalize().ok() != shims)
         .map(|dir| dir.join(program))
         .filter(|c| is_executable(c))
         .find(|c| match (&me, c.canonicalize()) {
@@ -43,6 +46,41 @@ pub fn find_on_path(
             _ => true,
         })
 }
+
+/// Where `styr setup` puts the `claude`/`agy` shims that route through Styrman.
+pub fn shim_dir() -> Option<PathBuf> {
+    Some(PathBuf::from(std::env::var_os("HOME")?).join(".styrman/bin"))
+}
+
+/// The shim: `claude`/`agy` on PATH → `styr <agent>`. Inside `styr <agent>`
+/// (STYR_WRAPPED set, e.g. when cmux's wrapper looks up the next `agy` on PATH and
+/// finds us) it hands straight to the next real binary after its own directory.
+pub const SHIM: &str = r#"#!/bin/sh
+# Styrman shim (installed by `styr setup`): runs this agent through `styr <agent>`
+# so approvals and prompts from the phone work, whatever the shell does to aliases.
+name=$(basename "$0")
+self_dir=$(cd "$(dirname "$0")" && pwd -P)
+next_after_self() {
+  seen=0
+  old_ifs=$IFS; IFS=:
+  for d in $PATH; do
+    if [ "$(cd "$d" 2>/dev/null && pwd -P)" = "$self_dir" ]; then seen=1; continue; fi
+    if [ "$seen" = 1 ] && [ -x "$d/$name" ]; then IFS=$old_ifs; printf '%s' "$d/$name"; return 0; fi
+  done
+  IFS=$old_ifs
+  return 1
+}
+# Guard against wrapper loops (another tool's shim pointing back at us).
+STYR_SHIM_HOPS=$(( ${STYR_SHIM_HOPS:-0} + 1 )); export STYR_SHIM_HOPS
+if [ "$STYR_SHIM_HOPS" -gt 4 ]; then echo "styr shim: $name keeps resolving to itself; check PATH" >&2; exit 1; fi
+styr_bin=$(command -v styr 2>/dev/null)
+[ -n "$styr_bin" ] || { [ -x "$HOME/.cargo/bin/styr" ] && styr_bin="$HOME/.cargo/bin/styr"; }
+if [ -z "$STYR_WRAPPED" ] && [ -n "$styr_bin" ]; then
+  exec "$styr_bin" "$name" "$@"
+fi
+real=$(next_after_self) || { echo "$name: not found on PATH" >&2; exit 127; }
+exec "$real" "$@"
+"#;
 
 pub fn exec(agent: AgentKind, args: Vec<OsString>) -> Result<std::convert::Infallible> {
     let spec = launch_spec(agent).with_context(|| format!("no launcher for {agent}"))?;
@@ -108,5 +146,77 @@ mod tests {
         let path = std::env::join_paths([&a, &b]).unwrap();
         assert_eq!(find_on_path("claude", &path, Some(&me)), Some(real));
         assert_eq!(find_on_path("nope", &path, Some(&me)), None);
+    }
+
+    /// The chain inside cmux: cmux's `agy` function → cmux wrapper (execs the next
+    /// `agy` on PATH after its own dir) → our shim → `styr agy` → cmux wrapper again →
+    /// our shim (now STYR_WRAPPED) → the real agy. No loops, styr exactly once.
+    #[test]
+    fn shim_routes_through_styr_once_even_behind_cmux() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = |n: &str| {
+            let p = d.path().join(n);
+            std::fs::create_dir_all(&p).unwrap();
+            p
+        };
+        let (cmux, shims, real, tools) = (dir("cmux"), dir("shims"), dir("real"), dir("tools"));
+        let write = |p: std::path::PathBuf, body: &str| {
+            std::fs::write(&p, body).unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        // cmux-like wrapper: exec the next `agy` on PATH after its own directory.
+        write(
+            cmux.join("agy"),
+            "#!/bin/sh\nself=$(cd \"$(dirname \"$0\")\" && pwd -P); seen=0; IFS=:\nfor d in $PATH; do if [ \"$(cd \"$d\" && pwd -P)\" = \"$self\" ]; then seen=1; continue; fi; if [ $seen = 1 ] && [ -x \"$d/agy\" ]; then exec \"$d/agy\" \"$@\"; fi; done; exit 99\n",
+        );
+        write(shims.join("agy"), SHIM);
+        write(
+            real.join("agy"),
+            "#!/bin/sh\necho \"REAL $* wrapped=$STYR_WRAPPED via=$VIA\"\n",
+        );
+        // styr picks the first agy on PATH that isn't a shim: here cmux's wrapper.
+        let cmux_agy = cmux.join("agy");
+        write(
+            tools.join("styr"),
+            &format!(
+                "#!/bin/sh\nshift\nVIA=\"$VIA+styr\" STYR_WRAPPED=1 exec {} \"$@\"\n",
+                cmux_agy.display()
+            ),
+        );
+        let sys = std::path::PathBuf::from("/usr/bin");
+        let bin = std::path::PathBuf::from("/bin");
+        let path = std::env::join_paths([&cmux, &shims, &tools, &real, &sys, &bin]).unwrap();
+        let out = std::process::Command::new(&cmux_agy)
+            .arg("hello")
+            .env("PATH", &path)
+            .env_remove("STYR_WRAPPED")
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            "REAL hello wrapped=1 via=+styr",
+            "stderr: {} code {:?}",
+            String::from_utf8_lossy(&out.stderr),
+            out.status.code()
+        );
+        // Outside cmux the shim itself is first on PATH.
+        let path = std::env::join_paths([&shims, &tools, &real, &sys, &bin]).unwrap();
+        write(
+            tools.join("styr"),
+            &format!(
+                "#!/bin/sh\nshift\nVIA=\"$VIA+styr\" STYR_WRAPPED=1 exec {} \"$@\"\n",
+                real.join("agy").display()
+            ),
+        );
+        let out = std::process::Command::new(shims.join("agy"))
+            .arg("x")
+            .env("PATH", &path)
+            .env_remove("STYR_WRAPPED")
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            "REAL x wrapped=1 via=+styr"
+        );
     }
 }

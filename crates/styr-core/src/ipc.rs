@@ -198,6 +198,12 @@ pub struct SessionSummary {
     pub created_ms: TimestampMs,
     pub updated_ms: TimestampMs,
     pub last_seq: u64,
+    /// Runs inside `styr <agent>`'s terminal wrapper right now.
+    #[serde(default)]
+    pub in_terminal_wrapper: bool,
+    /// Prompts from the phone can reach it (wrapper, or Claude's hook route).
+    #[serde(default)]
+    pub accepts_prompts: bool,
 }
 
 /// An exit code plus stderr text for `styr hook` to finish with.

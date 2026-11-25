@@ -14,7 +14,16 @@ struct SessionDetailView: View {
                         TimelineRow(item: item, cwd: summary?.cwd, sessionId: sessionId).id(item.id)
                     }
                     ForEach(timeline.pending) { p in
-                        PendingPromptRow(prompt: p, working: summary?.status == .working)
+                        PendingPromptRow(prompt: p, working: summary?.status == .working, agent: summary?.agent.displayName ?? "the agent")
+                    }
+                    if timeline.isLive && !timeline.hasContent && timeline.pending.isEmpty {
+                        VStack(spacing: 6) {
+                            Image(systemName: "ellipsis.bubble").font(.title2).foregroundStyle(.tertiary)
+                            Text("Nothing yet").font(.headline)
+                            Text("Prompts, tool calls and replies show up here as they happen.")
+                                .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        }
+                        .frame(maxWidth: .infinity).padding(.top, 40)
                     }
                     if !timeline.isLive {
                         HStack { Spacer(); ProgressView(); Spacer() }.padding()
@@ -36,15 +45,6 @@ struct SessionDetailView: View {
                 ToolbarItem(placement: .topBarTrailing) { StatusChip(status: summary.status) }
             }
         }
-        .overlay {
-            if timeline.isLive && !timeline.hasContent {
-                ContentUnavailableView {
-                    Label("Nothing yet", systemImage: "ellipsis.bubble")
-                } description: {
-                    Text("Prompts, tool calls and replies from the terminal show up here as they happen.")
-                }
-            }
-        }
         .overlay(alignment: .top) {
             if let error = connection.lastError {
                 Text(error)
@@ -63,7 +63,15 @@ struct SessionDetailView: View {
                     .font(.footnote).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity).padding(10).background(.bar)
             } else if let summary {
-                Composer(sessionId: sessionId, status: summary.status)
+                if summary.acceptsPrompts {
+                    Composer(sessionId: sessionId, status: summary.status, agent: summary.agent.displayName)
+                } else {
+                    Label {
+                        Text("Read-only: this \(summary.agent.displayName) session wasn't started through Styrman. Run `styr setup` on the Mac, then start it again in a new terminal tab to approve and send messages from here.")
+                    } icon: { Image(systemName: "eye") }
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.bar)
+                }
             }
         }
         .onAppear { connection.watch(sessionId) }
@@ -307,6 +315,7 @@ struct Composer: View {
     @Environment(DaemonConnection.self) private var connection
     let sessionId: String
     let status: SessionStatus
+    let agent: String
     @State private var text = ""
     @FocusState private var focused: Bool
 
@@ -318,13 +327,13 @@ struct Composer: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if status == .working {
-                Text("Claude is working. Your message is sent when it finishes.")
+                Text("\(agent) is working. Your message is sent when it finishes.")
                     .font(.caption).foregroundStyle(.secondary)
             } else if status == .done {
                 Text("This session has ended.").font(.caption).foregroundStyle(.secondary)
             }
             HStack(alignment: .bottom, spacing: 8) {
-                TextField("Message Claude", text: $text, axis: .vertical)
+                TextField("Message \(agent)", text: $text, axis: .vertical)
                     .lineLimit(1...6)
                     .focused($focused)
                     .padding(.horizontal, 14).padding(.vertical, 10)
@@ -347,6 +356,7 @@ struct Composer: View {
 struct PendingPromptRow: View {
     let prompt: SessionTimeline.PendingPrompt
     let working: Bool
+    let agent: String
 
     var body: some View {
         HStack {
@@ -355,7 +365,7 @@ struct PendingPromptRow: View {
                 Text(prompt.text)
                     .padding(.horizontal, 14).padding(.vertical, 10)
                     .background(Theme.accent.opacity(0.15), in: RoundedRectangle(cornerRadius: 16))
-                Label(prompt.queued || working ? "Queued, sent when Claude finishes" : "Sending…",
+                Label(prompt.queued || working ? "Queued, sent when \(agent) finishes" : "Sending…",
                       systemImage: prompt.queued || working ? "clock" : "arrow.up.circle")
                     .font(.caption2).foregroundStyle(.secondary)
             }

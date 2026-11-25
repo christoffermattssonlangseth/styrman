@@ -27,7 +27,10 @@ impl AgentAdapter for CodexAdapter {
         LaunchSpec {
             program: "codex".into(),
             extra_args: vec![],
-            env: vec![("STYR_LAUNCHED".into(), "1".into())],
+            env: vec![
+                ("STYR_LAUNCHED".into(), "1".into()),
+                ("STYR_WRAPPED".into(), "1".into()),
+            ],
         }
     }
 }

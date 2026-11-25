@@ -224,9 +224,12 @@ impl AgentAdapter for AntigravityAdapter {
                 if let Some(cmd) = parse_styr_command(&prompt) {
                     let on = cmd == StyrCommand::On;
                     plan.set_sharing = Some(on);
-                    plan.reply = Some(HookDecision::Consume {
-                        message: styr_message(on),
-                    });
+                    let message = if on && hook.launch_id.is_none() {
+                        "Styrman: shared with your phone, read-only. To approve and send messages from the phone, start agy in a new terminal tab (after `styr setup`) or with `styr agy`.".to_owned()
+                    } else {
+                        styr_message(on)
+                    };
+                    plan.reply = Some(HookDecision::Consume { message });
                 } else {
                     ev.push(EventKind::TurnStarted { turn: None });
                     ev.push(EventKind::UserMessage {
@@ -341,7 +344,10 @@ impl AgentAdapter for AntigravityAdapter {
         LaunchSpec {
             program: "agy".into(),
             extra_args: vec![],
-            env: vec![("STYR_LAUNCHED".into(), "1".into())],
+            env: vec![
+                ("STYR_LAUNCHED".into(), "1".into()),
+                ("STYR_WRAPPED".into(), "1".into()),
+            ],
         }
     }
 }

@@ -95,10 +95,33 @@ struct SessionSummary: Codable, Identifiable, Hashable, Sendable {
     let createdMs: Int64
     let updatedMs: Int64
     let lastSeq: UInt64
+    /// Running inside `styr <agent>`'s terminal wrapper (approvals + prompts work).
+    var inTerminalWrapper: Bool = false
+    /// Messages from the phone can reach this session.
+    var acceptsPrompts: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case id, agent, cwd, title, model, shared, status
         case nativeId = "native_id", createdMs = "created_ms", updatedMs = "updated_ms", lastSeq = "last_seq"
+        case inTerminalWrapper = "in_terminal_wrapper", acceptsPrompts = "accepts_prompts"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        agent = try c.decode(AgentKind.self, forKey: .agent)
+        nativeId = try c.decode(String.self, forKey: .nativeId)
+        cwd = try c.decodeIfPresent(String.self, forKey: .cwd)
+        title = try c.decodeIfPresent(String.self, forKey: .title)
+        model = try c.decodeIfPresent(String.self, forKey: .model)
+        shared = try c.decode(Bool.self, forKey: .shared)
+        status = try c.decode(SessionStatus.self, forKey: .status)
+        createdMs = try c.decode(Int64.self, forKey: .createdMs)
+        updatedMs = try c.decode(Int64.self, forKey: .updatedMs)
+        lastSeq = try c.decode(UInt64.self, forKey: .lastSeq)
+        inTerminalWrapper = (try? c.decodeIfPresent(Bool.self, forKey: .inTerminalWrapper)) ?? false
+        // Older daemons don't say; assume yes rather than hide the message box.
+        acceptsPrompts = (try? c.decodeIfPresent(Bool.self, forKey: .acceptsPrompts)) ?? true
     }
 
     /// Repository / folder name for the list.

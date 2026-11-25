@@ -33,6 +33,7 @@ final class DaemonConnection {
     }
 
     @ObservationIgnored private var timelines: [String: SessionTimeline] = [:]
+    @ObservationIgnored private var lastSentPrompt: (String, String, Date)?
     @ObservationIgnored private var watched: Set<String> = []
     @ObservationIgnored private var task: URLSessionWebSocketTask?
     @ObservationIgnored private var loop: Task<Void, Never>?
@@ -158,6 +159,11 @@ final class DaemonConnection {
             timelines[sid]?.markQueued(text)
         case .error(let message):
             lastError = message
+            // A refused prompt shouldn't sit in the timeline as "queued" forever.
+            if let (sid, text, at) = lastSentPrompt, Date().timeIntervalSince(at) < 10 {
+                timelines[sid]?.dropPending(text)
+                lastSentPrompt = nil
+            }
         case .unknown:
             break
         }
@@ -208,6 +214,7 @@ final class DaemonConnection {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard state == .connected, !text.isEmpty else { return false }
         timeline(for: session).addPending(text)
+        lastSentPrompt = (session, text, Date())
         send(.sendPrompt(session: session, text: text))
         return true
     }

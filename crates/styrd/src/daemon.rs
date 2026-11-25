@@ -397,22 +397,39 @@ impl Daemon {
             created_ms: rec.created_ms,
             updated_ms: rec.updated_ms,
             last_seq: rec.last_seq,
+            in_terminal_wrapper: false,
+            accepts_prompts: false,
         }
+    }
+
+    fn with_capabilities(&self, mut s: SessionSummary) -> SessionSummary {
+        s.in_terminal_wrapper = self.terminals.is_live(&s.id);
+        // Claude can also take prompts through its background Stop hook.
+        s.accepts_prompts = s.in_terminal_wrapper || s.agent == AgentKind::Claude;
+        s
     }
 
     pub fn summaries(&self, include_unshared: bool) -> Result<Vec<SessionSummary>> {
         let g = self.lock();
         let recs = g.store.sessions()?;
-        Ok(recs
+        let list: Vec<SessionSummary> = recs
             .into_iter()
             .filter(|r| include_unshared || r.shared)
             .map(|r| Self::summary_of(&g, r))
+            .collect();
+        drop(g);
+        Ok(list
+            .into_iter()
+            .map(|s| self.with_capabilities(s))
             .collect())
     }
 
     pub fn summary(&self, id: &SessionId) -> Result<Option<SessionSummary>> {
-        let g = self.lock();
-        Ok(g.store.session(id)?.map(|r| Self::summary_of(&g, r)))
+        let s = {
+            let g = self.lock();
+            g.store.session(id)?.map(|r| Self::summary_of(&g, r))
+        };
+        Ok(s.map(|s| self.with_capabilities(s)))
     }
 
     /// Delete a session and its history; phones drop it from their list.
@@ -624,6 +641,10 @@ impl Daemon {
         anyhow::ensure!(
             summary.status != styr_core::SessionStatus::Done,
             "the session has ended"
+        );
+        anyhow::ensure!(
+            summary.accepts_prompts,
+            "This session wasn't started through Styrman, so it can't take messages from the phone. Start it again in a new terminal tab after `styr setup`."
         );
         let prompt = crate::prompts::QueuedPrompt {
             text: text.to_owned(),

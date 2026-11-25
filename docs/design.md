@@ -330,3 +330,9 @@ Each checkpoint ends with something runnable and its tests green.
   - a phone-answered "Run this command?" menu running the command
   - a phone prompt typed into agy and answered
   - `styr doctor --live` passing for both agents
+- **cmux removes aliases.** cmux's zsh integration (`_cmux_fix_path`, run on every `precmd`) runs `unalias claude agy` and defines shell functions that call its bundled wrappers, so `alias agy='styr agy'` never took effect in cmux tabs. Observed as phone prompts for agy stuck in a queue.
+  - **Fix:** `styr setup` installs PATH shims in `~/.styrman/bin` (after cmux's directories, before `~/.local/bin`).
+    - cmux's wrapper looks up the next `agy` and finds the shim. The shim execs `styr agy`, which runs cmux's wrapper again with `STYR_WRAPPED=1`, and then the shim hands off to the next real binary after itself.
+    - `styr`'s own lookup skips the shim directory, and a hop counter guards against loops.
+  - Verified in a zsh started with cmux's `ZDOTDIR` integration: `agy` is a cmux function, yet `styr agy` → the real agy.
+- **Undeliverable prompts are refused.** Sessions report `in_terminal_wrapper` / `accepts_prompts`. Phone prompts for an unwrapped agy session are refused with a reason instead of being queued forever, and the app shows a read-only notice in place of the message box.

@@ -85,18 +85,13 @@ The iPhone app, for now: `cd ios && xcodegen && open Styrman.xcodeproj`, set you
 
 **Claude Code updates.** Styrman records the Claude Code version each session runs. If it's a version Styrman hasn't been checked with, `styr status`, `styr doctor` and the phone tell you. `styr doctor --live` then checks it end to end with one small Haiku call, and marks the version verified if everything works.
 
-### Shell aliases (`styr setup` offers to add this)
+### Routing `claude` and `agy` through Styrman
 
-```sh
-# ~/.zshrc
-alias claude='styr claude'
-alias agy='styr agy'        # adapter coming in phase 2
-alias codex='styr codex'    # adapter coming in phase 3
-```
+`styr setup` installs two tiny launchers, `~/.styrman/bin/claude` and `~/.styrman/bin/agy`, and puts that folder on your PATH (it asks first). From then on, typing `claude` or `agy` runs them through Styrman's terminal wrapper. That wrapper is what lets the phone type messages into the session and answer agy's permission menus.
 
-`styr claude …` runs the next `claude` on your PATH (wrappers such as cmux's stay in the chain) inside a thin terminal wrapper. Your keys and Claude's screen pass straight through. When you send a message from the phone, the wrapper **types it into Claude's prompt box**, so it appears in the terminal exactly like a prompt you typed.
+This uses PATH rather than shell aliases on purpose: cmux's shell integration removes `claude`/`agy` aliases before every prompt and replaces them with its own functions. Its wrappers then look up the next `claude`/`agy` on the PATH, find Styrman's launcher, and both stay in the chain.
 
-Without the alias everything else still works, and phone messages still reach Claude. They arrive through a background hook instead and show in the terminal only as "Stop hook feedback".
+Sessions started some other way still show up on the phone, but read-only (for agy) or with messages going through the hook route (Claude). The phone tells you which.
 
 ### Pair your phone
 

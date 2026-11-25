@@ -39,7 +39,7 @@ struct SessionListView: View {
                     ContentUnavailableView {
                         Label { Text("No shared sessions") } icon: { WheelMark(size: 56) }
                     } description: {
-                        Text("Type **/styr** in a Claude Code session on \(connection.host) and it shows up here.")
+                        Text("Type **/styr** in Claude Code or agy on \(connection.host) and the session shows up here.")
                     }
                 }
             }
