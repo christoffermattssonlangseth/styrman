@@ -25,6 +25,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     /// Ask once (after pairing), then register with APNs on every launch.
     static func enablePush() async {
+        #if DEBUG
+        // Screenshots (simulator): no permission prompt over the app.
+        if ProcessInfo.processInfo.environment["STYR_NO_PUSH"] == "1" { return }
+        #endif
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
         var allowed = settings.authorizationStatus == .authorized

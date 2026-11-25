@@ -83,6 +83,21 @@ struct SessionListView: View {
                     path = [id]
                 }
             }
+            // Screenshots (simulator): STYR_OPEN=<part of a session's native id> opens it;
+            // STYR_SHOW=new|usage|settings opens that sheet.
+            .onChange(of: connection.sessions.count) { _, _ in
+                let env = ProcessInfo.processInfo.environment
+                if let want = env["STYR_OPEN"], path.isEmpty,
+                   let s = connection.sessions.first(where: { $0.nativeId.contains(want) }) {
+                    path = [s.id]
+                }
+                switch env["STYR_SHOW"] {
+                case "new": showNewSession = true
+                case "usage": showUsage = true
+                case "settings": showSettings = true
+                default: break
+                }
+            }
             #endif
         }
     }

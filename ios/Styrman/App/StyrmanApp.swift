@@ -47,9 +47,8 @@ struct RootView: View {
         #if DEBUG
         // UI automation (simulator): STYR_AUTOPAIR=<styrman://pair link> pairs without the sheet.
         .task {
-            if connection.credentials == nil,
-               let s = ProcessInfo.processInfo.environment["STYR_AUTOPAIR"], let url = URL(string: s),
-               let link = PairingLink(url: url) {
+            if let s = ProcessInfo.processInfo.environment["STYR_AUTOPAIR"], let url = URL(string: s),
+               let link = PairingLink(url: url), connection.credentials?.wsURL != link.wsURL {
                 try? await connection.pair(with: link, deviceName: "Simulator")
             }
         }
