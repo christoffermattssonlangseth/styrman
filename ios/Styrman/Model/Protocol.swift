@@ -325,6 +325,40 @@ struct Event: Decodable, Sendable, Hashable {
     enum CodingKeys: String, CodingKey { case session, seq, source, kind, atMs = "at_ms" }
 
     var at: Date { Date(timeIntervalSince1970: Double(atMs) / 1000) }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        session = try c.decode(String.self, forKey: .session)
+        seq = try c.decode(UInt64.self, forKey: .seq)
+        atMs = (try? c.decode(Int64.self, forKey: .atMs)) ?? 0
+        source = (try? c.decode(String.self, forKey: .source)) ?? ""
+        // An event whose details this app can't read (a newer daemon, an odd value)
+        // still counts as seen; it just isn't shown. Never fail the whole message.
+        if let k = try? c.decode(EventKind.self, forKey: .kind) {
+            kind = k
+        } else {
+            let raw = try? c.nestedContainer(keyedBy: DynamicKey.self, forKey: .kind)
+            kind = .unknown(type: (try? raw?.decode(String.self, forKey: DynamicKey("type"))) ?? "?")
+        }
+    }
+
+    init(session: String, seq: UInt64, atMs: Int64, source: String, kind: EventKind) {
+        self.session = session; self.seq = seq; self.atMs = atMs; self.source = source; self.kind = kind
+    }
+}
+
+/// Decodes what it can of an array, skipping elements that don't decode.
+struct Lossy<T: Decodable>: Decodable {
+    let values: [T]
+    init(from decoder: Decoder) throws {
+        var c = try decoder.unkeyedContainer()
+        var out: [T] = []
+        while !c.isAtEnd {
+            if let v = try? c.decode(T.self) { out.append(v) } else { _ = try? c.decode(Skip.self) }
+        }
+        values = out
+    }
+    private struct Skip: Decodable {}
 }
 
 // MARK: - Server → phone
@@ -363,7 +397,7 @@ enum ServerMsg: Decodable, Sendable {
         case "sessions": self = .sessions(try c.decode([SessionSummary].self, forKey: .sessions))
         case "session_updated": self = .sessionUpdated(try c.decode(SessionSummary.self, forKey: .session))
         case "session_removed": self = .sessionRemoved(id: try c.decode(String.self, forKey: .id))
-        case "events": self = .events(session: try c.decode(String.self, forKey: .session), events: try c.decode([Event].self, forKey: .events))
+        case "events": self = .events(session: try c.decode(String.self, forKey: .session), events: try c.decode(Lossy<Event>.self, forKey: .events).values)
         case "subscribed": self = .subscribed(session: try c.decode(String.self, forKey: .session), lastSeq: try c.decode(UInt64.self, forKey: .lastSeq))
         case "event": self = .event(try c.decode(Event.self, forKey: .event))
         case "prompt_delivered":

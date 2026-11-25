@@ -112,12 +112,33 @@ final class DaemonConnection {
         task = t
         t.resume()
         var greeted = false
-        defer { if task === t { task = nil } }
+        // Heartbeat: a silently dead connection (network switch, Tailscale reconnect)
+        // otherwise looks "connected" while nothing arrives. No pong in 10 s → reconnect.
+        let heartbeat = Task { [weak t] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(15))
+                guard let t, !Task.isCancelled else { return }
+                let pong = PongFlag()
+                t.sendPing { error in if error == nil { pong.set() } }
+                try? await Task.sleep(for: .seconds(10))
+                if Task.isCancelled { return }
+                if !pong.isSet {
+                    t.cancel(with: .goingAway, reason: nil) // receive() throws → reconnect
+                    return
+                }
+            }
+        }
+        defer {
+            heartbeat.cancel()
+            if task === t { task = nil }
+        }
         do {
             while !Task.isCancelled {
                 let msg = try await t.receive()
                 guard case .string(let text) = msg, let data = text.data(using: .utf8) else { continue }
-                let decoded = try JSONDecoder().decode(ServerMsg.self, from: data)
+                // One unreadable message must not drop the connection (it would come
+                // back on reconnect and drop it again, forever).
+                guard let decoded = try? JSONDecoder().decode(ServerMsg.self, from: data) else { continue }
                 if case .hello = decoded { greeted = true }
                 handle(decoded)
             }
@@ -255,4 +276,12 @@ final class DaemonConnection {
         send(.resolvePermission(session: session, request: request, option: option))
         return true
     }
+}
+
+/// Set from URLSession's callback thread, read by the heartbeat.
+private final class PongFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    func set() { lock.withLock { value = true } }
+    var isSet: Bool { lock.withLock { value } }
 }

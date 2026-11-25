@@ -425,6 +425,10 @@ impl Connection {
         let mut beat = tokio::time::interval(HEARTBEAT);
         beat.tick().await;
         let mut stop = self.stop.clone();
+        // Anything from the phone (incl. pongs to our pings) proves it's still there. A
+        // phone that vanished (network switch, locked) would otherwise count as "app
+        // open" and its pushes would be skipped.
+        let mut last_heard = tokio::time::Instant::now();
         loop {
             tokio::select! {
                 _ = until_stopped(&mut stop) => {
@@ -438,7 +442,9 @@ impl Connection {
                         return Ok(());
                     }
                 }
-                msg = rx.next() => match msg {
+                msg = rx.next() => {
+                    last_heard = tokio::time::Instant::now();
+                    match msg {
                     Some(Ok(Message::Text(t))) => match serde_json::from_str::<ClientMsg>(t.as_str()) {
                         Ok(m) => self.on_client(&mut tx, m).await?,
                         Err(e) => send(&mut tx, &ServerMsg::Error { message: format!("bad message: {e}") }).await?,
@@ -446,7 +452,8 @@ impl Connection {
                     Some(Ok(Message::Close(_))) | None => return Ok(()),
                     Some(Ok(_)) => {} // ping/pong/binary
                     Some(Err(e)) => return Err(e.into()),
-                },
+                    }
+                }
                 b = bus.recv() => match b {
                     Ok(BusMsg::Event(ev)) => {
                         if let Some(last) = self.subs.get_mut(&ev.session)
@@ -466,7 +473,13 @@ impl Connection {
                     }
                     Err(broadcast::error::RecvError::Closed) => return Ok(()),
                 },
-                _ = beat.tick() => tx.send(Message::Ping(Default::default())).await?,
+                _ = beat.tick() => {
+                    if last_heard.elapsed() > HEARTBEAT * 3 {
+                        tracing::info!(device = %self.device, "phone silent for {}s; closing", last_heard.elapsed().as_secs());
+                        return Ok(());
+                    }
+                    tx.send(Message::Ping(Default::default())).await?
+                }
             }
         }
     }

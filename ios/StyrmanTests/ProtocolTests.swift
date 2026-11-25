@@ -257,3 +257,29 @@ private func event(_ seq: UInt64, _ kind: String) -> String {
         #expect(s == "S")
     }
 }
+
+/// One unreadable event must never break the stream (it would come back on every
+/// reconnect and drop the connection again).
+@Suite struct RobustDecodingTests {
+    @Test func aBadEventInABatchIsSkippedAndTheRestKept() throws {
+        let json = """
+        {"type": "events", "session": "S", "events": [
+          {"session": "S", "seq": 1, "at_ms": 0, "source": "hook", "kind": {"type": "user_message", "text": "hi", "origin": {"from": "terminal"}}},
+          {"session": "S", "seq": 2, "at_ms": 0, "source": "hook", "kind": {"type": "permission_requested", "request": 42}},
+          "not even an object",
+          {"session": "S", "seq": 3, "at_ms": 0, "source": "hook", "kind": {"type": "notice", "text": "ok", "level": "info"}}
+        ]}
+        """
+        let msg = try JSONDecoder().decode(ServerMsg.self, from: Data(json.utf8))
+        guard case .events(_, let events) = msg else { Issue.record("not events"); return }
+        #expect(events.map(\.seq) == [1, 2, 3], "the broken event still counts (as unknown), the non-event is skipped")
+        if case .unknown(let type) = events[1].kind { #expect(type == "permission_requested") } else { Issue.record("expected unknown") }
+    }
+
+    @Test func aLiveEventWithAnOddValueStillDecodes() throws {
+        let json = #"{"type": "event", "event": {"session": "S", "seq": 9, "at_ms": 1, "source": "pty", "kind": {"type": "permission_requested", "request": "r", "tool": {"name": "x", "kind": "execute", "title": "t", "input": null}, "options": [{"id": "o", "kind": "some_new_kind", "label": "Maybe"}]}}}"#
+        let msg = try JSONDecoder().decode(ServerMsg.self, from: Data(json.utf8))
+        guard case .event(let e) = msg else { Issue.record("not event"); return }
+        #expect(e.seq == 9)
+    }
+}
