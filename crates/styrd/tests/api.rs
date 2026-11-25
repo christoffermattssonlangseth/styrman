@@ -268,3 +268,136 @@ async fn browsers_and_token_guessing_are_refused() {
     }
     d.stop().await;
 }
+
+/// A menu read off a Codex terminal reaches a phone that is already watching the
+/// session (live, not only after reopening it), and the phone's answer goes back
+/// to the terminal as a menu selection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn screen_permission_reaches_a_watching_phone_live() {
+    let d = Daemon::start().await;
+    let (code, _host, urls) = d.pairing().await;
+    let ws_url = urls[0].clone();
+    let base = http_base(&ws_url);
+    let paired: PairResponse = pair(&d, &base, &code).await.json().await.unwrap();
+
+    // A shared Codex session running in `styr codex` (terminal "L").
+    let hook = |event: &str, extra: Value| {
+        let mut payload = json!({"session_id": "cx1", "cwd": "/work/repo", "hook_event_name": event,
+            "model": "m", "permission_mode": "default", "transcript_path": null});
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        styr_core::adapter::RawHook {
+            agent: AgentKind::Codex,
+            event: event.into(),
+            payload,
+            launched_by_styr: true,
+            agent_pid: None,
+            launch_id: Some("L".into()),
+            agent_version: None,
+        }
+    };
+    d.call(Request::Hook {
+        hook: hook("SessionStart", json!({"source": "startup"})),
+    })
+    .await;
+    d.call(Request::ShareLaunch {
+        launch_id: "L".into(),
+        shared: true,
+        agent: None,
+        cwd: None,
+        agent_pid: None,
+    })
+    .await;
+    d.call(Request::Hook {
+        hook: hook(
+            "PreToolUse",
+            json!({"turn_id": "t", "tool_name": "Bash", "tool_input": {"command": "touch x"}, "tool_use_id": "c1"}),
+        ),
+    })
+    .await;
+    // The wrapper is attached and waiting for something to do.
+    let sock = d.paths.socket.clone();
+    let wrapper = tokio::task::spawn_blocking(move || {
+        styr_core::ipc::Client::new(sock)
+            .with_timeout(None)
+            .call(&Request::AttachTerminal {
+                launch_id: "L".into(),
+                agent: Some(AgentKind::Codex),
+                cwd: Some("/work/repo".into()),
+            })
+    });
+
+    // The phone opens the session and watches it.
+    let mut ws = connect(&ws_url, &paired.token).await.unwrap();
+    let ServerMsg::Hello { .. } = recv(&mut ws).await else {
+        panic!()
+    };
+    let ServerMsg::Sessions { sessions } = recv(&mut ws).await else {
+        panic!()
+    };
+    let sid = sessions
+        .iter()
+        .find(|s| s.native_id == "cx1")
+        .unwrap()
+        .id
+        .clone();
+    send(
+        &mut ws,
+        json!({"type": "subscribe", "session": sid, "since_seq": 0}),
+    )
+    .await;
+    let ServerMsg::Events { .. } = recv(&mut ws).await else {
+        panic!()
+    };
+    let ServerMsg::Subscribed { .. } = recv(&mut ws).await else {
+        panic!()
+    };
+
+    // Codex shows its approval menu; the wrapper reports it.
+    let prompt = styr_core::ipc::TerminalPrompt {
+        title: "Would you like to run the following command?".into(),
+        detail: "$ touch x".into(),
+        options: vec![
+            "Yes, proceed".into(),
+            "No, and tell Codex what to do differently".into(),
+        ],
+        selected: 0,
+    };
+    d.call(Request::TerminalPrompt {
+        launch_id: "L".into(),
+        prompt: Some(prompt),
+    })
+    .await;
+
+    // Live on the phone, without reopening the session.
+    let request = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let ServerMsg::Event { event } = recv(&mut ws).await
+                && let EventKind::PermissionRequested {
+                    request, options, ..
+                } = event.kind
+            {
+                assert_eq!(options.len(), 2);
+                return request;
+            }
+        }
+    })
+    .await
+    .expect("the card arrives live");
+
+    // Answering on the phone selects the option in the terminal.
+    send(
+        &mut ws,
+        json!({"type": "command", "session": sid, "command": {"type": "resolve_permission", "request": request, "option": "opt-0"}}),
+    )
+    .await;
+    let r = tokio::time::timeout(Duration::from_secs(5), wrapper)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(r, Response::SelectOption { index: 0 });
+    d.stop().await;
+}

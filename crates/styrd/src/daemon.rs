@@ -322,6 +322,14 @@ impl Daemon {
     }
 
     /// Live stream of persisted events of shared sessions (for the phone API).
+    /// Whether a permission request is still waiting for an answer.
+    pub fn request_open(&self, session: &SessionId, request: &styr_core::ids::RequestId) -> bool {
+        self.lock()
+            .trackers
+            .get(session)
+            .is_some_and(|t| t.open_requests().any(|r| r == request))
+    }
+
     pub fn subscribe(&self) -> broadcast::Receiver<BusMsg> {
         self.bus.subscribe()
     }

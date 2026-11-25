@@ -332,9 +332,12 @@ pub async fn run_notifier(daemon: Arc<Daemon>, mut stop: tokio::sync::watch::Rec
         let d = daemon.clone();
         if let EventKind::PermissionRequested { request, .. } = &ev.kind {
             let request = request.clone();
+            let session = ev.session.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(PERMISSION_PUSH_DELAY).await;
-                if d.broker.is_pending(&request) {
+                // Still unanswered? Hook approvals (Claude) and menus read off the
+                // screen (Codex, agy) both show as an open request on the session.
+                if d.request_open(&session, &request) {
                     d.push_to_devices(&n, false).await;
                 }
             });
