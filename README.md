@@ -54,7 +54,7 @@ Design details and the reasoning behind them are in [`docs/design.md`](docs/desi
 
 ## Status
 
-Phase 1 is complete: the daemon, the Claude Code adapter and plugin, and the iPhone app. Antigravity (`agy`) is the next adapter, then Codex.
+Phase 1 (Claude Code + iPhone app) and phase 2 (Antigravity `agy`) are complete. Codex is next.
 
 | Checkpoint | |
 |---|---|
@@ -65,6 +65,7 @@ Phase 1 is complete: the daemon, the Claude Code adapter and plugin, and the iPh
 | 5. Prompts from the phone | ✅ |
 | 6. Push notifications | ✅ |
 | 7. launchd, auth hardening, docs | ✅ |
+| Phase 2: Antigravity (`agy`) adapter | ✅ |
 
 ## Install
 
@@ -110,6 +111,17 @@ Scan it with the iPhone Camera and tap **Pair**. `styr devices` lists paired pho
 1. At developer.apple.com, go to Certificates, IDs & Profiles › Keys and click **+**. Tick **Apple Push Notifications service**, set Environment to **Sandbox & Production**, and download `AuthKey_XXXXXXXXXX.p8`. Apple lets you download it only once, so keep a backup.
 2. Run `styr push setup ~/Downloads/AuthKey_XXXXXXXXXX.p8`. The key is copied into Styrman's data folder (0600), and the Key ID is read from the filename.
 3. Open the app and allow notifications. Then run `styr push test`.
+
+## Antigravity (agy)
+
+`styr setup` also installs a `styrman` plugin for agy and a user-level `/styr` skill. With `alias agy='styr agy'`, agy works just like Claude Code:
+
+- **Sharing:** type `/styr` in agy to share the session, and `/styr off` to stop.
+- **Mirroring:** the phone shows your prompts, agy's replies and its tool calls, with output.
+- **Approvals:** agy has no permission hook, so the wrapper reads agy's own "Run this command?" menu off the screen. The phone gets the same options (Yes / always in this conversation / always and save / No). Tapping one selects it in agy's menu; answering at the keyboard closes the card on the phone.
+- **Prompts from the phone** are typed into agy's prompt box.
+
+Without the alias, agy sessions are mirrored read-only. In agy's `auto` mode, agy approves most actions itself, so cards only appear for the ones it would ask about.
 
 ## Using it
 

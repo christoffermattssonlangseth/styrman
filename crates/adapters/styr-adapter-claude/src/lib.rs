@@ -45,26 +45,7 @@ pub struct ClaudeAdapter {
     pub config: ClaudeConfig,
 }
 
-/// What a `/styr …` prompt asks for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StyrCommand {
-    On,
-    Off,
-}
-
-/// Recognize `/styr`, `/styr on`, `/styr off` (also the plugin-qualified `/styrman:styr`).
-pub fn parse_styr_command(prompt: &str) -> Option<StyrCommand> {
-    let mut words = prompt.split_whitespace();
-    let cmd = words.next()?;
-    if cmd != "/styr" && cmd != "/styrman:styr" {
-        return None;
-    }
-    match (words.next(), words.next()) {
-        (None, _) | (Some("on"), None) => Some(StyrCommand::On),
-        (Some("off"), None) => Some(StyrCommand::Off),
-        _ => None,
-    }
-}
+pub use styr_core::adapter::{StyrCommand, parse_styr_command};
 
 fn s(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(Value::as_str).map(str::to_owned)

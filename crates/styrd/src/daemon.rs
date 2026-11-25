@@ -197,6 +197,16 @@ impl Daemon {
         if let Some(launch) = &hook.launch_id {
             self.terminals.link(&view.id, launch);
         }
+        for e in &events {
+            if let EventKind::ToolCall {
+                tool,
+                status: styr_core::event::ToolStatus::Pending,
+                ..
+            } = e
+            {
+                self.terminals.note_tool(&view.id, tool);
+            }
+        }
         // A prompt we typed into the terminal for the phone comes back as a normal
         // UserPromptSubmit: attribute it to the phone.
         for e in events.iter_mut() {
@@ -801,9 +811,17 @@ impl Daemon {
                 })
             }
             Request::AttachTerminal { launch_id } => match self.attach_terminal(&launch_id).await {
-                Some(text) => Ok(Response::TypePrompt { text }),
+                Some(crate::terminals::TerminalAction::Type(text)) => {
+                    Ok(Response::TypePrompt { text })
+                }
+                Some(crate::terminals::TerminalAction::Select(index)) => {
+                    Ok(Response::SelectOption { index })
+                }
                 None => Err(anyhow::anyhow!("detached")),
             },
+            Request::TerminalPrompt { launch_id, prompt } => self
+                .terminal_prompt(&launch_id, prompt)
+                .map(|()| Response::Ok),
             Request::Diagnostics => self.devices().map(|devices| Response::Diagnostics {
                 daemon_version: styr_core::VERSION.to_owned(),
                 pid: std::process::id(),

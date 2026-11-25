@@ -1,0 +1,17 @@
+#!/bin/sh
+# Styrman hook shim: forwards one agent hook to `styr hook`. Printing nothing is
+# always safe (for agy, `{}` would deny a tool, so we never print a bare object).
+# Fails open: if styr is not installed or anything goes wrong, print nothing, exit 0.
+STYR="${STYR_BIN:-}"
+if [ -z "$STYR" ]; then
+  STYR=$(command -v styr 2>/dev/null)
+fi
+if [ -z "$STYR" ]; then
+  for c in "$HOME/.cargo/bin/styr" /opt/homebrew/bin/styr /usr/local/bin/styr; do
+    [ -x "$c" ] && STYR="$c" && break
+  done
+fi
+[ -n "$STYR" ] || exit 0
+# styr hook itself exits 0 in every case except one it chooses deliberately
+# (exit 2 from the background Stop hook, which wakes Claude with a phone prompt).
+exec "$STYR" hook "$@"

@@ -64,6 +64,12 @@ pub enum Request {
     AttachTerminal {
         launch_id: String,
     },
+    /// From a terminal wrapper: the agent's own permission menu appeared (`Some`)
+    /// or went away (`None`).
+    TerminalPrompt {
+        launch_id: String,
+        prompt: Option<TerminalPrompt>,
+    },
     /// Everything `styr doctor` / `styr setup` need to know about the daemon.
     Diagnostics,
     /// Record that an agent version passed `styr doctor --live`.
@@ -144,6 +150,10 @@ pub enum Response {
     TypePrompt {
         text: String,
     },
+    /// Answer the menu on screen: move to option `index` (0-based) and press Enter.
+    SelectOption {
+        index: usize,
+    },
     PromptAccepted {
         /// False: queued until the agent next stops.
         delivered: bool,
@@ -202,6 +212,19 @@ pub struct HookExit {
 pub struct HookOutput {
     pub stdout: Option<serde_json::Value>,
     pub exit: Option<HookExit>,
+}
+
+/// A permission menu read off the agent's screen by a terminal wrapper.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TerminalPrompt {
+    /// The question, e.g. "Run this command?".
+    pub title: String,
+    /// What it's about, e.g. the command line.
+    pub detail: String,
+    /// Option labels in order, e.g. "Yes, run command", …, "No, cancel".
+    pub options: Vec<String>,
+    /// The highlighted option.
+    pub selected: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

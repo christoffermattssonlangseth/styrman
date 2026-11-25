@@ -15,7 +15,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use styr_core::ipc::{Client, IpcError, Request, Response};
+use styr_core::ipc::{Client, IpcError, Request, Response, TerminalPrompt};
 use styr_core::paths::Paths;
 
 /// Tracks whether the user has a partly typed line (so we don't type over it).
@@ -105,11 +105,76 @@ pub fn can_wrap() -> bool {
 }
 
 /// Run `bin args…` in a pseudo-terminal and return its exit code.
+/// Reads an agent's own permission menu off the screen (agent-specific).
+pub type PromptDetector = fn(&str) -> Option<TerminalPrompt>;
+
+/// agy's permission menu:
+///
+/// ```text
+/// Requesting permission for:
+///    touch agy-probe2.txt
+/// Run this command?
+/// > 1. Yes, run command
+///   2. Yes, and always allow in this conversation for …
+///   4. No, cancel
+/// ```
+pub fn detect_agy_prompt(screen: &str) -> Option<TerminalPrompt> {
+    let lines: Vec<&str> = screen.lines().collect();
+    let start = lines
+        .iter()
+        .rposition(|l| l.contains("Requesting permission for:"))?;
+    let mut detail = Vec::new();
+    let mut title = None;
+    let mut i = start + 1;
+    while i < lines.len() {
+        let t = lines[i].trim();
+        i += 1;
+        if t.ends_with('?') {
+            title = Some(t.to_owned());
+            break;
+        }
+        if !t.is_empty() {
+            detail.push(t.to_owned());
+        }
+    }
+    let title = title?;
+    let mut options = Vec::new();
+    let mut selected = 0;
+    for l in &lines[i..] {
+        let t = l.trim_start();
+        let (marked, rest) = match t.strip_prefix('>') {
+            Some(r) => (true, r.trim_start()),
+            None => (false, t),
+        };
+        let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        let label = (!digits.is_empty())
+            .then(|| rest[digits.len()..].strip_prefix(". "))
+            .flatten();
+        match label {
+            Some(label) => {
+                if marked {
+                    selected = options.len();
+                }
+                options.push(label.trim().to_owned());
+            }
+            None if options.is_empty() && t.is_empty() => continue,
+            None => break,
+        }
+    }
+    (options.len() >= 2).then(|| TerminalPrompt {
+        title,
+        detail: detail.join("\n"),
+        options,
+        selected,
+    })
+}
+
 pub fn run(
     bin: &Path,
     args: &[OsString],
     env: &[(String, String)],
     launch_id: &str,
+    detector: Option<PromptDetector>,
 ) -> Result<i32> {
     // Environment for the child (and, through it, the agent's hooks).
     for (k, v) in env {
@@ -148,6 +213,13 @@ pub fn run(
     let master_write = Arc::new(Mutex::new(master_read.try_clone()?));
     let line = Arc::new(Mutex::new(LineState::default()));
     let done = Arc::new(AtomicBool::new(false));
+    // A terminal emulator over the agent's output, to read its screen.
+    let screen = Arc::new(Mutex::new(vt100::Parser::new(
+        nz(ws.ws_row),
+        nz(ws.ws_col),
+        0,
+    )));
+    let on_screen: Arc<Mutex<Option<TerminalPrompt>>> = Arc::new(Mutex::new(None));
 
     // Keyboard → agent.
     {
@@ -175,6 +247,8 @@ pub fn run(
     // Agent → screen.
     let output = {
         let mut r = master_read;
+        let screen = screen.clone();
+        let emulate = detector.is_some();
         std::thread::spawn(move || {
             let mut out = std::io::stdout();
             let mut buf = [0u8; 16384];
@@ -183,12 +257,46 @@ pub fn run(
                     break;
                 }
                 let _ = out.flush();
+                if emulate {
+                    screen
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .process(&buf[..n]);
+                }
             }
         })
     };
+    // Permission menus on screen → daemon (agents without a permission hook).
+    if let Some(detect) = detector {
+        let (screen, on_screen, done) = (screen.clone(), on_screen.clone(), done.clone());
+        let launch_id = launch_id.to_owned();
+        std::thread::spawn(move || {
+            let client =
+                Client::new(Paths::resolve().socket).with_timeout(Some(Duration::from_secs(2)));
+            let mut last: Option<TerminalPrompt> = None;
+            while !done.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(150));
+                let contents = screen
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .screen()
+                    .contents();
+                let now = detect(&contents);
+                *on_screen.lock().unwrap_or_else(|p| p.into_inner()) = now.clone();
+                if now != last {
+                    let _ = client.call(&Request::TerminalPrompt {
+                        launch_id: launch_id.clone(),
+                        prompt: now.clone(),
+                    });
+                    last = now;
+                }
+            }
+        });
+    }
     // Window size follows the real terminal.
     {
         let done = done.clone();
+        let screen_for_resize = screen.clone();
         std::thread::spawn(move || {
             let mut last = winsize(0).map(|w| (w.ws_row, w.ws_col));
             while !done.load(Ordering::Relaxed) {
@@ -199,15 +307,25 @@ pub fn run(
                     last = Some((w.ws_row, w.ws_col));
                     // SAFETY: TIOCSWINSZ on our pty master; the kernel signals the agent.
                     unsafe { libc::ioctl(master, libc::TIOCSWINSZ, &w) };
+                    screen_for_resize
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .screen_mut()
+                        .set_size(nz(w.ws_row), nz(w.ws_col));
                 }
             }
         });
     }
     // Phone prompts → agent.
     {
-        let (w, line, done) = (master_write.clone(), line.clone(), done.clone());
+        let (w, line, done, on_screen) = (
+            master_write.clone(),
+            line.clone(),
+            done.clone(),
+            on_screen.clone(),
+        );
         let launch_id = launch_id.to_owned();
-        std::thread::spawn(move || inject_loop(&launch_id, &w, &line, &done));
+        std::thread::spawn(move || inject_loop(&launch_id, &w, &line, &done, &on_screen));
     }
 
     // Wait for the agent to exit.
@@ -230,6 +348,7 @@ fn inject_loop(
     w: &Mutex<std::fs::File>,
     line: &Mutex<LineState>,
     done: &AtomicBool,
+    on_screen: &Mutex<Option<TerminalPrompt>>,
 ) {
     let client = Client::new(Paths::resolve().socket).with_timeout(None);
     while !done.load(Ordering::Relaxed) {
@@ -254,11 +373,36 @@ fn inject_loop(
                     .unwrap_or_else(|p| p.into_inner())
                     .write_all(&enter);
             }
+            Ok(Response::SelectOption { index }) => {
+                // Only answer the menu that is actually on screen right now.
+                let current = on_screen.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                if let Some(p) = current.filter(|p| index < p.options.len()) {
+                    let mut f = w.lock().unwrap_or_else(|p| p.into_inner());
+                    for key in menu_keys(p.selected, index) {
+                        let _ = f.write_all(&key);
+                        let _ = f.flush();
+                        std::thread::sleep(Duration::from_millis(60));
+                    }
+                }
+            }
             Ok(_) => std::thread::sleep(Duration::from_secs(1)),
             Err(IpcError::NotRunning(_)) => std::thread::sleep(Duration::from_secs(3)),
             Err(_) => std::thread::sleep(Duration::from_secs(1)),
         }
     }
+}
+
+/// A terminal dimension for the emulator (never zero).
+pub fn nz(v: u16) -> std::num::NonZeroU16 {
+    std::num::NonZeroU16::new(v.max(1)).expect("non-zero")
+}
+
+/// Keys that move a menu's highlight from `from` to `to` and confirm.
+pub fn menu_keys(from: usize, to: usize) -> Vec<Vec<u8>> {
+    let step: &[u8] = if to >= from { b"\x1b[B" } else { b"\x1b[A" };
+    let mut keys = vec![step.to_vec(); from.abs_diff(to)];
+    keys.push(b"\r".to_vec());
+    keys
 }
 
 #[cfg(test)]
@@ -287,5 +431,46 @@ mod tests {
         assert_eq!(keystrokes("hi"), (b"hi".to_vec(), b"\r".to_vec()));
         let (body, _) = keystrokes("a\nb");
         assert_eq!(body, b"\x1b[200~a\nb\x1b[201~".to_vec());
+    }
+
+    /// Rendered by agy 1.5.17 (captured through a pseudo-terminal).
+    const AGY_PROMPT: &str = "  Ran touch agy-probe.txt\n\nReason: probe asks\nRequesting permission for:\n   touch agy-probe2.txt\n\nRun this command?\n> 1. Yes, run command\n  2. Yes, and always allow in this conversation for commands that start with 'touch'\n  3. Yes, and always allow for commands that start with 'touch' (Persist to settings.json)\n  4. No, cancel\n\n  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command\n";
+
+    #[test]
+    fn reads_agys_permission_menu() {
+        let p = detect_agy_prompt(AGY_PROMPT).unwrap();
+        assert_eq!(p.title, "Run this command?");
+        assert_eq!(p.detail, "touch agy-probe2.txt");
+        assert_eq!(p.options.len(), 4);
+        assert_eq!(p.options[0], "Yes, run command");
+        assert_eq!(p.options[3], "No, cancel");
+        assert_eq!(p.selected, 0);
+        let moved = AGY_PROMPT
+            .replace("> 1. Yes, run", "  1. Yes, run")
+            .replace("  4. No, cancel", "> 4. No, cancel");
+        assert_eq!(detect_agy_prompt(&moved).unwrap().selected, 3);
+        assert_eq!(
+            detect_agy_prompt("> 1. Yes\n  2. No\n"),
+            None,
+            "needs the agy header"
+        );
+        assert_eq!(detect_agy_prompt("just output\n"), None);
+    }
+
+    #[test]
+    fn reads_the_menu_through_a_terminal_emulator() {
+        // Cursor-positioned output, as a TUI draws it.
+        let mut parser = vt100::Parser::new(nz(20), nz(100), 0);
+        parser.process(b"\x1b[2J\x1b[3;1HRequesting permission for:\x1b[4;4Hrm -rf build\x1b[6;1HRun this command?\x1b[7;1H> 1. Yes, run command\x1b[8;3H2. No, cancel");
+        let p = detect_agy_prompt(&parser.screen().contents()).unwrap();
+        assert_eq!((p.detail.as_str(), p.options.len()), ("rm -rf build", 2));
+    }
+
+    #[test]
+    fn menu_navigation_keys() {
+        assert_eq!(menu_keys(0, 0), vec![b"\r".to_vec()]);
+        assert_eq!(menu_keys(0, 3).len(), 4);
+        assert_eq!(menu_keys(0, 3)[0], b"\x1b[B".to_vec());
+        assert_eq!(menu_keys(2, 0)[0], b"\x1b[A".to_vec());
     }
 }

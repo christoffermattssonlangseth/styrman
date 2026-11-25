@@ -41,6 +41,35 @@ const PLUGIN_FILES: &[(&str, &str, bool)] = &[
 ];
 const ALIAS_LINE: &str = "alias claude='styr claude'";
 
+/// The Antigravity (agy) plugin, also built in.
+const AGY_PLUGIN_FILES: &[(&str, &str, bool)] = &[
+    (
+        "plugin.json",
+        include_str!("../../../plugins/agy/styrman/plugin.json"),
+        false,
+    ),
+    (
+        "hooks.json",
+        include_str!("../../../plugins/agy/styrman/hooks.json"),
+        false,
+    ),
+    (
+        "skills/styr/SKILL.md",
+        include_str!("../../../plugins/agy/styrman/skills/styr/SKILL.md"),
+        false,
+    ),
+    (
+        "bin/styr-hook",
+        include_str!("../../../plugins/agy/styrman/bin/styr-hook"),
+        true,
+    ),
+    (
+        "assets/logo.svg",
+        include_str!("../../../plugins/agy/styrman/assets/logo.svg"),
+        false,
+    ),
+];
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mark {
     Ok,
@@ -145,6 +174,80 @@ fn write_embedded_plugin(dir: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn agy_bin() -> Option<PathBuf> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    crate::launch::find_on_path("agy", &path, std::env::current_exe().ok().as_deref()).or_else(
+        || {
+            let p = PathBuf::from(std::env::var_os("HOME")?).join(".local/bin/agy");
+            p.is_file().then_some(p)
+        },
+    )
+}
+
+fn agy_version() -> Option<String> {
+    let out = Command::new(agy_bin()?)
+        .arg("--version")
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    let t = String::from_utf8_lossy(&out.stdout);
+    t.split_whitespace()
+        .find(|w| w.contains('.') && w.chars().all(|c| c.is_ascii_digit() || c == '.'))
+        .map(str::to_owned)
+}
+
+/// The agy plugin is installed and matches the one built into this `styr`.
+fn agy_plugin_current() -> bool {
+    let Some(home) = std::env::var_os("HOME") else {
+        return false;
+    };
+    let dir = PathBuf::from(home).join(".gemini/config/plugins/styrman");
+    let embedded = AGY_PLUGIN_FILES
+        .iter()
+        .find(|f| f.0 == "hooks.json")
+        .map(|f| f.1)
+        .unwrap_or_default();
+    std::fs::read_to_string(dir.join("hooks.json")).is_ok_and(|h| h == embedded)
+        && dir.join("skills/styr/SKILL.md").exists()
+        && global_agy_skill().is_some_and(|p| p.exists())
+}
+
+/// A user-level `styr` skill so plain `/styr` works in agy (plugin skills are
+/// namespaced as `/styrman:styr`).
+fn global_agy_skill() -> Option<PathBuf> {
+    Some(PathBuf::from(std::env::var_os("HOME")?).join(".gemini/config/skills/styr/SKILL.md"))
+}
+
+fn install_agy_plugin() -> Result<bool> {
+    let src = Paths::resolve().data_dir.join("agy-plugin/styrman");
+    for (rel, body, exec) in AGY_PLUGIN_FILES {
+        let p = src.join(rel);
+        std::fs::create_dir_all(p.parent().expect("has parent"))?;
+        std::fs::write(&p, body)?;
+        if *exec {
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755))?;
+        }
+    }
+    if let Some(skill) = global_agy_skill() {
+        std::fs::create_dir_all(skill.parent().expect("has parent"))?;
+        let body = AGY_PLUGIN_FILES
+            .iter()
+            .find(|f| f.0 == "skills/styr/SKILL.md")
+            .map(|f| f.1)
+            .unwrap_or_default();
+        std::fs::write(&skill, body)?;
+    }
+    let agy = agy_bin().context("agy not found")?;
+    let _ = Command::new(&agy)
+        .args(["plugin", "uninstall", "styrman"])
+        .output();
+    let ok = Command::new(&agy)
+        .args(["plugin", "install", &src.display().to_string()])
+        .output()
+        .is_ok_and(|o| o.status.success());
+    Ok(ok && agy_plugin_current())
 }
 
 fn rc_file() -> Option<(PathBuf, &'static str)> {
@@ -269,6 +372,32 @@ pub fn setup(yes: bool) -> Result<()> {
         }
     }
 
+    // 2b. Antigravity (agy), if installed.
+    if agy_bin().is_some() {
+        let v = agy_version()
+            .map(|v| format!("version {v}, "))
+            .unwrap_or_default();
+        if agy_plugin_current() {
+            line(
+                Mark::Ok,
+                "agy plugin",
+                format!("{v}styrman installed (hooks + /styr)"),
+            );
+        } else if install_agy_plugin()? {
+            line(
+                Mark::Ok,
+                "agy plugin",
+                format!("{v}installed; start a new agy session to load it"),
+            );
+        } else {
+            line(
+                Mark::Fail,
+                "agy plugin",
+                "couldn't install; run `styr setup` again or see `agy plugin list`",
+            );
+        }
+    }
+
     // 3. Shell alias, so phone prompts appear in the terminal like typed input.
     if let Some((rc, alias)) = rc_file() {
         if alias_installed(&rc) {
@@ -303,6 +432,39 @@ pub fn setup(yes: bool) -> Result<()> {
                 "shell alias",
                 format!("skipped; add `{alias}` yourself for the best experience"),
             );
+        }
+        if agy_bin().is_some() {
+            let agy_alias = if alias.starts_with("alias claude '") {
+                "alias agy 'styr agy'"
+            } else {
+                "alias agy='styr agy'"
+            };
+            if std::fs::read_to_string(&rc).is_ok_and(|t| t.contains("styr agy")) {
+                line(Mark::Ok, "shell alias", "agy → styr agy");
+            } else if ask(
+                &format!(
+                    "Add `{agy_alias}` to {}? Needed to approve agy's tool calls and send prompts from the phone.",
+                    rc.display()
+                ),
+                yes,
+            ) {
+                let mut f = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&rc)?;
+                writeln!(f, "{agy_alias}")?;
+                line(
+                    Mark::Ok,
+                    "shell alias",
+                    format!("agy → styr agy added to {}", rc.display()),
+                );
+            } else {
+                line(
+                    Mark::Warn,
+                    "shell alias",
+                    format!("skipped `{agy_alias}`: agy sessions will be read-only on the phone"),
+                );
+            }
         }
     }
 
@@ -466,6 +628,28 @@ pub fn doctor(live: bool) -> Result<bool> {
                 Mark::Warn,
                 "shell alias",
                 "missing: phone messages arrive as hook feedback instead of typed input",
+            );
+        }
+    }
+    if agy_bin().is_some() {
+        let v = agy_version().unwrap_or_else(|| "?".into());
+        if agy_plugin_current() {
+            line(Mark::Ok, "agy", format!("version {v}, plugin up to date"));
+        } else {
+            healthy = false;
+            line(
+                Mark::Warn,
+                "agy",
+                format!("version {v}: plugin missing or outdated, run `styr setup`"),
+            );
+        }
+        if let Some((rc, _)) = rc_file()
+            && !std::fs::read_to_string(&rc).is_ok_and(|t| t.contains("styr agy"))
+        {
+            line(
+                Mark::Warn,
+                "shell alias",
+                "agy → styr agy missing: agy sessions are read-only on the phone",
             );
         }
     }
@@ -659,6 +843,9 @@ fn live_check() -> Result<bool> {
     }
     let _ = std::fs::remove_dir_all(&dir);
 
+    if agy_bin().is_some() {
+        ok &= live_check_agy()?;
+    }
     if ok && let Some(v) = claude_version() {
         let _ = c.call(&Request::MarkVerified {
             agent: AgentKind::Claude,
@@ -674,6 +861,115 @@ fn live_check() -> Result<bool> {
             Mark::Fail,
             "live: result",
             "something is off; details above",
+        );
+    }
+    Ok(ok)
+}
+
+/// The same end-to-end check for agy (headless, Gemini Flash).
+fn live_check_agy() -> Result<bool> {
+    let agy = agy_bin().context("agy not found")?;
+    let dir = std::env::temp_dir().join(format!("styr-doctor-agy-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    let c = client();
+    let canon = std::fs::canonicalize(&dir)?;
+    let find = || -> Option<styr_core::ipc::SessionSummary> {
+        match c
+            .call(&Request::ListSessions {
+                include_unshared: true,
+            })
+            .ok()?
+        {
+            Response::Sessions { sessions } => sessions.into_iter().find(|s| {
+                s.agent == AgentKind::Antigravity
+                    && s.cwd
+                        .as_ref()
+                        .and_then(|p| std::fs::canonicalize(p).ok())
+                        .as_ref()
+                        == Some(&canon)
+            }),
+            _ => None,
+        }
+    };
+    let run = |args: &[&str]| -> Result<String> {
+        let out = Command::new(&agy)
+            .args(args)
+            .current_dir(&dir)
+            .env_remove("STYR_LAUNCH_ID")
+            .stdin(Stdio::null())
+            .output()
+            .context("running agy")?;
+        Ok(format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ))
+    };
+    let model = "gemini-3.8-flash-medium";
+    let _ = run(&["--model", model, "-p", "/styr"])?;
+    let shared = find().is_some_and(|s| s.shared);
+    line(
+        if shared { Mark::Ok } else { Mark::Fail },
+        "live: agy /styr",
+        if shared {
+            "hook intercepted it and shared the session"
+        } else {
+            "the agy hook didn't answer; is the plugin installed?"
+        },
+    );
+    let mut ok = shared;
+    if let (true, Some(s)) = (ok, find()) {
+        let out = run(&[
+            "--conversation",
+            &s.native_id,
+            "--model",
+            model,
+            "-p",
+            "Reply with exactly the word DOCTOR-OK and nothing else.",
+        ])?;
+        let events = match c.call(&Request::Events {
+            session: s.id.clone(),
+            since_seq: 0,
+            limit: 500,
+        }) {
+            Ok(Response::Events { events }) => events,
+            _ => vec![],
+        };
+        let mirrored = events
+            .iter()
+            .any(|e| matches!(&e.kind, styr_core::EventKind::AssistantMessage { text, .. } if text.contains("DOCTOR-OK")));
+        let answered = out.contains("DOCTOR-OK");
+        line(
+            if answered { Mark::Ok } else { Mark::Fail },
+            "live: agy",
+            if answered {
+                "answered"
+            } else {
+                "didn't answer (signed in?)"
+            },
+        );
+        line(
+            if mirrored { Mark::Ok } else { Mark::Fail },
+            "live: agy mirroring",
+            if mirrored {
+                "prompt and reply reached styrd"
+            } else {
+                "reply missing: agy's hooks or transcript may have changed"
+            },
+        );
+        ok = answered && mirrored;
+        let _ = c.call(&Request::ForgetSessions { ids: vec![s.id] });
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    if ok && let Some(v) = agy_version() {
+        let _ = c.call(&Request::MarkVerified {
+            agent: AgentKind::Antigravity,
+            version: v.clone(),
+        });
+        line(
+            Mark::Ok,
+            "live: agy result",
+            format!("agy {v} works with Styrman"),
         );
     }
     Ok(ok)

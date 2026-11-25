@@ -569,7 +569,19 @@ impl Connection {
                 command: styr_core::Command::ResolvePermission { request, option },
             } => {
                 let visible = self.daemon.summary(&session)?.is_some_and(|s| s.shared);
-                let result = if visible {
+                let screen = visible
+                    .then(|| {
+                        self.daemon.resolve_screen_permission(
+                            &session,
+                            &request,
+                            &option,
+                            self.device.as_str().into(),
+                        )
+                    })
+                    .flatten();
+                let result = if let Some(r) = screen {
+                    r.map_err(|e| format!("{e:#}"))
+                } else if visible {
                     self.daemon
                         .broker
                         .resolve(&session, &request, &option, self.device.as_str().into())

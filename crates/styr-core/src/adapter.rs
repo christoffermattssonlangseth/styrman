@@ -19,6 +19,27 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::time::Duration;
 
+/// What a `/styr …` prompt asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StyrCommand {
+    On,
+    Off,
+}
+
+/// Recognize `/styr`, `/styr on`, `/styr off` (also the plugin-qualified `/styrman:styr`).
+pub fn parse_styr_command(prompt: &str) -> Option<StyrCommand> {
+    let mut words = prompt.split_whitespace();
+    let cmd = words.next()?;
+    if cmd != "/styr" && cmd != "/styrman:styr" {
+        return None;
+    }
+    match (words.next(), words.next()) {
+        (None, _) | (Some("on"), None) => Some(StyrCommand::On),
+        (Some("off"), None) => Some(StyrCommand::Off),
+        _ => None,
+    }
+}
+
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 #[derive(Debug, thiserror::Error)]

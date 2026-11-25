@@ -53,12 +53,19 @@ pub fn exec(agent: AgentKind, args: Vec<OsString>) -> Result<std::convert::Infal
     };
     // Interactive Claude: run it in our terminal wrapper so phone prompts can be
     // typed into it. Everything else (pipes, -p, other agents for now): plain exec.
-    let interactive = !args.iter().any(|a| a == "-p" || a == "--print");
-    if agent == AgentKind::Claude && interactive && crate::pty::can_wrap() {
+    let interactive = !args
+        .iter()
+        .any(|a| a == "-p" || a == "--print" || a == "--prompt");
+    let detector: Option<crate::pty::PromptDetector> = match agent {
+        AgentKind::Antigravity => Some(crate::pty::detect_agy_prompt),
+        _ => None,
+    };
+    let wrappable = matches!(agent, AgentKind::Claude | AgentKind::Antigravity);
+    if wrappable && interactive && crate::pty::can_wrap() {
         let launch_id = format!("{:016x}", rand_u64());
         let mut all: Vec<OsString> = spec.extra_args.iter().map(OsString::from).collect();
         all.extend(args);
-        let code = crate::pty::run(&bin, &all, &spec.env, &launch_id)?;
+        let code = crate::pty::run(&bin, &all, &spec.env, &launch_id, detector)?;
         std::process::exit(code);
     }
     let mut cmd = std::process::Command::new(&bin);

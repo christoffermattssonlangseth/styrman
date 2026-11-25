@@ -1,14 +1,15 @@
-//! Typing phone prompts into the agent's own terminal.
+//! Agents running inside `styr <agent>`'s terminal wrapper.
 //!
-//! `styr claude` runs the agent inside a pseudo-terminal it controls and holds an
-//! `AttachTerminal` request open. A phone prompt for a session that runs inside
-//! such a wrapper is handed to it, typed into the agent's prompt box and submitted,
-//! so it looks exactly like typed input. When the agent then reports that prompt
-//! (`UserPromptSubmit`), it is recognised and attributed to the phone.
+//! The wrapper holds an `AttachTerminal` request open and gets back one action:
+//! - **type a prompt** from the phone into the agent's prompt box (it then looks
+//!   exactly like typed input; the agent's `UserPromptSubmit`/`PreInvocation` for it
+//!   is recognised and attributed to the phone);
+//! - **select an option** in the agent's own permission menu, which the wrapper read
+//!   off the screen and reported with `TerminalPrompt` (agy has no permission hook).
 //!
-//! Safety: nothing is typed while a permission prompt is open (the keystrokes could
-//! answer it) or after the session ended; the wrapper itself also waits while the
-//! user is halfway through typing a line.
+//! Safety: prompts are never typed while a permission menu is open or after the
+//! session ended; the wrapper also waits while the user is halfway through a line,
+//! and only selects an option if the same menu is still on screen.
 
 use crate::daemon::Daemon;
 use crate::prompts::QueuedPrompt;
@@ -16,11 +17,31 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use styr_core::SessionStatus;
-use styr_core::ids::{DeviceId, SessionId};
+use styr_core::event::{
+    EventKind, EventSource, OptionKind, PermissionOption, PermissionOutcome, Resolver, ToolInfo,
+    ToolKind,
+};
+use styr_core::ids::{DeviceId, NativeSessionRef, RequestId, SessionId};
+use styr_core::ipc::{SessionUpdate, TerminalPrompt};
 use tokio::sync::oneshot;
 
 /// A wrapper that hasn't re-attached for this long is considered gone.
 const LIVE_GRACE: Duration = Duration::from_secs(15);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TerminalAction {
+    Type(String),
+    Select(usize),
+}
+
+/// An on-screen permission menu turned into a permission request.
+#[derive(Debug, Clone)]
+struct ScreenPermission {
+    request: RequestId,
+    session: SessionId,
+    prompt: TerminalPrompt,
+    options: Vec<PermissionOption>,
+}
 
 #[derive(Default)]
 pub struct Terminals {
@@ -32,12 +53,30 @@ struct Inner {
     /// Session → the launch (wrapper) it runs in.
     launch_of: HashMap<SessionId, String>,
     /// Launch → its open AttachTerminal request.
-    attached: HashMap<String, oneshot::Sender<String>>,
+    attached: HashMap<String, oneshot::Sender<TerminalAction>>,
     last_seen: HashMap<String, Instant>,
     /// Prompts waiting for a safe moment, per session.
     queue: HashMap<SessionId, VecDeque<QueuedPrompt>>,
     /// Typed into the terminal, not yet reported back by the agent.
     typed: HashMap<SessionId, VecDeque<QueuedPrompt>>,
+    /// Menu selections not yet handed to the wrapper, per launch.
+    selects: HashMap<String, usize>,
+    /// The permission menu currently on screen, per launch.
+    on_screen: HashMap<String, ScreenPermission>,
+    /// The last tool the agent announced, per session (to describe a menu).
+    last_tool: HashMap<SessionId, ToolInfo>,
+}
+
+/// Map a menu label onto ACP's option kinds.
+pub fn option_kind(label: &str) -> OptionKind {
+    let l = label.to_lowercase();
+    if l.starts_with("no") || l.contains("cancel") || l.contains("deny") || l.contains("reject") {
+        OptionKind::RejectOnce
+    } else if l.contains("always") || l.contains("don't ask") {
+        OptionKind::AllowAlways
+    } else {
+        OptionKind::AllowOnce
+    }
 }
 
 impl Terminals {
@@ -51,6 +90,10 @@ impl Terminals {
         g.last_seen
             .entry(launch.to_owned())
             .or_insert_with(Instant::now);
+    }
+
+    pub fn note_tool(&self, session: &SessionId, tool: &ToolInfo) {
+        self.lock().last_tool.insert(session.clone(), tool.clone());
     }
 
     /// The session runs in a wrapper that is attached now or was very recently.
@@ -74,11 +117,16 @@ impl Terminals {
         self.lock().queue.get_mut(session)?.pop_front()
     }
 
-    pub fn attach(&self, launch: &str) -> oneshot::Receiver<String> {
+    pub fn attach(&self, launch: &str) -> oneshot::Receiver<TerminalAction> {
         let (tx, rx) = oneshot::channel();
         let mut g = self.lock();
-        g.attached.insert(launch.to_owned(), tx);
         g.last_seen.insert(launch.to_owned(), Instant::now());
+        // A pending menu selection goes out first.
+        if let Some(i) = g.selects.remove(launch) {
+            let _ = tx.send(TerminalAction::Select(i));
+        } else {
+            g.attached.insert(launch.to_owned(), tx);
+        }
         rx
     }
 
@@ -92,13 +140,14 @@ impl Terminals {
             .collect()
     }
 
-    /// Hand the next queued prompt to the session's wrapper if one is attached.
+    /// Hand the next queued prompt to the session's wrapper if one is attached and
+    /// no permission menu is on screen.
     pub fn try_deliver(&self, session: &SessionId) -> bool {
         let mut g = self.lock();
         let Some(launch) = g.launch_of.get(session).cloned() else {
             return false;
         };
-        if !g.attached.contains_key(&launch) {
+        if !g.attached.contains_key(&launch) || g.on_screen.contains_key(&launch) {
             return false;
         }
         let Some(p) = g.queue.get_mut(session).and_then(VecDeque::pop_front) else {
@@ -106,7 +155,7 @@ impl Terminals {
         };
         let tx = g.attached.remove(&launch).expect("checked");
         g.last_seen.insert(launch, Instant::now());
-        match tx.send(p.text.clone()) {
+        match tx.send(TerminalAction::Type(p.text.clone())) {
             Ok(()) => {
                 g.typed.entry(session.clone()).or_default().push_back(p);
                 true
@@ -114,6 +163,20 @@ impl Terminals {
             Err(_) => {
                 g.queue.entry(session.clone()).or_default().push_front(p);
                 false
+            }
+        }
+    }
+
+    fn select(&self, launch: &str, index: usize) {
+        let mut g = self.lock();
+        match g.attached.remove(launch) {
+            Some(tx) => {
+                if tx.send(TerminalAction::Select(index)).is_err() {
+                    g.selects.insert(launch.to_owned(), index);
+                }
+            }
+            None => {
+                g.selects.insert(launch.to_owned(), index);
             }
         }
     }
@@ -128,10 +191,17 @@ impl Terminals {
 
     pub fn forget(&self, session: &SessionId) {
         let mut g = self.lock();
-        g.launch_of.remove(session);
+        if let Some(l) = g.launch_of.remove(session) {
+            g.on_screen.remove(&l);
+        }
         g.queue.remove(session);
         g.typed.remove(session);
+        g.last_tool.remove(session);
     }
+}
+
+fn native_of(s: &styr_core::ipc::SessionSummary) -> SessionUpdate {
+    SessionUpdate::for_native(NativeSessionRef::new(s.agent, s.native_id.clone()))
 }
 
 impl Daemon {
@@ -154,13 +224,166 @@ impl Daemon {
         typed
     }
 
-    /// Long-poll from a wrapper: resolves with the next prompt to type.
-    pub async fn attach_terminal(self: &Arc<Self>, launch: &str) -> Option<String> {
+    /// Long-poll from a wrapper: resolves with the next thing to do in its terminal.
+    pub async fn attach_terminal(self: &Arc<Self>, launch: &str) -> Option<TerminalAction> {
         let rx = self.terminals.attach(launch);
         for s in self.terminals.sessions_of(launch) {
             self.pump_terminal(&s);
         }
         rx.await.ok()
+    }
+
+    /// A wrapper saw the agent's permission menu appear (`Some`) or go away (`None`).
+    pub fn terminal_prompt(
+        &self,
+        launch: &str,
+        prompt: Option<TerminalPrompt>,
+    ) -> anyhow::Result<()> {
+        let previous = self.terminals.lock().on_screen.get(launch).cloned();
+        match (prompt, previous) {
+            (Some(p), Some(prev))
+                if prev.prompt.options == p.options && prev.prompt.detail == p.detail =>
+            {
+                // Same menu (maybe the highlight moved): nothing new.
+                if let Some(e) = self.terminals.lock().on_screen.get_mut(launch) {
+                    e.prompt = p;
+                }
+            }
+            (Some(p), prev) => {
+                if let Some(prev) = prev {
+                    self.terminals.lock().on_screen.remove(launch);
+                    self.close_screen_permission(&prev);
+                }
+                // The most recently active shared session in this wrapper.
+                let Some(summary) = self
+                    .terminals
+                    .sessions_of(launch)
+                    .into_iter()
+                    .filter_map(|s| self.summary(&s).ok().flatten())
+                    .filter(|s| s.shared)
+                    .max_by_key(|s| s.updated_ms)
+                else {
+                    return Ok(());
+                };
+                let tool = self
+                    .terminals
+                    .lock()
+                    .last_tool
+                    .get(&summary.id)
+                    .cloned()
+                    .unwrap_or(ToolInfo {
+                        name: "permission".into(),
+                        kind: ToolKind::Other,
+                        title: p.detail.lines().next().unwrap_or("").to_owned(),
+                        input: serde_json::Value::Null,
+                        locations: vec![],
+                    });
+                let options: Vec<PermissionOption> = p
+                    .options
+                    .iter()
+                    .enumerate()
+                    .map(|(i, label)| PermissionOption {
+                        id: format!("opt-{i}"),
+                        kind: option_kind(label),
+                        label: label.clone(),
+                    })
+                    .collect();
+                let request = RequestId::generate();
+                self.terminals.lock().on_screen.insert(
+                    launch.to_owned(),
+                    ScreenPermission {
+                        request: request.clone(),
+                        session: summary.id.clone(),
+                        prompt: p.clone(),
+                        options: options.clone(),
+                    },
+                );
+                tracing::info!(session = %summary.id, title = %p.title, "permission menu on screen");
+                self.ingest(
+                    &native_of(&summary),
+                    EventSource::Pty,
+                    vec![EventKind::PermissionRequested {
+                        request,
+                        call: None,
+                        tool,
+                        reason: Some(p.title.clone()),
+                        options,
+                        expires_at_ms: None,
+                    }],
+                )?;
+            }
+            (None, Some(prev)) => {
+                self.terminals.lock().on_screen.remove(launch);
+                self.close_screen_permission(&prev);
+                // Typing may be safe again.
+                self.pump_terminal(&prev.session);
+            }
+            (None, None) => {}
+        }
+        Ok(())
+    }
+
+    /// The menu left the screen: if nobody answered on the phone, the terminal did.
+    fn close_screen_permission(&self, p: &ScreenPermission) {
+        let Ok(Some(s)) = self.summary(&p.session) else {
+            return;
+        };
+        if s.status != SessionStatus::NeedsApproval {
+            return; // already resolved (the phone answered)
+        }
+        let _ = self.ingest(
+            &native_of(&s),
+            EventSource::Pty,
+            vec![EventKind::PermissionResolved {
+                request: p.request.clone(),
+                outcome: PermissionOutcome::Cancelled,
+                by: Resolver::Terminal,
+            }],
+        );
+    }
+
+    /// The phone answered an on-screen menu: select that option in the terminal.
+    /// `None` if `request` isn't an on-screen menu.
+    pub fn resolve_screen_permission(
+        &self,
+        session: &SessionId,
+        request: &RequestId,
+        option: &str,
+        device: DeviceId,
+    ) -> Option<anyhow::Result<()>> {
+        let (launch, perm) = {
+            let g = self.terminals.lock();
+            let (l, p) = g
+                .on_screen
+                .iter()
+                .find(|(_, p)| &p.request == request && &p.session == session)?;
+            (l.clone(), p.clone())
+        };
+        let Some(index) = perm.options.iter().position(|o| o.id == option) else {
+            return Some(Err(anyhow::anyhow!(
+                "'{option}' is not an option of that request"
+            )));
+        };
+        self.terminals.select(&launch, index);
+        tracing::info!(%session, %request, index, "selecting a menu option for the phone");
+        let Ok(Some(s)) = self.summary(session) else {
+            return Some(Ok(()));
+        };
+        Some(
+            self.ingest(
+                &native_of(&s),
+                EventSource::Pty,
+                vec![EventKind::PermissionResolved {
+                    request: request.clone(),
+                    outcome: PermissionOutcome::Selected {
+                        option: option.to_owned(),
+                        kind: perm.options[index].kind,
+                    },
+                    by: Resolver::Phone(device),
+                }],
+            )
+            .map(|_| ()),
+        )
     }
 }
 
@@ -185,7 +408,7 @@ mod tests {
         assert!(!t.try_deliver(&s), "no wrapper attached yet");
         let mut rx = t.attach("L");
         assert!(t.try_deliver(&s));
-        assert_eq!(rx.try_recv().unwrap(), "one");
+        assert_eq!(rx.try_recv().unwrap(), TerminalAction::Type("one".into()));
         assert_eq!(t.claim_typed(&s, "  one "), Some(DeviceId::from("phone")));
         assert_eq!(t.claim_typed(&s, "one"), None, "claimed once");
     }
@@ -199,5 +422,25 @@ mod tests {
         t.enqueue(&s, p("x"));
         assert!(!t.try_deliver(&s));
         assert_eq!(t.take_queued(&s), Some(p("x")));
+    }
+
+    #[test]
+    fn a_selection_waits_for_the_wrapper() {
+        let t = Terminals::default();
+        t.select("L", 2);
+        let mut rx = t.attach("L");
+        assert_eq!(rx.try_recv().unwrap(), TerminalAction::Select(2));
+    }
+
+    #[test]
+    fn option_kinds_from_labels() {
+        assert_eq!(option_kind("Yes, run command"), OptionKind::AllowOnce);
+        assert_eq!(
+            option_kind(
+                "Yes, and always allow in this conversation for commands that start with 'touch'"
+            ),
+            OptionKind::AllowAlways
+        );
+        assert_eq!(option_kind("No, cancel"), OptionKind::RejectOnce);
     }
 }

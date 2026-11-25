@@ -63,10 +63,16 @@ fn run(args: &[String]) -> Result<HookOutput, String> {
     // Who is the agent process (and which version)? Only looked up where it can change.
     let lookup = matches!(event.as_str(), "SessionStart" | "UserPromptSubmit");
     let agent_pid = if lookup {
-        std::env::var("CLAUDE_PID")
-            .ok()
-            .and_then(|p| p.parse().ok())
-            .or_else(find_agent_pid)
+        // CLAUDE_PID is inherited by anything started from a Claude session (e.g. agy
+        // run from Claude's shell), so only trust it for Claude's own hooks.
+        let claude_pid = (agent == AgentKind::Claude)
+            .then(|| {
+                std::env::var("CLAUDE_PID")
+                    .ok()
+                    .and_then(|p| p.parse().ok())
+            })
+            .flatten();
+        claude_pid.or_else(find_agent_pid)
     } else {
         None
     };
@@ -134,7 +140,27 @@ fn version_of_pid(pid: u32) -> Option<String> {
         .output()
         .ok()?;
     let exe = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-    version_from_path(&std::fs::canonicalize(&exe).ok()?)
+    let real = std::fs::canonicalize(&exe).ok()?;
+    version_from_path(&real).or_else(|| version_from_cli(&real))
+}
+
+/// `<agent> --version` (agy's binary isn't versioned by path); first dotted number.
+fn version_from_cli(exe: &std::path::Path) -> Option<String> {
+    if exe.file_name()? != "agy" {
+        return None;
+    }
+    let out = std::process::Command::new(exe)
+        .arg("--version")
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.split_whitespace()
+        .find(|w| {
+            w.split('.').count() >= 2
+                && w.split('.')
+                    .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+        })
+        .map(str::to_owned)
 }
 
 pub fn version_from_path(p: &std::path::Path) -> Option<String> {

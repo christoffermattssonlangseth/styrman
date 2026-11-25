@@ -1,6 +1,6 @@
 # Styrman design (phase 1 proposal)
 
-Status: **phase 1 complete (checkpoints 1–7).** Next: the Antigravity (`agy`) adapter, then Codex. Verified findings are recorded in §8.
+Status: **phases 1 and 2 complete** (Claude Code, Antigravity). Next: Codex. Verified findings are recorded in §8.
 
 ## 1. What the three agents actually offer
 
@@ -309,3 +309,24 @@ Each checkpoint ends with something runnable and its tests green.
   - Verified on interactive Claude Code 2.1.332: the prompt appears as a normal `❯` line about 1 s after sending.
 - **MagicDNS name under launchd.** The Tailscale Mac app's CLI refuses to run in launchd's minimal environment ("The Tailscale GUI failed to start"), which made `styrd` advertise a raw `100.x` URL that iOS rejects. `styrd` now does a reverse DNS lookup (`getnameinfo`, `NI_NAMEREQD`) of its Tailscale IPv4 through the system resolver, with the CLI as a fallback. This was caught by `styr doctor` on its first run.
 - **Agent version tracking.** The hook resolves the agent's real executable from its pid (`CLAUDE_PID` is set for hooks); Claude Code installs to `…/claude/versions/<version>`. `styrd` keeps the last seen version and a verified list: built-in plus `styr doctor --live` passes. It warns about unverified versions in `styr status`, `styr doctor` and the phone's `hello`.
+
+## 10. Antigravity (agy 1.5.17), as measured
+
+- **Hooks.** Workspace (`.agents/hooks.json`), global (`~/.gemini/config/hooks.json`) and plugin (`<plugin>/hooks.json`) hooks all load.
+  - Events that fire: `SessionStart`, `PreInvocation`/`PostInvocation` around each model call (`invocationNum` 0 = a new user turn), `PreToolUse`, `PostToolUse` (only when a tool actually runs) and `Stop` (`fullyIdle`, `terminationReason`, `continuationActive`).
+  - `agy plugin validate` rejects `SessionEnd`, so cmux's `SessionEnd`/`Notification`/`turn-completion` hooks are ignored.
+- **Fail-open is inverted compared with Claude.** A `PreToolUse` reply of `{}` (no `decision`) *denies* the tool, while empty output allows it. `PassThrough` must therefore always render as nothing, and it's tested.
+- **`/styr`.** A typed command must exist as a skill, or the TUI rejects it ("Unknown command"). Plugin skills are namespaced (`/styrman:styr`), so `styr setup` also writes a user-level skill at `~/.gemini/config/skills/styr` to make plain `/styr` work.
+  - The raw `/styr` reaches `PreInvocation.lastUserInput`. `{"terminationBehavior":"terminate","injectSteps":[{"errorMessage":{"userMessage":…}}]}` ends the turn with no model call and shows "⚠ Styrman: …".
+  - The skill's text has to be neutral, because agy keeps it in the conversation history.
+- **Content.** Hooks carry no reply text or tool output. Both come from the transcript JSONL: `PLANNER_RESPONSE.content`, and the record at the tool's `stepIdx` (with the "Created At/Completed At" lines stripped).
+- **Permissions.** There's no hook, so `styr agy` runs agy in the PTY wrapper with a `vt100` emulator and reads agy's menu off the screen ("Requesting permission for: … / Run this command? / > 1. Yes, run command / … / 4. No, cancel").
+  - `styrd` raises a `PermissionRequested` for it, described by the last `PreToolUse`.
+  - When the phone answers, the wrapper moves the highlight and presses Enter, but only if the same menu is still on screen.
+  - If the menu disappears without a phone answer, the request is resolved as `Cancelled{by: Terminal}`.
+- **Version.** agy's binary isn't versioned by path, so the hook uses `agy --version` on `SessionStart`. `CLAUDE_PID` is inherited by anything started from a Claude session, so it's trusted only for Claude hooks.
+- **Verified live:**
+  - `/styr` in a real interactive session
+  - a phone-answered "Run this command?" menu running the command
+  - a phone prompt typed into agy and answered
+  - `styr doctor --live` passing for both agents

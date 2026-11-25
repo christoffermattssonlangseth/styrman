@@ -314,3 +314,175 @@ async fn inside_styr_claude_prompts_are_typed_into_the_terminal() {
     );
     d.stop().await;
 }
+
+fn agy_hook(conv: &str, event: &str, extra: Value, launch: &str) -> RawHook {
+    let mut payload = json!({"conversationId": conv, "cwd": "/work/repo", "hookEventName": event});
+    payload
+        .as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    RawHook {
+        agent: AgentKind::Antigravity,
+        event: event.into(),
+        payload,
+        launched_by_styr: true,
+        agent_pid: None,
+        launch_id: Some(launch.into()),
+        agent_version: None,
+    }
+}
+
+fn menu() -> styr_core::ipc::TerminalPrompt {
+    styr_core::ipc::TerminalPrompt {
+        title: "Run this command?".into(),
+        detail: "rm -rf build".into(),
+        options: vec![
+            "Yes, run command".into(),
+            "Yes, and always allow in this conversation".into(),
+            "No, cancel".into(),
+        ],
+        selected: 0,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn agy_permission_menus_are_answered_from_the_phone_or_the_terminal() {
+    let d = Daemon::start().await;
+    let l = "agy-launch";
+    let r = d
+        .call(Request::Hook {
+            hook: agy_hook("c1", "SessionStart", json!({}), l),
+        })
+        .await;
+    assert_eq!(
+        r,
+        Response::HookReply {
+            stdout: None,
+            exit: None
+        },
+        "agy hooks print nothing by default"
+    );
+    let r = d
+        .call(Request::Hook {
+            hook: agy_hook(
+                "c1",
+                "PreInvocation",
+                json!({"invocationNum": 0, "lastUserInput": "/styr"}),
+                l,
+            ),
+        })
+        .await;
+    let Response::HookReply {
+        stdout: Some(out), ..
+    } = r
+    else {
+        panic!("{r:?}")
+    };
+    assert_eq!(out["terminationBehavior"], "terminate");
+    let (mut ws, sid) = phone(&d, "c1").await;
+    d.call(Request::Hook {
+        hook: agy_hook("c1", "PreToolUse", json!({"toolCall": {"id": "call_1", "name": "run_command", "args": {"CommandLine": "rm -rf build"}}, "stepIdx": 2}), l),
+    })
+    .await;
+
+    // The wrapper reports agy's menu; the phone gets a card with its options.
+    d.call(Request::TerminalPrompt {
+        launch_id: l.into(),
+        prompt: Some(menu()),
+    })
+    .await;
+    let (request, options, tool) = loop {
+        if let ServerMsg::Event { event } = recv(&mut ws).await
+            && let EventKind::PermissionRequested {
+                request,
+                options,
+                tool,
+                ..
+            } = event.kind
+        {
+            break (request, options, tool);
+        }
+    };
+    assert_eq!(
+        tool.title, "Run `rm -rf build`",
+        "described by the last announced tool"
+    );
+    assert_eq!(
+        options.iter().map(|o| o.kind).collect::<Vec<_>>(),
+        vec![
+            OptionKind::AllowOnce,
+            OptionKind::AllowAlways,
+            OptionKind::RejectOnce
+        ]
+    );
+    // Repeated reports of the same menu don't create new requests.
+    d.call(Request::TerminalPrompt {
+        launch_id: l.into(),
+        prompt: Some(styr_core::ipc::TerminalPrompt {
+            selected: 1,
+            ..menu()
+        }),
+    })
+    .await;
+
+    // Phone picks "always" → the wrapper is told to select option 1.
+    let wrapper = attach(&d, l);
+    settle().await;
+    send(&mut ws, json!({"type": "command", "session": sid, "command": {"type": "resolve_permission", "request": request, "option": "opt-1"}})).await;
+    let action = tokio::time::timeout(Duration::from_secs(5), wrapper)
+        .await
+        .expect("select")
+        .unwrap();
+    assert_eq!(action, Response::SelectOption { index: 1 });
+    loop {
+        if let ServerMsg::Event { event } = recv(&mut ws).await
+            && let EventKind::PermissionResolved { by, outcome, .. } = event.kind
+        {
+            assert!(matches!(by, Resolver::Phone(_)));
+            assert!(matches!(
+                outcome,
+                PermissionOutcome::Selected {
+                    kind: OptionKind::AllowAlways,
+                    ..
+                }
+            ));
+            break;
+        }
+    }
+    d.call(Request::TerminalPrompt {
+        launch_id: l.into(),
+        prompt: None,
+    })
+    .await;
+
+    // Next menu answered at the keyboard: it disappears → resolved by the terminal.
+    d.call(Request::TerminalPrompt {
+        launch_id: l.into(),
+        prompt: Some(styr_core::ipc::TerminalPrompt {
+            detail: "rm -rf dist".into(),
+            ..menu()
+        }),
+    })
+    .await;
+    loop {
+        if let ServerMsg::Event { event } = recv(&mut ws).await
+            && let EventKind::PermissionRequested { .. } = event.kind
+        {
+            break;
+        }
+    }
+    d.call(Request::TerminalPrompt {
+        launch_id: l.into(),
+        prompt: None,
+    })
+    .await;
+    loop {
+        if let ServerMsg::Event { event } = recv(&mut ws).await
+            && let EventKind::PermissionResolved { by, .. } = event.kind
+        {
+            assert_eq!(by, Resolver::Terminal);
+            break;
+        }
+    }
+    d.stop().await;
+}

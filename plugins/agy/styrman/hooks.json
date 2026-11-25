@@ -1,0 +1,49 @@
+{
+  "styrman": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "./bin/styr-hook agy SessionStart",
+        "timeout": 10
+      }
+    ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "./bin/styr-hook agy PreInvocation",
+        "timeout": 10
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./bin/styr-hook agy PreToolUse",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./bin/styr-hook agy PostToolUse",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "./bin/styr-hook agy Stop",
+        "timeout": 10
+      }
+    ]
+  }
+}
