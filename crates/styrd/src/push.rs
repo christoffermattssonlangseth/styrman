@@ -18,6 +18,21 @@ use styr_core::ids::SessionId;
 
 pub const CONFIG_FILE: &str = "apns.json";
 pub const KEY_FILE: &str = "apns-key.p8";
+/// Credentials for a push relay (`styr push relay <url>`), used when there's no own key.
+pub const RELAY_FILE: &str = "relay.json";
+/// What the relay accepts (it refuses longer text: only short alerts pass through it).
+const RELAY_MAX_TITLE: usize = 120;
+const RELAY_MAX_BODY: usize = 240;
+
+/// A push relay registration: the relay holds the app publisher's APNs key, so people
+/// without an Apple developer key still get notifications. It only ever receives the
+/// device token and the short alert text (details are always off through a relay).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RelayConfig {
+    pub url: String,
+    pub install_id: String,
+    pub secret: String,
+}
 /// Wait this long before pushing a permission request; skip it if answered by then.
 pub const PERMISSION_PUSH_DELAY: Duration = Duration::from_secs(8);
 /// Only push "finished" for turns at least this long (quick terminal turns stay quiet).
@@ -73,9 +88,15 @@ pub enum SendResult {
 
 pub struct Pusher {
     pub cfg: PushConfig,
-    key: jsonwebtoken::EncodingKey,
+    mode: Mode,
     client: reqwest::Client,
     jwt: Mutex<Option<(String, Instant)>>,
+}
+
+enum Mode {
+    /// Our own APNs key (`styr push setup`).
+    Direct(jsonwebtoken::EncodingKey),
+    Relay(RelayConfig),
 }
 
 impl Pusher {
@@ -83,7 +104,25 @@ impl Pusher {
     pub fn load(dir: &Path) -> Result<Option<Self>> {
         let cfg_path = dir.join(CONFIG_FILE);
         if !cfg_path.exists() {
-            return Ok(None);
+            let relay_path = dir.join(RELAY_FILE);
+            if !relay_path.exists() {
+                return Ok(None);
+            }
+            let relay: RelayConfig = serde_json::from_slice(&std::fs::read(&relay_path)?)
+                .context("reading relay.json")?;
+            return Ok(Some(Self {
+                cfg: PushConfig {
+                    key_id: String::new(),
+                    team_id: String::new(),
+                    topic: String::new(),
+                    details: false,
+                },
+                mode: Mode::Relay(relay),
+                client: reqwest::Client::builder()
+                    .timeout(Duration::from_secs(15))
+                    .build()?,
+                jwt: Mutex::new(None),
+            }));
         }
         let cfg: PushConfig =
             serde_json::from_slice(&std::fs::read(&cfg_path)?).context("reading apns.json")?;
@@ -95,13 +134,21 @@ impl Pusher {
             .build()?;
         Ok(Some(Self {
             cfg,
-            key,
+            mode: Mode::Direct(key),
             client,
             jwt: Mutex::new(None),
         }))
     }
 
-    fn token(&self) -> Result<String> {
+    /// The relay's URL when notifications go through one.
+    pub fn relay_url(&self) -> Option<&str> {
+        match &self.mode {
+            Mode::Relay(r) => Some(&r.url),
+            Mode::Direct(_) => None,
+        }
+    }
+
+    fn token(&self, key: &jsonwebtoken::EncodingKey) -> Result<String> {
         let mut g = self.jwt.lock().unwrap_or_else(|p| p.into_inner());
         if let Some((t, at)) = g.as_ref()
             && at.elapsed() < Duration::from_secs(40 * 60)
@@ -111,18 +158,22 @@ impl Pusher {
         let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::ES256);
         header.kid = Some(self.cfg.key_id.clone());
         let claims = serde_json::json!({"iss": self.cfg.team_id, "iat": now_ms() / 1000});
-        let t = jsonwebtoken::encode(&header, &claims, &self.key)?;
+        let t = jsonwebtoken::encode(&header, &claims, key)?;
         *g = Some((t.clone(), Instant::now()));
         Ok(t)
     }
 
     pub async fn send(&self, device_token: &str, env: &str, n: &Notification) -> SendResult {
+        let key = match &self.mode {
+            Mode::Direct(k) => k,
+            Mode::Relay(r) => return self.send_via_relay(r, device_token, env, n).await,
+        };
         let host = if env == "production" {
             "api.push.apple.com"
         } else {
             "api.sandbox.push.apple.com"
         };
-        let jwt = match self.token() {
+        let jwt = match self.token(key) {
             Ok(t) => t,
             Err(e) => return SendResult::Failed(format!("signing: {e}")),
         };
@@ -160,6 +211,105 @@ impl Pusher {
             Err(e) => SendResult::Failed(e.to_string()),
         }
     }
+}
+
+impl Pusher {
+    async fn send_via_relay(
+        &self,
+        r: &RelayConfig,
+        device_token: &str,
+        env: &str,
+        n: &Notification,
+    ) -> SendResult {
+        let body = relay_request(device_token, env, n);
+        let resp = self
+            .client
+            .post(format!("{}/v1/push", r.url.trim_end_matches('/')))
+            .bearer_auth(format!("{}.{}", r.install_id, r.secret))
+            .json(&body)
+            .send()
+            .await;
+        match resp {
+            Ok(resp) => {
+                let status = resp.status().as_u16();
+                let v: serde_json::Value = resp.json().await.unwrap_or_default();
+                match v["result"].as_str() {
+                    Some("sent") => SendResult::Sent,
+                    Some("bad_token") => {
+                        SendResult::BadToken(v["reason"].as_str().unwrap_or("").to_owned())
+                    }
+                    _ => SendResult::Failed(format!(
+                        "relay: {status} {}",
+                        v["reason"].as_str().or(v["error"].as_str()).unwrap_or("")
+                    )),
+                }
+            }
+            Err(e) => SendResult::Failed(format!("relay: {e}")),
+        }
+    }
+}
+
+/// What we send the relay: the token and the short alert, nothing else.
+pub fn relay_request(device_token: &str, env: &str, n: &Notification) -> serde_json::Value {
+    let cut = |s: &str, max: usize| -> String {
+        if s.chars().count() <= max {
+            s.to_owned()
+        } else {
+            format!("{}…", s.chars().take(max - 1).collect::<String>())
+        }
+    };
+    let mut v = serde_json::json!({
+        "token": device_token,
+        "env": if env == "production" { "production" } else { "sandbox" },
+        "title": cut(&n.title, RELAY_MAX_TITLE),
+        "body": cut(&n.body, RELAY_MAX_BODY),
+    });
+    if let Some(s) = &n.session {
+        v["session"] = s.as_str().into();
+    }
+    if let Some(c) = n.category {
+        v["category"] = c.into();
+    }
+    if let Some(c) = &n.collapse_id {
+        v["collapse_id"] = c.chars().take(64).collect::<String>().into();
+    }
+    v
+}
+
+/// Register this Mac with a push relay and store its credentials (0600).
+pub async fn register_relay(dir: &Path, url: &str) -> Result<()> {
+    anyhow::ensure!(
+        url.starts_with("https://") || url.starts_with("http://127.0.0.1:"),
+        "the relay URL must start with https://"
+    );
+    let url = url.trim_end_matches('/').to_owned();
+    let v: serde_json::Value = reqwest::Client::new()
+        .post(format!("{url}/v1/register"))
+        .timeout(Duration::from_secs(15))
+        .send()
+        .await
+        .context("couldn't reach the relay")?
+        .error_for_status()
+        .context("the relay refused to register")?
+        .json()
+        .await?;
+    let cfg = RelayConfig {
+        url,
+        install_id: v["install_id"]
+            .as_str()
+            .context("no install_id")?
+            .to_owned(),
+        secret: v["secret"].as_str().context("no secret")?.to_owned(),
+    };
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(dir.join(RELAY_FILE))?;
+    std::io::Write::write_all(&mut f, &serde_json::to_vec_pretty(&cfg)?)?;
+    Ok(())
 }
 
 /// What to push for an event of a shared session (pure; unit-tested).
@@ -531,9 +681,12 @@ mod tests {
         )
         .unwrap();
         let p = Pusher::load(dir.path()).unwrap().unwrap();
-        let jwt = p.token().unwrap();
+        let Mode::Direct(key) = &p.mode else {
+            panic!("own key: direct mode")
+        };
+        let jwt = p.token(key).unwrap();
         assert_eq!(jwt.split('.').count(), 3);
-        assert_eq!(p.token().unwrap(), jwt, "cached");
+        assert_eq!(p.token(key).unwrap(), jwt, "cached");
         let header: serde_json::Value = serde_json::from_slice(
             &base64::Engine::decode(
                 &base64::engine::general_purpose::URL_SAFE_NO_PAD,
@@ -545,6 +698,110 @@ mod tests {
         assert_eq!(
             (header["alg"].as_str(), header["kid"].as_str()),
             (Some("ES256"), Some("ABC123DEFG"))
+        );
+    }
+}
+
+#[cfg(test)]
+mod relay_tests {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::sync::Mutex as AsyncMutex;
+
+    fn note(body: &str) -> Notification {
+        Notification {
+            title: "Codex · styrman".into(),
+            body: body.into(),
+            session: Some("01SESSION".into()),
+            category: Some("PERMISSION"),
+            collapse_id: Some("perm-01SESSION".into()),
+        }
+    }
+
+    #[test]
+    fn only_the_short_alert_goes_to_the_relay() {
+        let v = relay_request(&"ab".repeat(32), "production", &note(&"x".repeat(500)));
+        let keys: Vec<_> = v.as_object().unwrap().keys().cloned().collect();
+        assert_eq!(
+            keys,
+            [
+                "body",
+                "category",
+                "collapse_id",
+                "env",
+                "session",
+                "title",
+                "token"
+            ]
+        );
+        assert_eq!(v["body"].as_str().unwrap().chars().count(), RELAY_MAX_BODY);
+        assert_eq!(v["env"], "production");
+        assert_eq!(relay_request("aa", "weird", &note("b"))["env"], "sandbox");
+    }
+
+    #[tokio::test]
+    async fn register_then_push_through_a_relay() {
+        use axum::{Json, Router, http::HeaderMap, routing::post};
+        let seen: Arc<AsyncMutex<Vec<(String, serde_json::Value)>>> = Arc::default();
+        let s = seen.clone();
+        let app = Router::new()
+            .route(
+                "/v1/register",
+                post(|| async { Json(serde_json::json!({"install_id": "inst", "secret": "sec"})) }),
+            )
+            .route(
+                "/v1/push",
+                post(move |h: HeaderMap, Json(v): Json<serde_json::Value>| {
+                    let s = s.clone();
+                    async move {
+                        let auth = h["authorization"].to_str().unwrap().to_owned();
+                        let dead = v["token"] == "dead";
+                        s.lock().await.push((auth, v));
+                        Json(if dead {
+                            serde_json::json!({"result": "bad_token", "reason": "Unregistered"})
+                        } else {
+                            serde_json::json!({"result": "sent"})
+                        })
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let dir = tempfile::tempdir().unwrap();
+        register_relay(dir.path(), &url).await.unwrap();
+        let mode = std::fs::metadata(dir.path().join(RELAY_FILE))
+            .unwrap()
+            .permissions();
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            mode.mode() & 0o777,
+            0o600,
+            "credentials readable only by the user"
+        );
+
+        let p = Pusher::load(dir.path()).unwrap().expect("relay mode");
+        assert_eq!(p.relay_url(), Some(url.as_str()));
+        assert!(!p.cfg.details, "details are always off through a relay");
+        assert_eq!(
+            p.send("abcd", "sandbox", &note("Needs your approval"))
+                .await,
+            SendResult::Sent
+        );
+        assert_eq!(
+            p.send("dead", "sandbox", &note("x")).await,
+            SendResult::BadToken("Unregistered".into())
+        );
+        let seen = seen.lock().await;
+        assert_eq!(seen[0].0, "Bearer inst.sec");
+        assert_eq!(seen[0].1["body"], "Needs your approval");
+        // An own key takes precedence over a relay.
+        assert!(
+            register_relay(dir.path(), "http://example.com")
+                .await
+                .is_err(),
+            "https only"
         );
     }
 }

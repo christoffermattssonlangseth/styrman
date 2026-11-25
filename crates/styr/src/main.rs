@@ -163,6 +163,10 @@ enum PushCmd {
     Test,
     /// Include command titles and reply excerpts in notifications (`on`/`off`).
     Details { state: String },
+    /// Get notifications through a push relay instead of your own Apple key
+    /// (for people without an Apple developer account). Only the phone's push token
+    /// and the short alert ("Claude · repo needs your approval") go to the relay.
+    Relay { url: String },
 }
 
 #[derive(Subcommand)]
@@ -532,6 +536,7 @@ fn push(action: PushCmd) -> Result<()> {
             configured,
             details,
             devices_with_token,
+            relay,
         } = r
         else {
             bail!("unexpected response");
@@ -544,7 +549,9 @@ fn push(action: PushCmd) -> Result<()> {
                 "off (run `styr push setup <key.p8>`)"
             }
         );
-        if configured {
+        if let Some(url) = &relay {
+            println!("via relay: {url} (only short alerts; details are always off)");
+        } else if configured {
             println!(
                 "details in notifications: {}",
                 if details { "on" } else { "off" }
@@ -607,6 +614,14 @@ fn push(action: PushCmd) -> Result<()> {
             print_status(call(Request::PushReload)?)?;
         }
         PushCmd::Status => print_status(call(Request::PushStatus)?)?,
+        PushCmd::Relay { url } => {
+            anyhow::ensure!(
+                !cfg_path.exists(),
+                "you have your own APNs key set up (styr push setup), which takes precedence; remove {} to use a relay",
+                cfg_path.display()
+            );
+            print_status(call(Request::PushRelay { url })?)?;
+        }
         PushCmd::Test => {
             let Response::PushResults { results } = call(Request::PushTest)? else {
                 bail!("unexpected response");

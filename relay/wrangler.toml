@@ -1,0 +1,14 @@
+name = "styrman-push-relay"
+main = "src/index.ts"
+compatibility_date = "2026-11-01"
+
+# Create it once: `npx wrangler kv namespace create INSTALLS`, then paste the id here.
+[[kv_namespaces]]
+binding = "INSTALLS"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+
+[vars]
+APNS_KEY_ID = "NQ6KX5Y2L6"
+APNS_TEAM_ID = "7R6QL53THM"
+APNS_TOPIC = "com.christoffermattssonlangseth.styrman"
+# APNS_KEY is a secret: `npx wrangler secret put APNS_KEY < AuthKey_NQ6KX5Y2L6.p8`

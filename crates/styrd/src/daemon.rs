@@ -860,6 +860,23 @@ impl Daemon {
         Ok(true)
     }
 
+    fn push_status(&self) -> Response {
+        let p = self.pusher();
+        Response::PushStatus {
+            configured: p.is_some(),
+            details: p.as_ref().is_some_and(|p| p.cfg.details),
+            devices_with_token: self.devices_with_token(),
+            relay: p.as_ref().and_then(|p| p.relay_url().map(str::to_owned)),
+        }
+    }
+
+    fn data_dir(&self) -> Option<std::path::PathBuf> {
+        self.data_dir
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
     pub fn set_api_urls(&self, urls: Vec<String>) {
         *self.api_urls.lock().unwrap_or_else(|p| p.into_inner()) = urls;
     }
@@ -1004,16 +1021,15 @@ impl Daemon {
                 .map(|d| Response::PromptAccepted {
                     delivered: d == crate::prompts::Delivery::Delivered,
                 }),
-            Request::PushReload => self.reload_push(None).map(|on| Response::PushStatus {
-                configured: on,
-                details: self.pusher().is_some_and(|p| p.cfg.details),
-                devices_with_token: self.devices_with_token(),
-            }),
-            Request::PushStatus => Ok(Response::PushStatus {
-                configured: self.pusher().is_some(),
-                details: self.pusher().is_some_and(|p| p.cfg.details),
-                devices_with_token: self.devices_with_token(),
-            }),
+            Request::PushReload => self.reload_push(None).map(|_| self.push_status()),
+            Request::PushStatus => Ok(self.push_status()),
+            Request::PushRelay { url } => match self.data_dir() {
+                Some(dir) => match crate::push::register_relay(&dir, &url).await {
+                    Ok(()) => self.reload_push(None).map(|_| self.push_status()),
+                    Err(e) => Err(e),
+                },
+                None => Err(anyhow::anyhow!("no data directory")),
+            },
             Request::PushTest => {
                 let n = crate::push::Notification {
                     title: "Styrman".into(),

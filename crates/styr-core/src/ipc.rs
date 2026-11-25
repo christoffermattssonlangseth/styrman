@@ -93,6 +93,10 @@ pub enum Request {
         session: SessionId,
         text: String,
     },
+    /// Register with a push relay (`styr push relay <url>`).
+    PushRelay {
+        url: String,
+    },
     /// Start `agent` in `cwd` in a new cmux tab, shared with the phone (`styr new`).
     StartSession {
         agent: AgentKind,
@@ -161,6 +165,9 @@ pub enum Response {
         details: bool,
         /// Names of paired phones that registered for notifications.
         devices_with_token: Vec<String>,
+        /// Notifications go through this relay (no own APNs key).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        relay: Option<String>,
     },
     PushResults {
         /// (device id, outcome)
