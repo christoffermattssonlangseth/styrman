@@ -52,11 +52,22 @@ final class LiveActivities {
                 case .error: "error"
                 default: "working"
                 }
-                return LiveRow(agent: s.agent.displayName, repo: s.repoName, status: status)
+                return LiveRow(agent: s.agent.displayName, repo: s.repoName, status: status, session: s.id,
+                               since: Date(timeIntervalSince1970: Double(s.updatedMs) / 1000), line: Self.line(of: s))
             }
         return LiveState(working: live.filter { $0.status == .working }.count,
                          needs: live.filter { $0.status.needsUser }.count,
                          rows: Array(rows))
+    }
+
+    /// "Run `cargo test`" → "cargo test" for an approval; paths relative to the folder.
+    private static func line(of s: SessionSummary) -> String? {
+        guard var a = s.activity?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty else { return nil }
+        if let cwd = s.cwd, !cwd.isEmpty { a = a.replacingOccurrences(of: cwd.hasSuffix("/") ? cwd : cwd + "/", with: "") }
+        if s.status == .needsApproval, let o = a.firstIndex(of: "`"), let c = a[a.index(after: o)...].firstIndex(of: "`") {
+            a = String(a[a.index(after: o)..<c])
+        }
+        return String(a.prefix(90))
     }
 
     /// Called whenever the session list changes (app in the foreground).

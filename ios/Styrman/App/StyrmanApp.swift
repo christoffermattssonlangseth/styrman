@@ -13,7 +13,12 @@ struct StyrmanApp: App {
                 .environment(connection)
                 .tint(Theme.accent)
                 .onOpenURL { url in
-                    if let link = PairingLink(url: url) { pendingLink = link }
+                    // styrman://session/<id>: from the Live Activity or the widget.
+                    if url.scheme == "styrman", url.host() == "session", let id = url.pathComponents.dropFirst().first {
+                        connection.requestedSession = id
+                    } else if let link = PairingLink(url: url) {
+                        pendingLink = link
+                    }
                 }
                 .onChange(of: connection.sessions, initial: true) { _, sessions in
                     LiveActivities.shared.connection = connection

@@ -4,7 +4,9 @@
 //! While the app is open it runs the activity itself. When it's closed, this sends
 //! the changes as APNs `liveactivity` pushes, to the running activity's token, or
 //! starts one with the push-to-start token. Like notifications, these carry only
-//! agent names, folder names and statuses: never commands, code or replies.
+//! agent names, folder names, statuses and times; the one-line "what it wants"
+//! (a command, a reply's first line) only with `styr push details` on, and never
+//! through the relay.
 
 use crate::daemon::{BusMsg, Daemon};
 use crate::push::SendResult;
@@ -21,19 +23,39 @@ const DEBOUNCE: Duration = Duration::from_millis(1500);
 const MAX_ROWS: usize = 3;
 
 /// Must match `StyrmanActivityAttributes.ContentState` in the iOS app.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
 pub struct LiveState {
     pub working: u32,
     pub needs: u32,
     pub rows: Vec<LiveRow>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct LiveRow {
     pub agent: String,
     pub repo: String,
     /// "needs_approval", "waiting", "working" or "error".
     pub status: String,
+    /// The session's id, so tapping the row opens it.
+    pub session: String,
+    /// Since when (seconds since 2001-01-01, Swift's `Date` encoding).
+    pub since: f64,
+    /// What it wants or is doing, in one line (only with details on).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
+}
+
+/// Seconds between 1970 and 2001 (Swift's reference date).
+const SWIFT_EPOCH_OFFSET: f64 = 978_307_200.0;
+
+/// "Run `cargo test`" → "cargo test" (the row already says it's asking).
+fn line_of(s: &SessionSummary) -> Option<String> {
+    let a = s.activity.as_deref()?.trim();
+    let a = match (a.find('`'), a.rfind('`')) {
+        (Some(o), Some(c)) if c > o + 1 && s.status == SessionStatus::NeedsApproval => &a[o + 1..c],
+        _ => a,
+    };
+    (!a.is_empty()).then(|| a.chars().take(90).collect())
 }
 
 impl LiveState {
@@ -41,7 +63,7 @@ impl LiveState {
         self.working == 0 && self.needs == 0
     }
 
-    pub fn of(sessions: &[SessionSummary]) -> Self {
+    pub fn of(sessions: &[SessionSummary], details: bool) -> Self {
         let mut live: Vec<&SessionSummary> = sessions
             .iter()
             .filter(|s| s.shared && s.status != SessionStatus::Done)
@@ -72,6 +94,9 @@ impl LiveState {
                     _ => "working",
                 }
                 .into(),
+                session: s.id.to_string(),
+                since: s.updated_ms as f64 / 1000.0 - SWIFT_EPOCH_OFFSET,
+                line: if details { line_of(s) } else { None },
             })
             .collect();
         Self {
@@ -145,7 +170,9 @@ pub async fn run(daemon: Arc<Daemon>, mut stop: tokio::sync::watch::Receiver<boo
         let Ok(sessions) = daemon.summaries(false) else {
             continue;
         };
-        let state = LiveState::of(&sessions);
+        // The one-line text only with details on, and never through a relay.
+        let details = pusher.cfg.details && pusher.relay_url().is_none();
+        let state = LiveState::of(&sessions, details);
         let Ok(devices) = daemon.lock_store_devices() else {
             continue;
         };
@@ -219,12 +246,15 @@ mod tests {
     #[test]
     fn summarises_without_any_session_content() {
         use styr_core::ids::AgentKind::*;
-        let st = LiveState::of(&[
-            s(Claude, "harbor", SessionStatus::Working, 3),
-            s(Codex, "lighthouse", SessionStatus::NeedsApproval, 1),
-            s(Antigravity, "beacon", SessionStatus::Done, 9),
-            s(Claude, "dotfiles", SessionStatus::Working, 5),
-        ]);
+        let st = LiveState::of(
+            &[
+                s(Claude, "harbor", SessionStatus::Working, 3),
+                s(Codex, "lighthouse", SessionStatus::NeedsApproval, 1),
+                s(Antigravity, "beacon", SessionStatus::Done, 9),
+                s(Claude, "dotfiles", SessionStatus::Working, 5),
+            ],
+            false,
+        );
         assert_eq!((st.working, st.needs), (2, 1));
         let rows: Vec<_> = st
             .rows
@@ -251,6 +281,14 @@ mod tests {
             start["aps"]["alert"]["body"],
             "Codex · lighthouse needs you"
         );
-        assert!(LiveState::of(&[]).is_idle());
+        assert!(LiveState::of(&[], false).is_idle());
+        assert_eq!(st.rows[0].since, 0.001 - SWIFT_EPOCH_OFFSET);
+
+        // With details on: what each wants, in a line (the command, for an approval).
+        let st = LiveState::of(
+            &[s(Codex, "lighthouse", SessionStatus::NeedsApproval, 1)],
+            true,
+        );
+        assert_eq!(st.rows[0].line.as_deref(), Some("rm -rf secret"));
     }
 }

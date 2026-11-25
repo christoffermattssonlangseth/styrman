@@ -110,7 +110,11 @@ export interface LiveRequest {
   env: "sandbox" | "production";
   event: "start" | "update" | "end";
   priority: 5 | 10;
-  state: { working: number; needs: number; rows: { agent: string; repo: string; status: string }[] };
+  state: {
+    working: number;
+    needs: number;
+    rows: { agent: string; repo: string; status: string; session: string; since: number }[];
+  };
 }
 
 const STATUSES = new Set(["needs_approval", "waiting", "working", "error"]);
@@ -133,7 +137,10 @@ export function parseLive(v: unknown): LiveRequest | string {
   if (!Array.isArray(s.rows) || s.rows.length > 3) return "bad rows";
   for (const r of s.rows as Record<string, unknown>[]) {
     if (typeof r !== "object" || r === null) return "bad row";
-    for (const k of Object.keys(r)) if (!["agent", "repo", "status"].includes(k)) return `unexpected row field: ${k}`;
+    // No "line": what an agent wants never goes through the relay.
+    for (const k of Object.keys(r)) if (!["agent", "repo", "status", "session", "since"].includes(k)) return `unexpected row field: ${k}`;
+    if (typeof r.session !== "string" || !/^[0-9A-Za-z_-]{1,64}$/.test(r.session)) return "bad session";
+    if (typeof r.since !== "number" || !Number.isFinite(r.since)) return "bad since";
     if (typeof r.agent !== "string" || r.agent.length < 1 || r.agent.length > 20) return "bad agent";
     if (typeof r.repo !== "string" || r.repo.length < 1 || r.repo.length > 40) return "bad repo";
     if (typeof r.status !== "string" || !STATUSES.has(r.status)) return "bad status";

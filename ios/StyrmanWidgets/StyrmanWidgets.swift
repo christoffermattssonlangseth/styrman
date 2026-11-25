@@ -42,25 +42,55 @@ private func shortStatus(_ status: String) -> String {
     }
 }
 
-/// One line: agent (in its colour) · folder, and what it wants.
+/// One session: agent · folder, what it wants and for how long, and what it's about.
 private struct RowView: View {
     let row: LiveRow
+    var showLine = true
+    /// False in tinted/clear home-screen styles: no agent colours, the system tints.
     var fullColor = true
+
     var body: some View {
         let needs = AgentStyle.needsYou(row.status)
-        HStack(spacing: 8) {
-            AgentDot(agent: row.agent, fullColor: fullColor)
-            let agent = Text(row.agent).fontWeight(.semibold)
-                .foregroundColor(fullColor ? AgentStyle.color(row.agent) : .primary)
-            let repo = Text(row.repo).foregroundColor(.secondary)
-            Text("\(agent)  \(repo)")
+        HStack(alignment: .top, spacing: 10) {
+            AgentDot(agent: row.agent, size: 24, fullColor: fullColor)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    Text(row.agent).fontWeight(.semibold).foregroundStyle(fullColor ? AgentStyle.color(row.agent) : Color.primary)
+                    Text(row.repo).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer(minLength: 6)
+                    Text(shortStatus(row.status)).fontWeight(.semibold)
+                        .foregroundStyle(needs && fullColor ? amber : Color.secondary)
+                        .widgetAccentable(needs)
+                    if needs, let since = row.since {
+                        // Counts up on the Lock Screen by itself.
+                        Text(since, style: .timer)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .frame(width: 44, alignment: .trailing)
+                    }
+                }
                 .font(.footnote)
-                .lineLimit(1)
-            Spacer(minLength: 6)
-            Text(shortStatus(row.status))
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(needs && fullColor ? amber : Color.secondary)
-                .widgetAccentable(needs && !fullColor)
+                if showLine, let line = row.line {
+                    Text(line)
+                        .font(row.status == "needs_approval" ? .system(.caption, design: .monospaced) : .caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        }
+    }
+}
+
+/// Rows open their session when tapped.
+private struct Rows: View {
+    let rows: [LiveRow]
+    var body: some View {
+        ForEach(Array(rows.enumerated()), id: \.offset) { i, row in
+            if let url = row.url {
+                Link(destination: url) { RowView(row: row, showLine: i < 2 || rows.count < 3) }
+            } else {
+                RowView(row: row)
+            }
         }
     }
 }
@@ -88,10 +118,12 @@ struct StyrmanLiveActivity: Widget {
                     Text(summary(s)).font(.footnote.weight(.semibold))
                         .foregroundStyle(s.needs > 0 ? amber : Color.secondary)
                 }
-                ForEach(s.rows, id: \.self) { RowView(row: $0) }
+                Rows(rows: s.rows)
             }
             .padding(.horizontal, 16).padding(.vertical, 14)
-            // No tint: the system's own Lock Screen material, like the other activities.
+            // See-through, like the other activities on the Lock Screen.
+            .activityBackgroundTint(Color.black.opacity(0.3))
+            .activitySystemActionForegroundColor(.white)
         } dynamicIsland: { context in
             let s = context.state
             return DynamicIsland {
@@ -107,7 +139,7 @@ struct StyrmanLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(spacing: 8) {
-                        ForEach(s.rows, id: \.self) { RowView(row: $0) }
+                        Rows(rows: s.rows)
                     }
                     .padding(.top, 4)
                 }
@@ -207,7 +239,7 @@ struct AgentsWidgetView: View {
                             Text(r.repo).font(.caption.weight(.medium)).lineLimit(1)
                         }
                     } else {
-                        RowView(row: r, fullColor: fullColor)
+                        RowView(row: r, showLine: false, fullColor: fullColor)
                     }
                 }
                 Spacer(minLength: 0)

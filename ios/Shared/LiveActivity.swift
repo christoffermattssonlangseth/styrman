@@ -11,6 +11,14 @@ struct StyrmanActivityAttributes: ActivityAttributes {
         var repo: String
         /// "needs_approval", "waiting", "working" or "error".
         var status: String
+        /// The session, so tapping the row opens it.
+        var session: String? = nil
+        /// Since when it's been in this state.
+        var since: Date? = nil
+        /// What it wants or is doing, in one line (the command, the reply's first line).
+        var line: String? = nil
+
+        var url: URL? { session.flatMap { URL(string: "styrman://session/\($0)") } }
     }
 
     struct ContentState: Codable, Hashable, Sendable {

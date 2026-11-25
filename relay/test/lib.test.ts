@@ -59,7 +59,7 @@ test("Live Activity requests carry only counts and agent · folder · status", a
   const { parseLive, livePayload } = await import("../src/lib.ts");
   const ok = {
     token: "b".repeat(64), env: "production", event: "update", priority: 10,
-    state: { working: 1, needs: 1, rows: [{ agent: "Codex", repo: "lighthouse", status: "needs_approval" }] },
+    state: { working: 1, needs: 1, rows: [{ agent: "Codex", repo: "lighthouse", status: "needs_approval", session: "01ABC", since: 786000000.5 }] },
   };
   const p = parseLive(ok);
   assert.equal(typeof p, "object");
@@ -69,6 +69,8 @@ test("Live Activity requests carry only counts and agent · folder · status", a
   assert.deepEqual(out.aps["content-state"], ok.state);
   assert.equal((livePayload({ ...(p as any), event: "start" }, 1) as any).aps["attributes-type"], "StyrmanActivityAttributes");
   assert.equal(parseLive({ ...ok, state: { ...ok.state, activity: "rm -rf" } }), "unexpected state field: activity");
-  assert.equal(parseLive({ ...ok, state: { ...ok.state, rows: [{ agent: "x", repo: "y", status: "z" }] } }), "bad status");
-  assert.equal(parseLive({ ...ok, state: { ...ok.state, rows: [{ agent: "x", repo: "y", status: "working", title: "secret" }] } }), "unexpected row field: title");
+  const row = ok.state.rows[0];
+  assert.equal(parseLive({ ...ok, state: { ...ok.state, rows: [{ ...row, status: "z" }] } }), "bad status");
+  assert.equal(parseLive({ ...ok, state: { ...ok.state, rows: [{ ...row, title: "secret" }] } }), "unexpected row field: title");
+  assert.equal(parseLive({ ...ok, state: { ...ok.state, rows: [{ ...row, line: "cargo test" }] } }), "unexpected row field: line");
 });
