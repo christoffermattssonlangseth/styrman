@@ -8,6 +8,8 @@ struct SessionDetailView: View {
     /// after it are read aloud automatically.
     @State private var baseline: String??
     @State private var showReadOnlyHelp = false
+    /// How many of the latest rows to draw (more with "Show earlier").
+    @State private var shown = 150
     @Environment(\.dismiss) private var dismiss
 
     /// The approval waiting for an answer, if any: it's pinned above the message box.
@@ -55,9 +57,19 @@ struct SessionDetailView: View {
                     }
                     .frame(maxWidth: .infinity).padding(.top, 160)
                 } else {
-                LazyVStack(alignment: .leading, spacing: 12) {
+                // A plain (not lazy) stack: a lazy one anchored to the bottom sometimes
+                // left its scroll position past the content, a blank screen until you
+                // scrolled. Only the latest rows are drawn, so long sessions stay quick.
+                VStack(alignment: .leading, spacing: 12) {
                     let latest = latestReply(timeline)?.id
-                    ForEach(DisplayRow.rows(merged(timeline.items))) { row in
+                    let rows = DisplayRow.rows(merged(timeline.items))
+                    if rows.count > shown {
+                        Button("Show earlier") { shown += 150 }
+                            .font(.footnote.weight(.medium))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 4)
+                    }
+                    ForEach(rows.suffix(shown)) { row in
                         switch row {
                         case .item(let item):
                             TimelineRow(item: item, cwd: summary?.cwd, sessionId: sessionId, agent: agent,
@@ -96,6 +108,10 @@ struct SessionDetailView: View {
             })
             .onChange(of: timeline.items.count + timeline.pending.count) {
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            // Land on the latest message when it opens and when the history arrives.
+            .onChange(of: timeline.loaded, initial: true) { _, loaded in
+                if loaded { Task { @MainActor in proxy.scrollTo("bottom", anchor: .bottom) } }
             }
         }
         .navigationTitle(summary?.repoName ?? "Session")
