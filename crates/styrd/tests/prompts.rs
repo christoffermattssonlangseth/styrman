@@ -225,6 +225,8 @@ fn attach(d: &Daemon, launch: &str) -> tokio::task::JoinHandle<Response> {
     let c = Client::new(&d.paths.socket).with_timeout(None);
     let req = Request::AttachTerminal {
         launch_id: launch.into(),
+        agent: None,
+        cwd: None,
     };
     tokio::task::spawn_blocking(move || c.call(&req).expect("attach"))
 }
@@ -517,7 +519,7 @@ async fn codex_styr_caught_by_the_terminal_shares_its_session() {
     let d = Daemon::start().await;
     let l = "codex-launch";
     // Codex fires SessionStart only with the first prompt: `/styr` comes first.
-    let r = d.call(Request::ShareLaunch { launch_id: l.into(), shared: true }).await;
+    let r = d.call(Request::ShareLaunch { launch_id: l.into(), shared: true, agent: None, cwd: None, agent_pid: None }).await;
     assert_eq!(r, Response::LaunchShared { sessions: 0 }, "deferred");
     assert!(shared_codex(&d).await.is_empty());
     for (event, extra) in [
@@ -529,8 +531,75 @@ async fn codex_styr_caught_by_the_terminal_shares_its_session() {
     }
     assert_eq!(shared_codex(&d).await, vec![true], "applied on the first hook");
     // Later `/styr off` in the same terminal applies right away.
-    let r = d.call(Request::ShareLaunch { launch_id: l.into(), shared: false }).await;
+    let r = d.call(Request::ShareLaunch { launch_id: l.into(), shared: false, agent: None, cwd: None, agent_pid: None }).await;
     assert_eq!(r, Response::LaunchShared { sessions: 1 });
     assert_eq!(shared_codex(&d).await, vec![false]);
+    d.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn codex_placeholder_appears_at_once_and_is_adopted_by_the_real_session() {
+    let d = Daemon::start().await;
+    let l = "codex-fresh";
+    let r = d
+        .call(Request::ShareLaunch {
+            launch_id: l.into(),
+            shared: true,
+            agent: Some(AgentKind::Codex),
+            cwd: Some("/work/repo".into()),
+            agent_pid: None,
+        })
+        .await;
+    assert_eq!(r, Response::LaunchShared { sessions: 1 }, "placeholder created now");
+    let Response::Sessions { sessions } = d.call(Request::ListSessions { include_unshared: false }).await else { panic!() };
+    let placeholder: Vec<_> = sessions.iter().filter(|s| s.agent == AgentKind::Codex).collect();
+    assert_eq!(placeholder.len(), 1, "on the phone before any prompt");
+    let id = placeholder[0].id.clone();
+    assert_eq!(placeholder[0].cwd.as_deref(), Some(std::path::Path::new("/work/repo")));
+    // The first prompt makes Codex create its session; its hooks adopt the placeholder.
+    for (event, extra) in [
+        ("SessionStart", json!({"source": "startup"})),
+        ("UserPromptSubmit", json!({"prompt": "hello from the phone", "turn_id": "t1"})),
+    ] {
+        d.call(Request::Hook { hook: codex_hook("real-1", event, extra, l) }).await;
+    }
+    let Response::Sessions { sessions } = d.call(Request::ListSessions { include_unshared: true }).await else { panic!() };
+    let codex: Vec<_> = sessions.iter().filter(|s| s.agent == AgentKind::Codex).collect();
+    assert_eq!(codex.len(), 1, "one session, not two");
+    assert_eq!((codex[0].id.clone(), codex[0].native_id.as_str(), codex[0].shared), (id.clone(), "real-1", true));
+    let Response::Events { events } = d.call(Request::Events { session: id, since_seq: 0, limit: 100 }).await else { panic!() };
+    let names: Vec<_> = events.iter().map(|e| e.kind.name()).collect();
+    assert_eq!(names.iter().filter(|n| **n == "session_started").count(), 1, "{names:?}");
+    assert!(names.contains(&"user_message"));
+    d.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn codex_hooks_with_a_stale_terminal_id_find_their_terminal_by_folder() {
+    let d = Daemon::start().await;
+    // `styr codex` in /work/repo, attached and waiting for prompts.
+    let c = Client::new(&d.paths.socket).with_timeout(None);
+    let req = Request::AttachTerminal {
+        launch_id: "live".into(),
+        agent: Some(AgentKind::Codex),
+        cwd: Some("/work/repo".into()),
+    };
+    let _wrapper = tokio::task::spawn_blocking(move || c.call(&req));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Codex's background server runs the hooks with another terminal's id.
+    for (event, extra) in [
+        ("SessionStart", json!({"source": "startup"})),
+        ("UserPromptSubmit", json!({"prompt": "hi", "turn_id": "t1"})),
+    ] {
+        d.call(Request::Hook { hook: codex_hook("s9", event, extra, "stale-from-another-terminal") }).await;
+    }
+    let Response::Sessions { sessions } = d.call(Request::ListSessions { include_unshared: true }).await else { panic!() };
+    let s = sessions.iter().find(|s| s.native_id == "s9").unwrap();
+    assert!(s.in_terminal_wrapper, "linked to the live wrapper in its folder");
+    // Sharing from that terminal now reaches the session.
+    let r = d
+        .call(Request::ShareLaunch { launch_id: "live".into(), shared: true, agent: None, cwd: None, agent_pid: None })
+        .await;
+    assert_eq!(r, Response::LaunchShared { sessions: 1 });
     d.stop().await;
 }

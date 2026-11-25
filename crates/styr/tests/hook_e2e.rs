@@ -266,6 +266,8 @@ fn wrapper_links_survive_a_daemon_restart() {
             .with_timeout(None)
             .call(&Request::AttachTerminal {
                 launch_id: "L1".into(),
+                agent: None,
+                cwd: None,
             })
     });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);

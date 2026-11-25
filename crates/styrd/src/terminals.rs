@@ -65,6 +65,12 @@ struct Inner {
     on_screen: HashMap<String, ScreenPermission>,
     /// The last tool the agent announced, per session (to describe a menu).
     last_tool: HashMap<SessionId, ToolInfo>,
+    /// Launch → (agent, canonical folder, first seen), as the wrapper reported them.
+    wrappers: HashMap<String, (styr_core::ids::AgentKind, std::path::PathBuf, Instant)>,
+}
+
+fn canon(p: &std::path::Path) -> std::path::PathBuf {
+    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_owned())
 }
 
 /// Map a menu label onto ACP's option kinds.
@@ -115,6 +121,47 @@ impl Terminals {
     /// Take a queued prompt back (the wrapper is gone; deliver another way).
     pub fn take_queued(&self, session: &SessionId) -> Option<QueuedPrompt> {
         self.lock().queue.get_mut(session)?.pop_front()
+    }
+
+    /// Record what a wrapper runs and where (sent with every attach).
+    pub fn note_wrapper(&self, launch: &str, agent: styr_core::ids::AgentKind, cwd: &std::path::Path) {
+        let mut g = self.lock();
+        g.wrappers
+            .entry(launch.to_owned())
+            .or_insert_with(|| (agent, canon(cwd), Instant::now()));
+    }
+
+    fn launch_live(g: &Inner, launch: &str) -> bool {
+        g.attached.contains_key(launch)
+            || g.last_seen.get(launch).is_some_and(|t| t.elapsed() < LIVE_GRACE)
+    }
+
+    /// Whether `launch` is a live wrapper of `agent` in `cwd`.
+    pub fn wrapper_in(&self, launch: &str, agent: styr_core::ids::AgentKind, cwd: &std::path::Path) -> bool {
+        let g = self.lock();
+        Self::launch_live(&g, launch)
+            && g.wrappers
+                .get(launch)
+                .is_some_and(|(a, c, _)| *a == agent && *c == canon(cwd))
+    }
+
+    /// Live wrappers of `agent` in `cwd`, newest first.
+    pub fn live_wrappers_in(&self, agent: styr_core::ids::AgentKind, cwd: &std::path::Path) -> Vec<String> {
+        let g = self.lock();
+        let cwd = canon(cwd);
+        let mut v: Vec<(&String, Instant)> = g
+            .wrappers
+            .iter()
+            .filter(|(l, (a, c, _))| *a == agent && *c == cwd && Self::launch_live(&g, l))
+            .map(|(l, (_, _, t))| (l, *t))
+            .collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1));
+        v.into_iter().map(|(l, _)| l.clone()).collect()
+    }
+
+    /// The launch a session is linked to.
+    pub fn launch_of(&self, session: &SessionId) -> Option<String> {
+        self.lock().launch_of.get(session).cloned()
     }
 
     pub fn attach(&self, launch: &str) -> oneshot::Receiver<TerminalAction> {

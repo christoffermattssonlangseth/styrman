@@ -63,6 +63,13 @@ pub enum Request {
     /// when a phone prompt should be typed into that terminal.
     AttachTerminal {
         launch_id: String,
+        /// The wrapper's agent and folder. Codex may run hooks in a shared background
+        /// server whose environment names another terminal; the daemon then matches
+        /// the hook to the live wrapper in its folder.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent: Option<AgentKind>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<std::path::PathBuf>,
     },
     /// From a terminal wrapper: the agent's own permission menu appeared (`Some`)
     /// or went away (`None`).
@@ -91,6 +98,14 @@ pub enum Request {
     ShareLaunch {
         launch_id: String,
         shared: bool,
+        /// With these, a terminal whose agent has no session yet (Codex creates it
+        /// with the first prompt) gets a placeholder on the phone right away.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent: Option<AgentKind>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<std::path::PathBuf>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_pid: Option<u32>,
     },
 }
 

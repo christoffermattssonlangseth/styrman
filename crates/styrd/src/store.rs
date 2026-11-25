@@ -303,6 +303,15 @@ impl Store {
         Ok(())
     }
 
+    /// Give a placeholder session (see `Daemon::share_launch`) its real native id.
+    pub fn rename_native(&mut self, id: &SessionId, native_id: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sessions SET native_id = ?2 WHERE id = ?1",
+            params![id.as_str(), native_id],
+        )?;
+        Ok(())
+    }
+
     pub fn set_shared(&mut self, id: &SessionId, shared: bool, now: TimestampMs) -> Result<()> {
         self.conn.execute(
             "UPDATE sessions SET shared = ?2, updated_ms = ?3 WHERE id = ?1",

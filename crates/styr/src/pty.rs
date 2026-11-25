@@ -374,9 +374,12 @@ pub fn detect_agy_prompt(screen: &str) -> Option<TerminalPrompt> {
 /// Only an open menu counts: the footer must follow the options.
 pub fn detect_codex_prompt(screen: &str) -> Option<TerminalPrompt> {
     let lines: Vec<&str> = screen.lines().collect();
-    let footer = lines
-        .iter()
-        .rposition(|l| l.trim_start().starts_with("Press enter to confirm"))?;
+    // "Press enter to confirm or esc to cancel" (approvals), "enter confirm · esc
+    // skip" (e.g. "Hooks need review" at startup).
+    let footer = lines.iter().rposition(|l| {
+        let l = l.trim_start();
+        l.starts_with("Press enter to confirm") || l.starts_with("enter confirm")
+    })?;
     // The options sit directly above the footer (blank lines aside).
     let mut end = footer;
     while end > 0 && lines[end - 1].trim().is_empty() {
@@ -410,7 +413,9 @@ pub fn detect_codex_prompt(screen: &str) -> Option<TerminalPrompt> {
             l.starts_with('•') || l.starts_with('›')
         })
         .map_or(first_option.saturating_sub(30), |i| i + 1);
-    let title_at = (block_start..first_option).find(|&i| lines[i].trim().ends_with('?'))?;
+    let title_at = (block_start..first_option)
+        .find(|&i| lines[i].trim().ends_with('?'))
+        .or_else(|| (block_start..first_option).find(|&i| !lines[i].trim().is_empty()))?;
     let detail: Vec<String> = lines[title_at + 1..first_option]
         .iter()
         .map(|l| l.trim().to_owned())
@@ -526,7 +531,7 @@ pub fn run(
                 }
                 if let Some(cmd) = caught {
                     let launch_id = launch_id.clone();
-                    std::thread::spawn(move || share_from_terminal(cmd, &launch_id));
+                    std::thread::spawn(move || share_from_terminal(cmd, &launch_id, pid as u32));
                 }
             }
         });
@@ -612,7 +617,8 @@ pub fn run(
             on_screen.clone(),
         );
         let launch_id = launch_id.to_owned();
-        std::thread::spawn(move || inject_loop(&launch_id, &w, &line, &done, &on_screen));
+        let agent = catch_styr.then_some(styr_core::ids::AgentKind::Codex);
+        std::thread::spawn(move || inject_loop(agent, &launch_id, &w, &line, &done, &on_screen));
     }
 
     // Wait for the agent to exit.
@@ -632,12 +638,15 @@ pub fn run(
 
 /// Tell the daemon about a caught `/styr` and confirm with a terminal notification
 /// (OSC 9), which leaves the agent's screen alone.
-fn share_from_terminal(cmd: styr_core::adapter::StyrCommand, launch_id: &str) {
+fn share_from_terminal(cmd: styr_core::adapter::StyrCommand, launch_id: &str, agent_pid: u32) {
     let shared = cmd == styr_core::adapter::StyrCommand::On;
     let client = Client::new(Paths::resolve().socket).with_timeout(Some(Duration::from_secs(5)));
     let msg = match client.call(&Request::ShareLaunch {
         launch_id: launch_id.to_owned(),
         shared,
+        agent: Some(styr_core::ids::AgentKind::Codex),
+        cwd: std::env::current_dir().ok(),
+        agent_pid: Some(agent_pid),
     }) {
         Ok(Response::LaunchShared { .. }) if shared => "Styrman: this session is now on your phone",
         Ok(Response::LaunchShared { .. }) => "Styrman: stopped sharing this session",
@@ -649,6 +658,7 @@ fn share_from_terminal(cmd: styr_core::adapter::StyrCommand, launch_id: &str) {
 }
 
 fn inject_loop(
+    agent: Option<styr_core::ids::AgentKind>,
     launch_id: &str,
     w: &Mutex<std::fs::File>,
     line: &Mutex<LineState>,
@@ -656,9 +666,12 @@ fn inject_loop(
     on_screen: &Mutex<Option<TerminalPrompt>>,
 ) {
     let client = Client::new(Paths::resolve().socket).with_timeout(None);
+    let cwd = std::env::current_dir().ok();
     while !done.load(Ordering::Relaxed) {
         match client.call(&Request::AttachTerminal {
             launch_id: launch_id.to_owned(),
+            agent,
+            cwd: cwd.clone(),
         }) {
             Ok(Response::TypePrompt { text }) => {
                 // Don't type over a half-written line; wait until it's sent or cleared.
@@ -855,6 +868,16 @@ mod tests {
         assert_eq!(moved.selected, 1, "the › marker follows the arrow keys");
         // The user's own prompt line (also starting with ›) isn't an option or a title.
         assert!(!p.title.contains("Run the shell command"));
+    }
+
+    #[test]
+    fn codex_startup_menus_count_too() {
+        // Shown at startup when hooks are new; a phone prompt must not be typed into it.
+        let s = "› Ask Codex to do anything\n\n  Hooks need review\n  6 hooks are new or changed.\n  Hooks can run outside the sandbox after you trust them.\n\n› 1. Review hooks\n  2. Trust all and continue\n  3. Continue without trusting (hooks won't run)\n\n  enter confirm · esc skip\n";
+        let p = detect_codex_prompt(s).expect("menu");
+        assert_eq!(p.title, "Hooks need review");
+        assert_eq!(p.options, vec!["Review hooks", "Trust all and continue", "Continue without trusting (hooks won't run)"]);
+        assert!(p.detail.contains("6 hooks are new or changed."));
     }
 
     #[test]

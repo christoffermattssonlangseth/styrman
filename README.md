@@ -66,6 +66,9 @@ Phase 1 (Claude Code + iPhone app), phase 2 (Antigravity `agy`) and phase 3 (Cod
 | 6. Push notifications | ✅ |
 | 7. launchd, auth hardening, docs | ✅ |
 | Phase 2: Antigravity (`agy`) adapter | ✅ |
+| Phase 3: Codex CLI adapter | ✅ |
+
+Next: voice (dictate prompts, hear replies, with a different voice per agent), a push relay and TestFlight, a Homebrew tap with prebuilt binaries, and an Android app.
 
 ## Install
 
@@ -75,7 +78,7 @@ You need macOS (Apple Silicon), a Rust toolchain, Xcode with XcodeGen for the ap
 git clone https://github.com/christoffermattssonlangseth/styrman && cd styrman
 cargo install --path crates/styrd && cargo install --path crates/styr   # into ~/.cargo/bin
 
-styr setup          # guided and safe to re-run: background service, Claude plugin, shell alias, pairing
+styr setup          # guided and safe to re-run: background service, Claude/agy/Codex hooks, routing, pairing
 styr doctor         # checks every part; `styr doctor --live` also runs an end-to-end check with Claude Code
 ```
 
@@ -85,11 +88,11 @@ The iPhone app, for now: `cd ios && xcodegen && open Styrman.xcodeproj`, set you
 
 **Claude Code updates.** Styrman records the Claude Code version each session runs. If it's a version Styrman hasn't been checked with, `styr status`, `styr doctor` and the phone tell you. `styr doctor --live` then checks it end to end with one small Haiku call, and marks the version verified if everything works.
 
-### Routing `claude` and `agy` through Styrman
+### Routing `claude`, `agy` and `codex` through Styrman
 
-`styr setup` installs two tiny launchers, `~/.styrman/bin/claude` and `~/.styrman/bin/agy`, and puts that folder on your PATH (it asks first). From then on, typing `claude` or `agy` runs them through Styrman's terminal wrapper. That wrapper is what lets the phone type messages into the session and answer agy's permission menus.
+`styr setup` installs tiny launchers in `~/.styrman/bin` (`claude`, plus `agy` and `codex` when they're installed) and puts that folder on your PATH (it asks first). From then on, typing `claude`, `agy` or `codex` runs them through Styrman's terminal wrapper. That wrapper is what lets the phone type messages into the session and answer agy's and Codex's permission menus.
 
-This uses PATH rather than shell aliases on purpose: cmux's shell integration removes `claude`/`agy` aliases before every prompt and replaces them with its own functions. Its wrappers then look up the next `claude`/`agy` on the PATH, find Styrman's launcher, and both stay in the chain.
+This uses PATH rather than shell aliases on purpose: cmux's shell integration removes aliases before every prompt and puts its own wrappers first on PATH. Its wrappers then look up the next `claude`/`agy`/`codex` on the PATH, find Styrman's launcher, and both stay in the chain. Styrman makes sure cmux's wrapper runs only once, whichever comes first on PATH.
 
 Sessions started some other way still show up on the phone, but read-only (for agy) or with messages going through the hook route (Claude). The phone tells you which.
 
@@ -123,18 +126,19 @@ Without the alias, agy sessions are mirrored read-only. In agy's `auto` mode, ag
 When Codex is installed, `styr setup` adds Styrman's hooks to `~/.codex/hooks.json`. Your own hooks and other tools' hooks in that file are kept. The next time Codex starts, it asks you to review the new hooks: choose **Trust all and continue**. Styrman never trusts hooks on your behalf. (Inside cmux, cmux's wrapper skips that question.)
 
 - **Sharing:** type `/styr` in Codex. Codex rejects slash commands it doesn't know, so `styr codex` catches the line as you type it. Codex never sees it, and you get a terminal notification instead. `/styr off` stops sharing.
+- **Right away:** Codex creates its session only with your first message, so before that the phone shows a placeholder for the terminal. You can send that first message from the phone; the placeholder then becomes the real session, history and all.
 - **Mirroring:** your prompts, Codex's replies and its tool calls, with output.
-- **Approvals:** Codex shows its own menu only after its permission hook returns, so the hook never waits. Instead, the wrapper reads Codex's "Would you like to run the following command?" menu off the screen. The phone gets the same options, and the first answer wins: a tap on the phone, or a key in the terminal.
+- **Approvals:** Codex shows its own menu only after its permission hook returns, so the hook never waits. Instead, the wrapper reads Codex's "Would you like to run the following command?" menu off the screen. The phone gets the same options, and the first answer wins: a tap on the phone, or a key in the terminal. Other Codex menus (such as "Hooks need review") show up the same way, and phone messages wait until they're closed.
 - **Prompts from the phone** are typed into Codex's prompt box.
 
-Codex sessions started without the wrapper are mirrored read-only. Styrman doesn't use `codex app-server`: cmux starts Codex with per-launch hook options, and in that mode Codex runs in-process, where no second client can attach.
+Codex sessions started without the wrapper are mirrored read-only. Outside cmux, Codex may run hooks in its shared background server, whose environment belongs to whichever terminal started it; Styrman then matches the hook to the `styr codex` running in the same folder. Styrman doesn't use `codex app-server`: cmux starts Codex with per-launch hook options, and in that mode Codex runs in-process, where no second client can attach.
 
 ## Using it
 
-In any Claude Code session:
+In any Claude Code, agy or Codex session:
 
 ```
-/styr        share this session with your phone (handled by a hook: no model call)
+/styr        share this session with your phone (no model call)
 /styr off    stop sharing
 ```
 
@@ -151,7 +155,8 @@ On the phone:
   - *Finished* arrives for turns of 30 s or more.
   - Nothing arrives while the app is open.
   - Tapping a notification opens the session.
-  - Notifications say only "Claude · repo" unless you run `styr push details on`.
+  - Notifications say only "Claude · repo" (or agy, Codex) unless you run `styr push details on`.
+- **Agent colours:** Claude is orange, agy blue and Codex green, on the badge, the send button and the composer.
 
 From the Mac:
 

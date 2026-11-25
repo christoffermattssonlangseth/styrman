@@ -65,6 +65,11 @@ fn first_line_title(text: &str) -> String {
     }
 }
 
+/// The stand-in native id of a session shared before its agent created it.
+fn placeholder_native(agent: AgentKind, launch: &str) -> NativeSessionRef {
+    NativeSessionRef::new(agent, format!("launch:{launch}"))
+}
+
 fn always_persisted(kind: &EventKind) -> bool {
     matches!(
         kind,
@@ -165,6 +170,7 @@ impl Daemon {
         let Some(adapter) = self.adapter(hook.agent).cloned() else {
             return Default::default();
         };
+        let hook = self.fix_codex_launch(adapter.as_ref(), hook);
         let decision = match self.process_hook(adapter.as_ref(), &hook).await {
             Ok(d) => d,
             Err(e) => {
@@ -191,6 +197,11 @@ impl Daemon {
         let Some(native) = adapter.native_session(hook) else {
             return Ok(HookDecision::PassThrough);
         };
+        // The first hook from a terminal that had a placeholder adopts it.
+        let adopted = match &hook.launch_id {
+            Some(l) => self.adopt_placeholder(hook.agent, l, &native)?,
+            None => false,
+        };
         let view = self.session_view(&native)?;
         if let Some(v) = &hook.agent_version {
             self.saw_agent_version(hook.agent, v);
@@ -202,6 +213,10 @@ impl Daemon {
             .clone()
             .unwrap_or_else(|| SessionUpdate::for_native(native.clone()));
         let mut events = plan.events;
+        if adopted {
+            // The placeholder already announced the session.
+            events.retain(|e| !matches!(e, EventKind::SessionStarted { .. }));
+        }
         // A `/styr` caught by the terminal wrapper before this session existed.
         let pending = hook.launch_id.as_ref().and_then(|l| {
             self.pending_shares
@@ -701,7 +716,14 @@ impl Daemon {
     /// agent that rejects unknown slash commands itself (Codex). Applies to the
     /// sessions running in that terminal, or to its first one once its hooks arrive.
     /// Returns how many sessions changed now (0: deferred).
-    pub fn share_launch(&self, launch_id: &str, shared: bool) -> Result<usize> {
+    pub fn share_launch(
+        &self,
+        launch_id: &str,
+        shared: bool,
+        agent: Option<AgentKind>,
+        cwd: Option<std::path::PathBuf>,
+        agent_pid: Option<u32>,
+    ) -> Result<usize> {
         let mut n = 0;
         for id in self.terminals.sessions_of(launch_id) {
             let Some(rec) = self.lock().store.session(&id)? else {
@@ -712,6 +734,40 @@ impl Daemon {
                 n += 1;
             }
         }
+        if n == 0
+            && shared
+            && let Some(agent) = agent
+        {
+            // No session yet (Codex creates it with the first prompt): put a
+            // placeholder on the phone now. Prompts sent to it are typed into the
+            // terminal; the first hook from this terminal adopts it.
+            let native = placeholder_native(agent, launch_id);
+            let update = SessionUpdate {
+                cwd: cwd.clone(),
+                agent_pid,
+                launch_id: Some(launch_id.to_owned()),
+                ..SessionUpdate::for_native(native.clone())
+            };
+            let (id, _) = self.ingest(
+                &update,
+                EventSource::Daemon,
+                vec![
+                    EventKind::SessionStarted {
+                        agent,
+                        native,
+                        cwd,
+                        workspace_roots: vec![],
+                        model: None,
+                        title: None,
+                        start: styr_core::event::StartKind::New,
+                    },
+                    EventKind::SharingChanged { shared: true },
+                ],
+            )?;
+            self.terminals.link(&id, launch_id);
+            self.notify_session_changed(&id);
+            return Ok(1);
+        }
         if n == 0 {
             self.pending_shares
                 .lock()
@@ -719,6 +775,72 @@ impl Daemon {
                 .insert(launch_id.to_owned(), shared);
         }
         Ok(n)
+    }
+
+    /// Codex may run hooks in its shared background server, whose environment names
+    /// whichever terminal started it (or none). Link such a hook to the right
+    /// `styr codex` instead: the one its session already runs in, else the newest
+    /// live wrapper in the hook's folder that has no real session yet.
+    fn fix_codex_launch(&self, adapter: &dyn AgentAdapter, mut hook: RawHook) -> RawHook {
+        if hook.agent != AgentKind::Codex {
+            return hook;
+        }
+        let Some(cwd) = hook.payload["cwd"].as_str().map(std::path::PathBuf::from) else {
+            return hook;
+        };
+        if hook
+            .launch_id
+            .as_deref()
+            .is_some_and(|l| self.terminals.wrapper_in(l, AgentKind::Codex, &cwd))
+        {
+            return hook;
+        }
+        let known = adapter
+            .native_session(&hook)
+            .and_then(|n| self.session_by_native(&n).ok().flatten());
+        if let Some(l) = known.as_ref().and_then(|rec| self.terminals.launch_of(&rec.id)) {
+            hook.launch_id = Some(l);
+            return hook;
+        }
+        let free = self
+            .terminals
+            .live_wrappers_in(AgentKind::Codex, &cwd)
+            .into_iter()
+            .find(|l| {
+                self.terminals.sessions_of(l).iter().all(|s| {
+                    self.lock()
+                        .store
+                        .session(s)
+                        .ok()
+                        .flatten()
+                        .is_none_or(|r| r.native.native_id.starts_with("launch:"))
+                })
+            });
+        if let Some(l) = free {
+            tracing::debug!(launch = %l, stale = ?hook.launch_id, "Codex hook matched to its terminal by folder");
+            hook.launch_id = Some(l);
+        }
+        hook
+    }
+
+    /// If `launch` has a placeholder session and `native` doesn't exist yet, turn the
+    /// placeholder into `native`. Returns whether it did.
+    fn adopt_placeholder(
+        &self,
+        agent: AgentKind,
+        launch: &str,
+        native: &NativeSessionRef,
+    ) -> Result<bool> {
+        let mut g = self.lock();
+        let Some(rec) = g.store.session_by_native(&placeholder_native(agent, launch))? else {
+            return Ok(false);
+        };
+        if g.store.session_by_native(native)?.is_some() {
+            return Ok(false);
+        }
+        g.store.rename_native(&rec.id, &native.native_id)?;
+        tracing::info!(session = %rec.id, native = %native.native_id, "placeholder session adopted");
+        Ok(true)
     }
 
     pub fn set_api_urls(&self, urls: Vec<String>) {
@@ -848,8 +970,14 @@ impl Daemon {
                     host: Self::host_name(),
                 })
             }
-            Request::ShareLaunch { launch_id, shared } => self
-                .share_launch(&launch_id, shared)
+            Request::ShareLaunch {
+                launch_id,
+                shared,
+                agent,
+                cwd,
+                agent_pid,
+            } => self
+                .share_launch(&launch_id, shared, agent, cwd, agent_pid)
                 .map(|n| Response::LaunchShared { sessions: n }),
             Request::SendPrompt { session, text } => self
                 .send_prompt(&session, &text, "cli".into())
@@ -882,7 +1010,16 @@ impl Daemon {
                         .collect(),
                 })
             }
-            Request::AttachTerminal { launch_id } => match self.attach_terminal(&launch_id).await {
+            Request::AttachTerminal {
+                launch_id,
+                agent,
+                cwd,
+            } => match {
+                if let (Some(agent), Some(cwd)) = (agent, &cwd) {
+                    self.terminals.note_wrapper(&launch_id, agent, cwd);
+                }
+                self.attach_terminal(&launch_id).await
+            } {
                 Some(crate::terminals::TerminalAction::Type(text)) => {
                     Ok(Response::TypePrompt { text })
                 }
