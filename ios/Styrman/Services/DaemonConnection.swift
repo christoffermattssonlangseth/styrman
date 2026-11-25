@@ -157,6 +157,9 @@ final class DaemonConnection {
             timelines[e.session]?.apply([e])
         case .promptQueued(let sid, let text, _):
             timelines[sid]?.markQueued(text)
+        case .promptDelivered(let sid, let text):
+            timelines[sid]?.markDelivered(text)
+            if lastSentPrompt?.1 == text { lastSentPrompt = nil }
         case .error(let message):
             lastError = message
             // A refused prompt shouldn't sit in the timeline as "queued" forever.

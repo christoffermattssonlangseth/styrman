@@ -604,7 +604,16 @@ impl Connection {
                 .daemon
                 .send_prompt(&session, &text, self.device.as_str().into())
             {
-                Ok(crate::prompts::Delivery::Delivered) => Ok(()),
+                Ok(crate::prompts::Delivery::Delivered) => {
+                    send(
+                        tx,
+                        &ServerMsg::PromptDelivered {
+                            session,
+                            text: text.trim().to_owned(),
+                        },
+                    )
+                    .await
+                }
                 Ok(crate::prompts::Delivery::Queued(position)) => {
                     send(
                         tx,

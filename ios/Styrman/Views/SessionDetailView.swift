@@ -42,6 +42,12 @@ struct SessionDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             if let summary {
+                ToolbarItem(placement: .principal) {
+                    HStack(spacing: 6) {
+                        AgentBadge(agent: summary.agent)
+                        Text(summary.repoName).font(.headline).lineLimit(1)
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) { StatusChip(status: summary.status) }
             }
         }
@@ -64,7 +70,8 @@ struct SessionDetailView: View {
                     .frame(maxWidth: .infinity).padding(10).background(.bar)
             } else if let summary {
                 if summary.acceptsPrompts {
-                    Composer(sessionId: sessionId, status: summary.status, agent: summary.agent.displayName)
+                    Composer(sessionId: sessionId, status: summary.status, agent: summary.agent.displayName,
+                             agentColor: Theme.color(for: summary.agent))
                 } else {
                     Label {
                         Text("Read-only: this \(summary.agent.displayName) session wasn't started through Styrman. Run `styr setup` on the Mac, then start it again in a new terminal tab to approve and send messages from here.")
@@ -316,6 +323,7 @@ struct Composer: View {
     let sessionId: String
     let status: SessionStatus
     let agent: String
+    let agentColor: Color
     @State private var text = ""
     @FocusState private var focused: Bool
 
@@ -344,6 +352,7 @@ struct Composer: View {
                 } label: {
                     Image(systemName: "arrow.up.circle.fill").font(.system(size: 34))
                 }
+                .tint(agentColor)
                 .disabled(!canSend)
                 .accessibilityLabel("Send")
             }
@@ -358,6 +367,13 @@ struct PendingPromptRow: View {
     let working: Bool
     let agent: String
 
+    private var pendingLabel: String {
+        if prompt.delivered {
+            return working ? "Delivered; \(agent) picks it up after the current step" : "Delivered"
+        }
+        return prompt.queued || working ? "Queued, sent when \(agent) finishes" : "Sending…"
+    }
+
     var body: some View {
         HStack {
             Spacer(minLength: 40)
@@ -365,8 +381,7 @@ struct PendingPromptRow: View {
                 Text(prompt.text)
                     .padding(.horizontal, 14).padding(.vertical, 10)
                     .background(Theme.accent.opacity(0.15), in: RoundedRectangle(cornerRadius: 16))
-                Label(prompt.queued || working ? "Queued, sent when \(agent) finishes" : "Sending…",
-                      systemImage: prompt.queued || working ? "clock" : "arrow.up.circle")
+                Label(pendingLabel, systemImage: prompt.delivered ? "checkmark.circle" : prompt.queued || working ? "clock" : "arrow.up.circle")
                     .font(.caption2).foregroundStyle(.secondary)
             }
         }

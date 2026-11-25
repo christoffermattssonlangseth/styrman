@@ -64,13 +64,39 @@ struct StatusChip: View {
     }
 }
 
+extension Theme {
+    /// One color per agent, used for its badge and controls. Light/dark variants are
+    /// tuned so the badge text stays readable (4.5:1) on its own tint.
+    static func color(for agent: AgentKind) -> Color {
+        func dyn(_ light: UInt32, _ dark: UInt32) -> Color {
+            Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: dark) : UIColor(hex: light) })
+        }
+        switch agent {
+        case .claude: return dyn(0xB4532A, 0xF0936B)       // warm orange
+        case .antigravity: return dyn(0x1F5FD1, 0x7AA7FF)  // blue
+        case .codex: return dyn(0x0F7B5A, 0x4CC79A)        // green
+        case .pty, .unknown: return dyn(0x5E6168, 0xA6A9B0) // grey
+        }
+    }
+}
+
+extension UIColor {
+    convenience init(hex: UInt32) {
+        self.init(red: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255,
+                  blue: CGFloat(hex & 0xFF) / 255, alpha: 1)
+    }
+}
+
 struct AgentBadge: View {
     let agent: AgentKind
     var body: some View {
+        let c = Theme.color(for: agent)
         Text(agent.displayName)
-            .font(.caption2.weight(.semibold))
-            .padding(.horizontal, 6).padding(.vertical, 3)
-            .background(.quaternary, in: RoundedRectangle(cornerRadius: 5))
-            .foregroundStyle(.secondary)
+            .font(.caption2.weight(.bold))
+            .padding(.horizontal, 7).padding(.vertical, 3)
+            .background(c.opacity(0.16), in: RoundedRectangle(cornerRadius: 5))
+            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(c.opacity(0.35)))
+            .foregroundStyle(c)
+            .accessibilityLabel("Agent: \(agent.displayName)")
     }
 }

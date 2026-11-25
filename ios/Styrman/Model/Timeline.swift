@@ -74,6 +74,13 @@ final class SessionTimeline {
         let id = UUID()
         let text: String
         var queued = false
+        /// The Mac handed it to the agent (typed into its terminal); the agent
+        /// submits it when it gets to it.
+        var delivered = false
+    }
+
+    func markDelivered(_ text: String) {
+        if let i = pending.firstIndex(where: { $0.text == text && !$0.delivered }) { pending[i].delivered = true }
     }
 
     func addPending(_ text: String) { pending.append(PendingPrompt(text: text)) }
@@ -121,7 +128,9 @@ final class SessionTimeline {
         case .sharingChanged(let shared):
             append(.divider(id: key, text: shared ? "Shared with this phone" : "Sharing stopped", at: e.at))
         case .userMessage(let text, let fromPhone):
-            if fromPhone { dropPending(text) }
+            // Match by text too: if the Mac lost track (restart), the prompt we
+            // typed comes back looking like terminal input.
+            dropPending(text)
             append(.user(id: key, text: text, fromPhone: fromPhone, at: e.at))
         case .assistantMessage(let id, let text, let delta):
             if let i = messageIndex[id], case .assistant(let iid, let old, let at) = items[i] {

@@ -76,6 +76,12 @@ pub enum ServerMsg {
     Event {
         event: Event,
     },
+    /// A prompt from the phone was handed to the agent (typed into its terminal,
+    /// or given to its waiting hook); the agent may still queue it while busy.
+    PromptDelivered {
+        session: SessionId,
+        text: String,
+    },
     /// A prompt from the phone is waiting until the agent next stops.
     PromptQueued {
         session: SessionId,

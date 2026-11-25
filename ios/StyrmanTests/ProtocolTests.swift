@@ -124,6 +124,19 @@ private func event(_ seq: UInt64, _ kind: String) -> String {
         #expect((s, t, p) == ("S", "hi", 2))
     }
 
+    @Test @MainActor func pendingClearsEvenIfTheMacLostTrack() throws {
+        let t = SessionTimeline(sessionId: "S")
+        t.addPending("next is codex")
+        t.markDelivered("next is codex")
+        #expect(t.pending.first?.delivered == true)
+        // After a daemon restart the typed prompt comes back as terminal input.
+        t.apply([try decode(Event.self, event(1, #"{"type":"user_message","text":"next is codex","origin":{"from":"terminal"}}"#))])
+        #expect(t.pending.isEmpty)
+        let d = try decode(ServerMsg.self, #"{"type":"prompt_delivered","session":"S","text":"hi"}"#)
+        guard case .promptDelivered(let s, let x) = d else { Issue.record("wrong"); return }
+        #expect((s, x) == ("S", "hi"))
+    }
+
     @Test @MainActor func pendingClearsWhenDelivered() throws {
         let t = SessionTimeline(sessionId: "S")
         t.addPending("hi")

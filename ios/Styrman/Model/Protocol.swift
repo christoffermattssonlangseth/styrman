@@ -338,6 +338,7 @@ enum ServerMsg: Decodable, Sendable {
     case subscribed(session: String, lastSeq: UInt64)
     case event(Event)
     case promptQueued(session: String, text: String, position: Int)
+    case promptDelivered(session: String, text: String)
     case error(String)
     case unknown(type: String)
 
@@ -363,6 +364,9 @@ enum ServerMsg: Decodable, Sendable {
         case "events": self = .events(session: try c.decode(String.self, forKey: .session), events: try c.decode([Event].self, forKey: .events))
         case "subscribed": self = .subscribed(session: try c.decode(String.self, forKey: .session), lastSeq: try c.decode(UInt64.self, forKey: .lastSeq))
         case "event": self = .event(try c.decode(Event.self, forKey: .event))
+        case "prompt_delivered":
+            self = .promptDelivered(session: try c.decode(String.self, forKey: .session),
+                                    text: try c.decode(String.self, forKey: .text))
         case "prompt_queued":
             self = .promptQueued(session: try c.decode(String.self, forKey: .session),
                                  text: try c.decode(String.self, forKey: .text),
