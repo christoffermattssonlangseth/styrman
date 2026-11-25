@@ -26,7 +26,9 @@ struct SessionDetailView: View {
                         TimelineRow(item: item, cwd: summary?.cwd, sessionId: sessionId, agent: agent).id(item.id)
                     }
                     ForEach(timeline.pending) { p in
-                        PendingPromptRow(prompt: p, working: summary?.status == .working, agent: summary?.agent.displayName ?? "the agent")
+                        PendingPromptRow(prompt: p, working: summary?.status == .working, agent: summary?.agent.displayName ?? "the agent") {
+                            connection.retry(session: sessionId, text: p.text)
+                        }
                     }
                     if timeline.isLive && !timeline.hasContent && timeline.pending.isEmpty {
                         VStack(spacing: 6) {
@@ -346,8 +348,15 @@ struct PermissionCard: View {
     @ViewBuilder private var buttons: some View {
         ForEach(item.options) { opt in
             Button {
-                if connection.resolvePermission(session: sessionId, request: item.request, option: opt.id) {
+                if connection.resolvePermission(session: sessionId, request: item.request, option: opt.id,
+                                                failed: { sent = nil }) {
                     sent = opt.id
+                    // The card closes when the Mac reports the answer. If it hasn't after
+                    // 10 s, unlock the buttons so you can try again.
+                    Task {
+                        try? await Task.sleep(for: .seconds(10))
+                        if item.isOpen, sent == opt.id { sent = nil }
+                    }
                 }
             } label: {
                 HStack(spacing: 6) {
@@ -521,8 +530,10 @@ struct PendingPromptRow: View {
     let prompt: SessionTimeline.PendingPrompt
     let working: Bool
     let agent: String
+    var retry: () -> Void = {}
 
     private var pendingLabel: String {
+        if prompt.failed { return "Not sent · Tap to retry" }
         if prompt.delivered {
             return working ? "Delivered; \(agent) picks it up after the current step" : "Delivered"
         }
@@ -535,9 +546,12 @@ struct PendingPromptRow: View {
             VStack(alignment: .trailing, spacing: 4) {
                 Text(prompt.text)
                     .padding(.horizontal, 14).padding(.vertical, 10)
-                    .background(Theme.accent.opacity(0.15), in: RoundedRectangle(cornerRadius: 16))
-                Label(pendingLabel, systemImage: prompt.delivered ? "checkmark.circle" : prompt.queued || working ? "clock" : "arrow.up.circle")
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .background(prompt.failed ? Color.red.opacity(0.15) : Theme.accent.opacity(0.15), in: RoundedRectangle(cornerRadius: 16))
+                    .onTapGesture { if prompt.failed { retry() } }
+                Label(pendingLabel, systemImage: prompt.failed ? "exclamationmark.arrow.circlepath"
+                      : prompt.delivered ? "checkmark.circle" : prompt.queued || working ? "clock" : "arrow.up.circle")
+                    .font(.caption2).foregroundStyle(prompt.failed ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                    .onTapGesture { if prompt.failed { retry() } }
             }
         }
     }

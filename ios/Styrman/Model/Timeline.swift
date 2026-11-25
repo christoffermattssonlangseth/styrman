@@ -77,6 +77,17 @@ final class SessionTimeline {
         /// The Mac handed it to the agent (typed into its terminal); the agent
         /// submits it when it gets to it.
         var delivered = false
+        /// It didn't leave the phone, or the Mac never confirmed it: offer a retry.
+        var failed = false
+    }
+
+    func markFailed(_ text: String) {
+        if let i = pending.firstIndex(where: { $0.text == text && !$0.queued && !$0.delivered }) { pending[i].failed = true }
+    }
+
+    /// Still waiting for the Mac's confirmation (neither queued, delivered nor failed).
+    func isUnconfirmed(_ text: String) -> Bool {
+        pending.contains { $0.text == text && !$0.queued && !$0.delivered && !$0.failed }
     }
 
     func markDelivered(_ text: String) {

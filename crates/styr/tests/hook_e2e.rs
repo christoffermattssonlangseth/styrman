@@ -201,7 +201,9 @@ fn background_stop_hook_exits_2_with_the_phone_prompt() {
     // The plugin's second Stop hook: `styr hook claude StopWait`, async + asyncRewake.
     let (_, stop) = s.stop("Done.");
     let child = r.spawn("StopWait", &stop);
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    // No sleep-and-hope: whether the hook is already waiting (delivered now) or not
+    // yet (queued, and taken the moment it starts waiting), Claude must get the prompt.
+    // The "already waiting" path is unit-tested in styrd's prompts.rs.
     let sid = d.session_by_native("sess-3").unwrap().id;
     let reply = d
         .client()
@@ -210,9 +212,9 @@ fn background_stop_hook_exits_2_with_the_phone_prompt() {
             text: "add a test for it".into(),
         })
         .unwrap();
-    assert_eq!(
-        reply,
-        styr_core::ipc::Response::PromptAccepted { delivered: true }
+    assert!(
+        matches!(reply, styr_core::ipc::Response::PromptAccepted { .. }),
+        "{reply:?}"
     );
     let out = child.wait_with_output().unwrap();
     assert_eq!(out.status.code(), Some(2), "exit 2 wakes Claude");

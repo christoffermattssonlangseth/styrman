@@ -754,14 +754,32 @@ pub fn run(
     Ok(code)
 }
 
-/// Codex shows its input box with a "? for shortcuts" hint below it, and no menu.
+/// Codex is at its input box: no menu open, and the box or its footer is on screen.
+/// The footer changes with the width (a narrow pane drops "? for shortcuts" and shows
+/// "← for agents  ⚠ 3 warnings"), so any of these marks counts.
 pub fn codex_ready(screen: &str) -> bool {
     detect_codex_prompt(screen).is_none()
-        && screen
-            .lines()
-            .rev()
-            .take(8)
-            .any(|l| l.contains("for shortcuts"))
+        && screen.lines().rev().take(12).any(|l| {
+            let l = l.trim_start();
+            l.contains("for shortcuts")
+                || l.contains("for agents")
+                || l.starts_with("› Ask Codex")
+                || l.contains("Ask Codex to do anything")
+        })
+}
+
+#[cfg(test)]
+mod codex_ready_tests {
+    use super::codex_ready;
+
+    #[test]
+    fn codex_is_ready_in_a_narrow_pane_too() {
+        // A real 42-column cmux pane: the footer has no "? for shortcuts".
+        let s = "  >_ OpenAI Codex (v0.172.0)\n\n\n\n\n› Ask Codex to do anything\n \n  GPT-6.2-Sol default · ~/work/styrman\n  ← for agents  ⚠ 3 warnings · f2 to view\n";
+        assert!(codex_ready(s));
+        // Even if only the footer is left on screen.
+        assert!(codex_ready("\n  ← for agents  ⚠ 3 warnings · f2 to view\n"));
+    }
 }
 
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
@@ -830,20 +848,30 @@ fn inject_loop(
                 // Don't type over a half-written line; wait until it's sent or cleared.
                 let waiting_since = std::time::Instant::now();
                 let mut dumped = false;
-                // Codex: only into its input box, never into a question on screen
-                // (e.g. "trust this folder?" right after starting).
-                while (line.lock().unwrap_or_else(|p| p.into_inner()).dirty()
-                    || (codex
-                        && !codex_ready(
-                            &screen
-                                .lock()
-                                .unwrap_or_else(|p| p.into_inner())
-                                .screen()
-                                .contents(),
-                        )))
-                    && !done.load(Ordering::Relaxed)
-                {
-                    if codex && !dumped && waiting_since.elapsed() > Duration::from_secs(5) {
+                // Wait until it's safe to type:
+                // - never over a half-typed line (the user is typing);
+                // - Codex: never into a menu or question ("trust this folder?"), and
+                //   preferably only once its input box is recognised. If no menu is
+                //   detected but the box still isn't recognised after 20 s (a screen
+                //   layout we don't know), type anyway: holding the message forever is
+                //   worse than typing into Codex's input.
+                loop {
+                    if done.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let typing = line.lock().unwrap_or_else(|p| p.into_inner()).dirty();
+                    let contents = screen
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .screen()
+                        .contents();
+                    let menu_open = codex && detect_codex_prompt(&contents).is_some();
+                    let ready = !codex || codex_ready(&contents);
+                    let waited = waiting_since.elapsed();
+                    if !typing && !menu_open && (ready || waited > Duration::from_secs(20)) {
+                        break;
+                    }
+                    if codex && !dumped && waited > Duration::from_secs(5) && !typing {
                         dumped = true;
                         let s = screen.lock().unwrap_or_else(|p| p.into_inner());
                         let (rows, cols) = s.screen().size();

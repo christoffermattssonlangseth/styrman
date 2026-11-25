@@ -7,6 +7,7 @@
 
 use std::io::{Read, Write};
 use std::os::fd::{FromRawFd, OwnedFd};
+use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use styr_core::ids::AgentKind;
@@ -185,8 +186,11 @@ fn styr_codex_catches_styr_and_types_phone_messages_in_a_real_terminal() {
         .stdin(stdio())
         .stdout(stdio())
         .stderr(stdio())
+        // Its own process group, so cleanup also stops the fake Codex underneath.
+        .process_group(0)
         .spawn()
         .expect("styr codex");
+    let _cleanup = KillGroup(child.id() as i32);
     drop(slave);
     let mut pty = Pty {
         master,
@@ -283,4 +287,14 @@ fn styr_codex_catches_styr_and_types_phone_messages_in_a_real_terminal() {
 
     let _ = child.kill();
     let _ = child.wait();
+}
+
+/// Kills the whole process group on drop (also when an assertion fails).
+struct KillGroup(i32);
+
+impl Drop for KillGroup {
+    fn drop(&mut self) {
+        // SAFETY: signalling our own child's process group.
+        unsafe { libc::kill(-self.0, libc::SIGKILL) };
+    }
 }

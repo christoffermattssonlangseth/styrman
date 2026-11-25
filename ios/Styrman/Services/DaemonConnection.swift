@@ -153,9 +153,16 @@ final class DaemonConnection {
         return greeted
     }
 
-    private func send(_ msg: ClientMsg) {
-        guard let task, let data = try? JSONEncoder().encode(msg), let text = String(data: data, encoding: .utf8) else { return }
-        task.send(.string(text)) { _ in }
+    /// Send a message; `failed` runs (on the main actor) if it didn't leave the phone.
+    private func send(_ msg: ClientMsg, failed: (@MainActor () -> Void)? = nil) {
+        guard let task, let data = try? JSONEncoder().encode(msg), let text = String(data: data, encoding: .utf8) else {
+            failed?()
+            return
+        }
+        task.send(.string(text)) { error in
+            guard error != nil, let failed else { return }
+            Task { @MainActor in failed() }
+        }
     }
 
     private func handle(_ msg: ServerMsg) {
@@ -262,18 +269,40 @@ final class DaemonConnection {
     func sendPrompt(session: String, text: String) -> Bool {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard state == .connected, !text.isEmpty else { return false }
-        timeline(for: session).addPending(text)
+        let tl = timeline(for: session)
+        tl.addPending(text)
         lastSentPrompt = (session, text, Date())
-        send(.sendPrompt(session: session, text: text))
+        send(.sendPrompt(session: session, text: text)) { [weak self] in
+            tl.markFailed(text)
+            self?.lastError = "Not sent: the connection to \(self?.host ?? "the Mac") dropped. Tap the message to retry."
+        }
+        // The Mac confirms every prompt (queued or delivered). No answer → not sent.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(15))
+            if tl.isUnconfirmed(text) {
+                tl.markFailed(text)
+                self?.lastError = "The Mac didn't confirm your message. Tap it to retry."
+            }
+        }
         return true
+    }
+
+    /// Send a message that failed again.
+    func retry(session: String, text: String) {
+        timeline(for: session).dropPending(text)
+        _ = sendPrompt(session: session, text: text)
     }
 
     /// Answer a permission request. The card closes when the daemon's
     /// `permission_resolved` event arrives; returns false if not connected.
     @discardableResult
-    func resolvePermission(session: String, request: String, option: String) -> Bool {
+    func resolvePermission(session: String, request: String, option: String,
+                           failed: @escaping @MainActor () -> Void = {}) -> Bool {
         guard state == .connected else { return false }
-        send(.resolvePermission(session: session, request: request, option: option))
+        send(.resolvePermission(session: session, request: request, option: option)) { [weak self] in
+            self?.lastError = "Your answer didn't reach the Mac. Try again, or answer in the terminal."
+            failed()
+        }
         return true
     }
 }
