@@ -76,6 +76,7 @@ pub struct SessionRecord {
     pub updated_ms: TimestampMs,
     pub last_seq: u64,
     pub agent_pid: Option<u32>,
+    pub launch_id: Option<String>,
 }
 
 pub struct Store {
@@ -134,6 +135,13 @@ impl Store {
         if !has_pid {
             conn.execute_batch("ALTER TABLE sessions ADD COLUMN agent_pid INTEGER;")?;
         }
+        // v3: the `styr <agent>` wrapper a session runs in (survives daemon restarts).
+        let has_launch: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'launch_id'")?
+            .exists([])?;
+        if !has_launch {
+            conn.execute_batch("ALTER TABLE sessions ADD COLUMN launch_id TEXT;")?;
+        }
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(Self { conn })
     }
@@ -157,6 +165,7 @@ impl Store {
             updated_ms: r.get("updated_ms")?,
             last_seq: r.get::<_, i64>("last_seq")? as u64,
             agent_pid: r.get::<_, Option<i64>>("agent_pid")?.map(|p| p as u32),
+            launch_id: r.get("launch_id")?,
         })
     }
 
@@ -219,7 +228,8 @@ impl Store {
                         model = COALESCE(?4, model),
                         title = COALESCE(?5, title),
                         updated_ms = ?6,
-                        agent_pid = COALESCE(?7, agent_pid)
+                        agent_pid = COALESCE(?7, agent_pid),
+                        launch_id = COALESCE(?8, launch_id)
                      WHERE id = ?1",
                     params![
                         id,
@@ -228,7 +238,8 @@ impl Store {
                         update.model,
                         update.title,
                         now,
-                        update.agent_pid.map(|p| p as i64)
+                        update.agent_pid.map(|p| p as i64),
+                        update.launch_id
                     ],
                 )?;
                 id
@@ -236,8 +247,8 @@ impl Store {
             None => {
                 let id = SessionId::generate().0;
                 tx.execute(
-                    "INSERT INTO sessions (id, agent, native_id, cwd, transcript_path, model, title, created_ms, updated_ms, agent_pid)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9)",
+                    "INSERT INTO sessions (id, agent, native_id, cwd, transcript_path, model, title, created_ms, updated_ms, agent_pid, launch_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9, ?10)",
                     params![
                         id,
                         native.agent.as_str(),
@@ -247,7 +258,8 @@ impl Store {
                         update.model,
                         update.title,
                         now,
-                        update.agent_pid.map(|p| p as i64)
+                        update.agent_pid.map(|p| p as i64),
+                        update.launch_id
                     ],
                 )?;
                 id

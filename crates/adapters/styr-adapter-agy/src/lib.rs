@@ -65,6 +65,23 @@ fn transcript_path(p: &Value) -> Option<PathBuf> {
     alt.exists().then_some(alt)
 }
 
+/// The model's last reply in a transcript: (step index, text).
+pub fn last_reply_step(records: &[Value]) -> Option<(i64, String)> {
+    records
+        .iter()
+        .rev()
+        .find(|r| {
+            r["type"] == "PLANNER_RESPONSE"
+                && r["content"].as_str().is_some_and(|c| !c.trim().is_empty())
+        })
+        .map(|r| {
+            (
+                r["step_index"].as_i64().unwrap_or(-1),
+                r["content"].as_str().unwrap_or("").trim().to_owned(),
+            )
+        })
+}
+
 /// The model's last reply text in a transcript.
 pub fn last_reply(records: &[Value]) -> Option<String> {
     records
@@ -197,6 +214,7 @@ impl AgentAdapter for AntigravityAdapter {
                 model: s(p, "modelName"),
                 title: None,
                 agent_pid: hook.agent_pid,
+                launch_id: hook.launch_id.clone(),
             }),
             ..Default::default()
         };
@@ -290,16 +308,18 @@ impl AgentAdapter for AntigravityAdapter {
                 } else {
                     transcript_path(p)
                         .map(|t| read_transcript(&t))
-                        .and_then(|r| last_reply(&r))
+                        .and_then(|r| last_reply_step(&r))
                 };
-                if let Some(text) = &last {
-                    let id = format!("{}:{}", view.native.native_id, p["executionNum"]);
+                if let Some((step, text)) = &last {
+                    // executionNum stays 0 across turns; the transcript step is unique.
+                    let id = format!("{}:step{step}", view.native.native_id);
                     ev.push(EventKind::AssistantMessage {
                         message: MessageId(id),
                         text: text.clone(),
                         mode: TextMode::Final,
                     });
                 }
+                let last = last.map(|(_, text)| text);
                 if let Some(e) = &error {
                     ev.push(EventKind::Error {
                         message: e.clone(),

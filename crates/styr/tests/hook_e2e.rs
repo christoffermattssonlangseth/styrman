@@ -228,3 +228,65 @@ fn background_stop_hook_exits_2_with_the_phone_prompt() {
         (0, "", "")
     );
 }
+
+#[test]
+fn wrapper_links_survive_a_daemon_restart() {
+    use styr_core::ipc::{Client, Request, Response};
+    let mut d = TestDaemon::start();
+    let hook = |event: &str, extra: serde_json::Value| {
+        let mut payload = json!({"conversationId": "agy-1", "cwd": "/work/repo"});
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        Request::Hook {
+            hook: styr_core::adapter::RawHook {
+                agent: AgentKind::Antigravity,
+                event: event.into(),
+                payload,
+                launched_by_styr: true,
+                agent_pid: None,
+                launch_id: Some("L1".into()),
+                agent_version: None,
+            },
+        }
+    };
+    d.client().call(&hook("SessionStart", json!({}))).unwrap();
+    d.client()
+        .call(&hook(
+            "PreInvocation",
+            json!({"invocationNum": 0, "lastUserInput": "/styr"}),
+        ))
+        .unwrap();
+    d.restart();
+    // The wrapper reconnects (long-poll in the background); no agy hook fires.
+    let sock = d.paths.socket.clone();
+    std::thread::spawn(move || {
+        Client::new(sock)
+            .with_timeout(None)
+            .call(&Request::AttachTerminal {
+                launch_id: "L1".into(),
+            })
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let s = d.session_by_native("agy-1").unwrap();
+        if s.in_terminal_wrapper && s.accepts_prompts {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "link lost across restart: {s:?}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let Response::Sessions { .. } = d
+        .client()
+        .call(&Request::ListSessions {
+            include_unshared: false,
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+}

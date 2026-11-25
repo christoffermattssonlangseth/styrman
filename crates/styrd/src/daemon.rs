@@ -81,6 +81,7 @@ impl Daemon {
             trackers: HashMap::new(),
         };
         let now = now_ms();
+        let mut relink = Vec::new();
         for rec in inner.store.sessions()? {
             let kinds = inner.store.event_kinds(&rec.id)?;
             let mut tracker = StatusTracker::replay(&kinds);
@@ -96,10 +97,15 @@ impl Daemon {
                     .store
                     .append(&rec.id, EventSource::Daemon, kind, now)?;
             }
+            if let Some(launch) = &rec.launch_id
+                && tracker.status() != styr_core::SessionStatus::Done
+            {
+                relink.push((rec.id.clone(), launch.clone()));
+            }
             inner.trackers.insert(rec.id.clone(), tracker);
         }
         let (bus, _) = broadcast::channel(1024);
-        Ok(Arc::new(Self {
+        let daemon = Arc::new(Self {
             inner: Mutex::new(inner),
             bus,
             auth: crate::auth::Auth::default(),
@@ -113,7 +119,11 @@ impl Daemon {
             pusher: Default::default(),
             data_dir: Mutex::new(None),
             live: Mutex::new(HashMap::new()),
-        }))
+        });
+        for (session, launch) in relink {
+            daemon.terminals.link(&session, &launch);
+        }
+        Ok(daemon)
     }
 
     pub fn adapter(&self, agent: AgentKind) -> Option<&Arc<dyn AgentAdapter>> {
@@ -430,6 +440,10 @@ impl Daemon {
             g.store.session(id)?.map(|r| Self::summary_of(&g, r))
         };
         Ok(s.map(|s| self.with_capabilities(s)))
+    }
+
+    pub fn notify_session_changed(&self, id: &SessionId) {
+        let _ = self.bus.send(BusMsg::SessionChanged(id.clone()));
     }
 
     /// Delete a session and its history; phones drop it from their list.

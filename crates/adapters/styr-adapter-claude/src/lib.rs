@@ -187,6 +187,7 @@ impl AgentAdapter for ClaudeAdapter {
                 model: s(p, "model"),
                 title: s(p, "session_title"),
                 agent_pid: hook.agent_pid,
+                launch_id: hook.launch_id.clone(),
             }),
             ..Default::default()
         };

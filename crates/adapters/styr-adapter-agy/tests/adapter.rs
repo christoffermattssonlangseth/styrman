@@ -186,3 +186,42 @@ fn transcripts_are_read_defensively() {
     );
     assert_eq!(step_output(&r, 99), None);
 }
+
+#[test]
+fn replies_in_consecutive_turns_get_their_own_ids() {
+    // agy's Stop.executionNum stays 0 across turns; ids must come from the transcript.
+    let a = AntigravityAdapter;
+    let d = tempfile::tempdir().unwrap();
+    let t = d.path().join("transcript.jsonl");
+    let h = |tp: &std::path::Path| RawHook {
+        agent: AgentKind::Antigravity,
+        event: "Stop".into(),
+        payload: json!({"conversationId": "c", "transcriptPath": tp, "executionNum": 0, "terminationReason": "NO_TOOL_CALL", "error": ""}),
+        launched_by_styr: true,
+        agent_pid: None,
+        launch_id: None,
+        agent_version: None,
+    };
+    let id_of = |plan: HookPlan| {
+        plan.events
+            .into_iter()
+            .find_map(|e| match e {
+                EventKind::AssistantMessage { message, .. } => Some(message),
+                _ => None,
+            })
+            .unwrap()
+    };
+    std::fs::write(
+        &t,
+        "{\"step_index\":1,\"type\":\"PLANNER_RESPONSE\",\"content\":\"Hello!\"}\n",
+    )
+    .unwrap();
+    let first = id_of(a.on_hook(&h(&t), &view(&h(&t))).unwrap());
+    std::fs::write(
+        &t,
+        "{\"step_index\":1,\"type\":\"PLANNER_RESPONSE\",\"content\":\"Hello!\"}\n{\"step_index\":5,\"type\":\"PLANNER_RESPONSE\",\"content\":\"This repo is Styrman.\"}\n",
+    )
+    .unwrap();
+    let second = id_of(a.on_hook(&h(&t), &view(&h(&t))).unwrap());
+    assert_ne!(first, second);
+}

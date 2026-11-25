@@ -174,6 +174,9 @@ pub struct SessionUpdate {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_pid: Option<u32>,
+    /// The `styr <agent>` terminal wrapper the session runs in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_id: Option<String>,
 }
 
 impl SessionUpdate {

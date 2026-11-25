@@ -226,8 +226,21 @@ impl Daemon {
 
     /// Long-poll from a wrapper: resolves with the next thing to do in its terminal.
     pub async fn attach_terminal(self: &Arc<Self>, launch: &str) -> Option<TerminalAction> {
+        let was_live: Vec<(SessionId, bool)> = self
+            .terminals
+            .sessions_of(launch)
+            .into_iter()
+            .map(|s| {
+                let live = self.terminals.is_live(&s);
+                (s, live)
+            })
+            .collect();
         let rx = self.terminals.attach(launch);
-        for s in self.terminals.sessions_of(launch) {
+        for (s, live) in was_live {
+            if !live {
+                // The phone shows whether a session can take prompts: refresh it.
+                self.notify_session_changed(&s);
+            }
             self.pump_terminal(&s);
         }
         rx.await.ok()
