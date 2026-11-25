@@ -18,6 +18,7 @@ fn fixture(name: &str) -> Vec<RawHook> {
                 event: v["event"].as_str().unwrap().into(),
                 payload: v["payload"].clone(),
                 launched_by_styr: false,
+                agent_pid: None,
             }
         })
         .collect()
@@ -256,6 +257,7 @@ fn malformed_payloads_are_rejected_not_panicking() {
         event: "PreToolUse".into(),
         payload: json!("nope"),
         launched_by_styr: false,
+        agent_pid: None,
     };
     assert_eq!(a.native_session(&h), None);
     let v = SessionView {
@@ -283,6 +285,7 @@ fn rewake_turns_are_not_user_messages_and_phone_prompts_exit_2() {
         event: "UserPromptSubmit".into(),
         payload: json!({"session_id": "x", "prompt": internal}),
         launched_by_styr: false,
+        agent_pid: None,
     };
     let v = SessionView {
         id: "S".into(),

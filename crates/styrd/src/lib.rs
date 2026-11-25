@@ -96,12 +96,28 @@ pub async fn run_with(
         Err(e) => tracing::warn!("push notifications off: {e:#}"),
     }
     let notifier = tokio::spawn(push::run_notifier(daemon.clone(), stop_rx.clone()));
+    let reaper = {
+        let d = daemon.clone();
+        let mut stop = stop_rx.clone();
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = d.reap_dead_sessions() {
+                    tracing::warn!("checking for dead sessions: {e:#}");
+                }
+                tokio::select! {
+                    _ = stop.wait_for(|v| *v) => return,
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {}
+                }
+            }
+        })
+    };
     let api = tokio::spawn(api::run_listeners(daemon.clone(), api_cfg, stop_rx));
     tracing::info!(socket = %paths.socket.display(), db = %paths.db.display(), "styrd {} ready", styr_core::VERSION);
     let result = ipc::serve(daemon, listener, shutdown).await;
     let _ = stop_tx.send(true);
     let _ = api.await;
     let _ = notifier.await;
+    let _ = reaper.await;
     let _ = std::fs::remove_file(&paths.socket);
     tracing::info!("styrd stopped");
     result

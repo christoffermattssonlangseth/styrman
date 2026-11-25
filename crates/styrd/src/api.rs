@@ -516,6 +516,28 @@ impl Connection {
                     .await
                 }
             },
+            ClientMsg::Command {
+                session,
+                command: styr_core::Command::SetSharing { shared: false },
+            } => {
+                // "Remove" on the phone: stop sharing; the session itself keeps running.
+                match self.daemon.summary(&session)? {
+                    Some(s) if s.shared => {
+                        let native = styr_core::ids::NativeSessionRef::new(s.agent, s.native_id);
+                        self.daemon.set_sharing(&native, false)?;
+                        Ok(())
+                    }
+                    _ => {
+                        send(
+                            tx,
+                            &ServerMsg::Error {
+                                message: format!("unknown session {session}"),
+                            },
+                        )
+                        .await
+                    }
+                }
+            }
             ClientMsg::Command { .. } => {
                 send(
                     tx,

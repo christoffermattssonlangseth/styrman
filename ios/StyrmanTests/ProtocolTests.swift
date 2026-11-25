@@ -106,6 +106,14 @@ private func event(_ seq: UInt64, _ kind: String) -> String {
         #expect(cmd["text"] as? String == "run the tests")
     }
 
+    @Test func stopSharingMatchesRust() throws {
+        let data = try JSONEncoder().encode(ClientMsg.stopSharing(session: "S"))
+        let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let cmd = try #require(obj["command"] as? [String: Any])
+        #expect(cmd["type"] as? String == "set_sharing")
+        #expect(cmd["shared"] as? Bool == false)
+    }
+
     @Test func queuedDecodes() throws {
         let m = try decode(ServerMsg.self, #"{"type":"prompt_queued","session":"S","text":"hi","position":2}"#)
         guard case .promptQueued(let s, let t, let p) = m else { Issue.record("wrong"); return }

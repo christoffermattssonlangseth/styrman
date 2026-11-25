@@ -316,3 +316,47 @@ async fn restart_keeps_history_and_cancels_open_permissions() {
     );
     d.stop().await;
 }
+
+#[test]
+fn sessions_whose_process_died_are_ended_and_can_be_forgotten() {
+    let store = styrd::store::Store::open_in_memory().unwrap();
+    let d = styrd::Daemon::open(store, styrd::default_adapters()).unwrap();
+    // A process that has really exited, and one that is alive (this test).
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let dead_pid = child.id();
+    child.wait().unwrap();
+    let mut dead = update("dead");
+    dead.agent_pid = Some(dead_pid);
+    let mut alive = update("alive");
+    alive.agent_pid = Some(std::process::id());
+    d.ingest(&dead, EventSource::Hook, vec![started("dead")])
+        .unwrap();
+    d.ingest(&alive, EventSource::Hook, vec![started("alive")])
+        .unwrap();
+    d.set_sharing(&native("dead"), true).unwrap();
+
+    assert_eq!(d.reap_dead_sessions().unwrap(), 1);
+    assert_eq!(d.reap_dead_sessions().unwrap(), 0, "only once");
+    let all = d.summaries(true).unwrap();
+    let status = |n: &str| all.iter().find(|s| s.native_id == n).unwrap().status;
+    assert_eq!(status("dead"), SessionStatus::Done);
+    assert_eq!(status("alive"), SessionStatus::Waiting);
+
+    let id = all
+        .iter()
+        .find(|s| s.native_id == "dead")
+        .unwrap()
+        .id
+        .clone();
+    assert!(d.forget_session(&id).unwrap());
+    assert!(
+        d.summaries(true)
+            .unwrap()
+            .iter()
+            .all(|s| s.native_id != "dead")
+    );
+    assert!(
+        d.events(&id, 0, 10).unwrap().is_empty(),
+        "history deleted too"
+    );
+}

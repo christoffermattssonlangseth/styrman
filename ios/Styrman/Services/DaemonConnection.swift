@@ -192,6 +192,13 @@ final class DaemonConnection {
         send(.registerPush(token: pushToken, env: env == "production" ? "production" : "sandbox"))
     }
 
+    /// Stop sharing a session with the phones (the session keeps running).
+    func stopSharing(_ session: String) {
+        guard state == .connected else { return }
+        sessions.removeAll { $0.id == session }
+        send(.stopSharing(session: session))
+    }
+
     /// Send a prompt; it shows as pending until the agent picks it up.
     @discardableResult
     func sendPrompt(session: String, text: String) -> Bool {

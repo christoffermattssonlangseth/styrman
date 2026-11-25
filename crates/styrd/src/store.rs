@@ -75,6 +75,7 @@ pub struct SessionRecord {
     pub created_ms: TimestampMs,
     pub updated_ms: TimestampMs,
     pub last_seq: u64,
+    pub agent_pid: Option<u32>,
 }
 
 pub struct Store {
@@ -123,6 +124,13 @@ impl Store {
                  ALTER TABLE devices ADD COLUMN push_env TEXT;",
             )?;
         }
+        // v3: the agent's process id, to notice sessions that died without SessionEnd.
+        let has_pid: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'agent_pid'")?
+            .exists([])?;
+        if !has_pid {
+            conn.execute_batch("ALTER TABLE sessions ADD COLUMN agent_pid INTEGER;")?;
+        }
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(Self { conn })
     }
@@ -145,6 +153,7 @@ impl Store {
             created_ms: r.get("created_ms")?,
             updated_ms: r.get("updated_ms")?,
             last_seq: r.get::<_, i64>("last_seq")? as u64,
+            agent_pid: r.get::<_, Option<i64>>("agent_pid")?.map(|p| p as u32),
         })
     }
 
@@ -206,7 +215,8 @@ impl Store {
                         transcript_path = COALESCE(?3, transcript_path),
                         model = COALESCE(?4, model),
                         title = COALESCE(?5, title),
-                        updated_ms = ?6
+                        updated_ms = ?6,
+                        agent_pid = COALESCE(?7, agent_pid)
                      WHERE id = ?1",
                     params![
                         id,
@@ -214,7 +224,8 @@ impl Store {
                         path_str(&update.transcript_path),
                         update.model,
                         update.title,
-                        now
+                        now,
+                        update.agent_pid.map(|p| p as i64)
                     ],
                 )?;
                 id
@@ -222,8 +233,8 @@ impl Store {
             None => {
                 let id = SessionId::generate().0;
                 tx.execute(
-                    "INSERT INTO sessions (id, agent, native_id, cwd, transcript_path, model, title, created_ms, updated_ms)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+                    "INSERT INTO sessions (id, agent, native_id, cwd, transcript_path, model, title, created_ms, updated_ms, agent_pid)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?9)",
                     params![
                         id,
                         native.agent.as_str(),
@@ -232,7 +243,8 @@ impl Store {
                         path_str(&update.transcript_path),
                         update.model,
                         update.title,
-                        now
+                        now,
+                        update.agent_pid.map(|p| p as i64)
                     ],
                 )?;
                 id
@@ -243,6 +255,14 @@ impl Store {
             .session(&SessionId(id))?
             .context("session vanished after upsert")?;
         Ok((rec, created))
+    }
+
+    /// Delete a session and (by cascade) its history. Returns whether it existed.
+    pub fn delete_session(&mut self, id: &SessionId) -> Result<bool> {
+        Ok(self
+            .conn
+            .execute("DELETE FROM sessions WHERE id = ?1", [id.as_str()])?
+            > 0)
     }
 
     pub fn set_title_if_empty(&mut self, id: &SessionId, title: &str) -> Result<()> {

@@ -382,6 +382,56 @@ impl Daemon {
         Ok(g.store.session(id)?.map(|r| Self::summary_of(&g, r)))
     }
 
+    /// Delete a session and its history; phones drop it from their list.
+    pub fn forget_session(&self, id: &SessionId) -> Result<bool> {
+        let existed = {
+            let mut g = self.lock();
+            g.trackers.remove(id);
+            g.store.delete_session(id)?
+        };
+        self.prompts.clear(id);
+        let _ = self.bus.send(BusMsg::SessionChanged(id.clone()));
+        Ok(existed)
+    }
+
+    /// End sessions whose agent process is gone (closed terminal, crash, kill -9):
+    /// they never sent SessionEnd and would otherwise wait for you forever.
+    pub fn reap_dead_sessions(&self) -> Result<usize> {
+        let candidates: Vec<SessionRecord> = {
+            let g = self.lock();
+            g.store
+                .sessions()?
+                .into_iter()
+                .filter(|r| r.agent_pid.is_some())
+                .filter(|r| {
+                    g.trackers.get(&r.id).map(|t| t.status())
+                        != Some(styr_core::SessionStatus::Done)
+                })
+                .collect()
+        };
+        let mut n = 0;
+        for rec in candidates {
+            let pid = rec.agent_pid.expect("filtered") as libc::pid_t;
+            // SAFETY: kill with signal 0 only checks that the process exists.
+            let alive = unsafe { libc::kill(pid, 0) } == 0
+                || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+            if alive {
+                continue;
+            }
+            tracing::info!(session = %rec.id, pid, "agent process is gone; ending the session");
+            self.ingest(
+                &SessionUpdate::for_native(rec.native.clone()),
+                EventSource::Daemon,
+                vec![EventKind::SessionEnded {
+                    reason: Some("the agent process exited".into()),
+                }],
+            )?;
+            self.prompts.clear(&rec.id);
+            n += 1;
+        }
+        Ok(n)
+    }
+
     // ---- phones ----
 
     pub fn pusher(&self) -> Option<Arc<crate::push::Pusher>> {
@@ -633,6 +683,10 @@ impl Daemon {
                         .collect(),
                 })
             }
+            Request::ForgetSessions { ids } => ids
+                .iter()
+                .try_for_each(|id| self.forget_session(id).map(|_| ()))
+                .map(|()| Response::Ok),
             Request::ListDevices => self.devices().map(|devices| Response::Devices { devices }),
             Request::RevokeDevice { id } => {
                 let revoked = self.lock().store.revoke_device(&id);

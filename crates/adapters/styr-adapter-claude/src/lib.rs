@@ -205,6 +205,7 @@ impl AgentAdapter for ClaudeAdapter {
                 transcript_path: s(p, "transcript_path").map(Into::into),
                 model: s(p, "model"),
                 title: s(p, "session_title"),
+                agent_pid: hook.agent_pid,
             }),
             ..Default::default()
         };

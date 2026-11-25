@@ -60,11 +60,16 @@ fn run(args: &[String]) -> Result<HookOutput, String> {
         record(&path, agent, event, &payload);
     }
 
+    // Who is the agent process? Only looked up where it can change (a few ms of `ps`).
+    let agent_pid = matches!(event.as_str(), "SessionStart" | "UserPromptSubmit")
+        .then(find_agent_pid)
+        .flatten();
     let hook = RawHook {
         agent,
         event: event.clone(),
         payload,
         launched_by_styr: std::env::var_os("STYR_LAUNCHED").is_some(),
+        agent_pid,
     };
     // No client-side timeout: the agent's own per-hook timeout bounds us, and a
     // permission hook may legitimately wait for the phone.
@@ -85,6 +90,27 @@ fn run(args: &[String]) -> Result<HookOutput, String> {
             Err(_) => std::thread::sleep(Duration::from_secs(2)),
         }
     }
+}
+
+/// The agent process that ran this hook: our parent, skipping shell wrappers
+/// (`sh -c`, the plugin's `styr-hook` shim).
+fn find_agent_pid() -> Option<u32> {
+    let mut pid = std::os::unix::process::parent_id();
+    for _ in 0..4 {
+        let out = std::process::Command::new("ps")
+            .args(["-o", "ppid=,comm=", "-p", &pid.to_string()])
+            .output()
+            .ok()?;
+        let line = String::from_utf8_lossy(&out.stdout);
+        let (ppid, comm) = line.trim().split_once(char::is_whitespace)?;
+        let name = comm.trim().rsplit('/').next()?.trim_start_matches('-');
+        if matches!(name, "sh" | "bash" | "zsh" | "dash" | "styr-hook" | "env") {
+            pid = ppid.trim().parse().ok()?;
+            continue;
+        }
+        return (pid > 1).then_some(pid);
+    }
+    None
 }
 
 /// Append the raw invocation to a JSONL file (for building fixtures / debugging).

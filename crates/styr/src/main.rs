@@ -52,6 +52,14 @@ enum Cmd {
         #[arg(long)]
         off: bool,
     },
+    /// Delete sessions and their history (from this Mac and every phone).
+    Forget {
+        /// Session ids (the ID column of `styr status --all`).
+        ids: Vec<String>,
+        /// Forget every session that has ended.
+        #[arg(long)]
+        ended: bool,
+    },
     /// Send a prompt to a shared session (delivered when the agent next stops).
     Send {
         /// Session id (or the ID column of `styr status`).
@@ -202,6 +210,32 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Pair { url, json } => pair(url, json)?,
+        Cmd::Forget { ids, ended } => {
+            let mut targets = Vec::new();
+            for id in &ids {
+                targets.push(resolve_session(id)?);
+            }
+            if ended {
+                let Response::Sessions { sessions } = call(Request::ListSessions {
+                    include_unshared: true,
+                })?
+                else {
+                    bail!("unexpected response");
+                };
+                targets.extend(
+                    sessions
+                        .into_iter()
+                        .filter(|s| s.status == SessionStatus::Done)
+                        .map(|s| s.id),
+                );
+            }
+            if targets.is_empty() {
+                bail!("nothing to forget (give session ids or --ended)");
+            }
+            let n = targets.len();
+            call(Request::ForgetSessions { ids: targets })?;
+            println!("forgot {n} session{}", if n == 1 { "" } else { "s" });
+        }
         Cmd::Push { action } => push(action)?,
         Cmd::Send { session, text } => {
             let id = resolve_session(&session)?;

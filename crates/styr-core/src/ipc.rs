@@ -59,6 +59,10 @@ pub enum Request {
     PushStatus,
     /// Send a test notification to every phone with a push token.
     PushTest,
+    /// Delete sessions and their history.
+    ForgetSessions {
+        ids: Vec<SessionId>,
+    },
     /// Queue a prompt for a shared session, as if sent from a phone (CLI, tests).
     SendPrompt {
         session: SessionId,
@@ -134,6 +138,8 @@ pub struct SessionUpdate {
     pub transcript_path: Option<PathBuf>,
     pub model: Option<String>,
     pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_pid: Option<u32>,
 }
 
 impl SessionUpdate {

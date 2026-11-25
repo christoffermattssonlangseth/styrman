@@ -358,8 +358,9 @@ enum ClientMsg: Encodable, Sendable {
     case resolvePermission(session: String, request: String, option: String)
     case sendPrompt(session: String, text: String)
     case registerPush(token: String, env: String)
+    case stopSharing(session: String)
 
-    private enum K: String, CodingKey { case type, session, command, request, option, text, token, env, sinceSeq = "since_seq" }
+    private enum K: String, CodingKey { case type, session, command, request, option, text, token, env, shared, sinceSeq = "since_seq" }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: K.self)
@@ -376,6 +377,11 @@ enum ClientMsg: Encodable, Sendable {
             try cmd.encode("resolve_permission", forKey: .type)
             try cmd.encode(request, forKey: .request)
             try cmd.encode(option, forKey: .option)
+        case .stopSharing(let s):
+            try c.encode("command", forKey: .type); try c.encode(s, forKey: .session)
+            var cmd = c.nestedContainer(keyedBy: K.self, forKey: .command)
+            try cmd.encode("set_sharing", forKey: .type)
+            try cmd.encode(false, forKey: .shared)
         case .registerPush(let token, let env):
             try c.encode("register_push", forKey: .type); try c.encode(token, forKey: .token); try c.encode(env, forKey: .env)
         case .sendPrompt(let s, let text):

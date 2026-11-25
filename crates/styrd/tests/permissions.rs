@@ -31,6 +31,7 @@ fn hook(session: &str, event: &str, extra: Value) -> RawHook {
         event: event.into(),
         payload,
         launched_by_styr: false,
+        agent_pid: None,
     }
 }
 

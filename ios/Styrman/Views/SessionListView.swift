@@ -4,6 +4,7 @@ struct SessionListView: View {
     @Environment(DaemonConnection.self) private var connection
     @State private var showSettings = false
     @State private var path: [String] = []
+    @State private var showAllDone = false
 
     private var needsYou: [SessionSummary] { connection.sessions.filter { $0.status.needsUser } }
     private var working: [SessionSummary] { connection.sessions.filter { $0.status == .working || $0.status == .error } }
@@ -17,7 +18,13 @@ struct SessionListView: View {
                 }
                 section("Needs you", needsYou)
                 section("Working", working)
-                section("Done", done)
+                section("Done", showAllDone ? done : Array(done.prefix(5)))
+                if done.count > 5 {
+                    Button(showAllDone ? "Show fewer" : "Show all \(done.count) finished sessions") {
+                        withAnimation { showAllDone.toggle() }
+                    }
+                    .font(.footnote)
+                }
             }
             .listStyle(.insetGrouped)
             .overlay {
@@ -64,6 +71,11 @@ struct SessionListView: View {
             Section(title) {
                 ForEach(items) { s in
                     NavigationLink(value: s.id) { SessionRow(session: s) }
+                        .swipeActions(edge: .trailing) {
+                            Button(s.status == .done ? "Remove" : "Stop sharing", role: .destructive) {
+                                connection.stopSharing(s.id)
+                            }
+                        }
                 }
             }
         }

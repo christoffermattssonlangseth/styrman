@@ -72,6 +72,10 @@ pub struct RawHook {
     /// Set when the agent was started through `styr <agent>`.
     #[serde(default)]
     pub launched_by_styr: bool,
+    /// The agent's process id, when the hook helper could find it (lets the daemon
+    /// notice sessions whose process died without a SessionEnd).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_pid: Option<u32>,
 }
 
 /// What the daemon currently knows about the session a hook belongs to.
