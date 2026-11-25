@@ -45,6 +45,8 @@ final class DaemonConnection {
     }
     private(set) var credentials: Credentials?
     private(set) var sessions: [SessionSummary] = []
+    /// The Mac has sent its session list since connecting (empty means really empty).
+    private(set) var sessionsLoaded = false
     private(set) var host: String = ""
     /// Notes from the Mac (e.g. an agent version Styrman hasn't been checked with).
     private(set) var usageSupported = false
@@ -203,11 +205,12 @@ final class DaemonConnection {
             self.host = host
             self.warnings = warnings
             state = .connected
-            for id in watched { subscribe(id) }
+            for id in watched.union(preloaded) { subscribe(id) }
             registerPush()
             for (kind, token) in activityTokens { send(.registerActivityToken(kind: kind, token: token ?? nil)) }
         case .sessions(let list):
             sessions = list.sorted { $0.updatedMs > $1.updatedMs }
+            sessionsLoaded = true
         case .sessionUpdated(let s):
             sessions.removeAll { $0.id == s.id }
             sessions.append(s)
@@ -254,14 +257,32 @@ final class DaemonConnection {
     }
 
     func watch(_ id: String) {
+        let already = preloaded.contains(id) && timelines[id]?.isLive == true
         watched.insert(id)
-        if state == .connected { subscribe(id) }
+        if state == .connected, !already { subscribe(id) }
     }
 
     func unwatch(_ id: String) {
         watched.remove(id)
+        // Preloaded sessions stay subscribed, so going back in is instant.
+        guard !preloaded.contains(id) else { return }
         send(.unsubscribe(session: id))
         timelines[id]?.isLive = false
+    }
+
+    /// Sessions whose conversation is fetched before you open them (the active ones).
+    @ObservationIgnored private var preloaded: Set<String> = []
+
+    /// Keep the conversations of `ids` loaded and live; drop the ones no longer in it.
+    func preload(_ ids: [String]) {
+        let want = Set(ids)
+        for id in preloaded.subtracting(want) where !watched.contains(id) {
+            send(.unsubscribe(session: id))
+            timelines[id]?.isLive = false
+        }
+        let new = want.subtracting(preloaded).subtracting(watched)
+        preloaded = want
+        if state == .connected { for id in new { subscribe(id) } }
     }
 
     private func subscribe(_ id: String) {

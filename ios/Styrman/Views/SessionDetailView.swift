@@ -46,6 +46,15 @@ struct SessionDetailView: View {
         let agent = summary?.agent ?? .unknown
         ScrollViewReader { proxy in
             ScrollView {
+                if !timeline.loaded {
+                    // First load: a calm placeholder, not a black screen and a jumping list.
+                    VStack(spacing: 10) {
+                        ProgressView()
+                        Text(connection.state == .connected ? "Loading conversation…" : "Waiting for your Mac…")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity).padding(.top, 160)
+                } else {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     let latest = latestReply(timeline)?.id
                     ForEach(DisplayRow.rows(merged(timeline.items))) { row in
@@ -73,8 +82,11 @@ struct SessionDetailView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
+                .transition(.opacity)
+                }
             }
             .defaultScrollAnchor(.bottom)
+            .animation(.easeOut(duration: 0.2), value: timeline.loaded)
             .background(SessionBackground(agent: agent))
             // Like the Claude app: drag the conversation down to pull the keyboard away,
             // or tap the conversation to dismiss it.

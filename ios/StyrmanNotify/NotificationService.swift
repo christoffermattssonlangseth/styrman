@@ -21,20 +21,35 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
             return
         }
         // Only this extension touches these until it hands one back.
-        nonisolated(unsafe) let content = mutable
-        nonisolated(unsafe) let unchanged = request.content
-        Task {
-            if let d = try? await QuickAnswer.details(creds, session: session, request: req),
-               d.open, let allow = d.allowOnce, let deny = d.deny {
-                content.subtitle = "Needs your approval"
-                content.body = d.text.count > 400 ? String(d.text.prefix(399)) + "…" : d.text
-                content.categoryIdentifier = "PERMISSION_ACT"
-                content.userInfo["allow"] = allow.id
-                content.userInfo["deny"] = deny.id
-                self.finish(content)
-            } else {
-                self.finish(unchanged)
+        let box = Box(service: self, content: mutable, unchanged: request.content)
+        Task.detached {
+            let details = try? await QuickAnswer.details(creds, session: session, request: req)
+            box.finish(with: details)
+        }
+    }
+
+    /// Hands the notification and this service to the task (they're not Sendable).
+    private final class Box: @unchecked Sendable {
+        let service: NotificationService
+        let content: UNMutableNotificationContent
+        let unchanged: UNNotificationContent
+        init(service: NotificationService, content: UNMutableNotificationContent, unchanged: UNNotificationContent) {
+            self.service = service
+            self.content = content
+            self.unchanged = unchanged
+        }
+
+        func finish(with d: QuickAnswer.Details?) {
+            guard let d, d.open, let allow = d.allowOnce, let deny = d.deny else {
+                service.finish(unchanged)
+                return
             }
+            content.subtitle = "Needs your approval"
+            content.body = d.text.count > 400 ? String(d.text.prefix(399)) + "…" : d.text
+            content.categoryIdentifier = "PERMISSION_ACT"
+            content.userInfo["allow"] = allow.id
+            content.userInfo["deny"] = deny.id
+            service.finish(content)
         }
     }
 
@@ -42,7 +57,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
         if let original { finish(original) }
     }
 
-    private func finish(_ content: UNNotificationContent) {
+    fileprivate func finish(_ content: UNNotificationContent) {
         let d = deliver
         deliver = nil
         d?(content)

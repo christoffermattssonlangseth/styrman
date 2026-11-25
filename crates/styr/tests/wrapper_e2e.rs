@@ -235,9 +235,11 @@ fn styr_codex_catches_styr_and_types_phone_messages_in_a_real_terminal() {
         |_| session().is_some_and(|s| s.shared),
         &mut pty,
     );
-    assert!(
-        String::from_utf8_lossy(&pty.output).contains("Styrman: this session is now on your phone"),
-        "terminal notification"
+    // The confirmation reaches the terminal just after the daemon records the share.
+    wait_for(
+        "the terminal to say the session is on the phone",
+        |p| String::from_utf8_lossy(&p.output).contains("Styrman: this session is now on your phone"),
+        &mut pty,
     );
 
     // A message from the phone is typed into Codex, despite all the terminal chatter.

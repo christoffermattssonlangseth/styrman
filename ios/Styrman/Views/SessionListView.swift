@@ -54,7 +54,7 @@ struct SessionListView: View {
             .background(HomeBackground())
             .animation(.snappy, value: connection.sessions.map { "\($0.id)\($0.status)" })
             .overlay {
-                if connection.sessions.isEmpty && connection.state == .connected {
+                if connection.sessions.isEmpty && connection.state == .connected && connection.sessionsLoaded {
                     ContentUnavailableView {
                         Label { Text("No shared sessions") } icon: { WheelMark(size: 56) }
                     } description: {
@@ -101,6 +101,10 @@ struct SessionListView: View {
                 }
             }
             .task { await AppDelegate.enablePush() }
+            // Fetch the active sessions' conversations ahead, so opening one is instant.
+            .onChange(of: connection.sessions.filter { $0.status != .done }.prefix(8).map(\.id), initial: true) { _, ids in
+                connection.preload(ids)
+            }
             #if DEBUG
             // UI automation (simulator): STYR_OPEN_FIRST=1 opens the first session once it appears.
             .onChange(of: connection.sessions.first?.id) { _, id in

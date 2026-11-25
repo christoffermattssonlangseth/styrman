@@ -66,7 +66,11 @@ final class SessionTimeline {
     private(set) var items: [TimelineItem] = []
     private(set) var lastSeq: UInt64 = 0
     /// History caught up and live events flowing.
-    var isLive = false
+    var isLive = false {
+        didSet { if isLive { loaded = true } }
+    }
+    /// The history has been fully loaded at least once (it stays cached after that).
+    private(set) var loaded = false
     /// Prompts sent from this phone that the agent hasn't picked up yet.
     private(set) var pending: [PendingPrompt] = []
 

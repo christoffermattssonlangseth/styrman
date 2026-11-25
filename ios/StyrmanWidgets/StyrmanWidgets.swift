@@ -22,12 +22,13 @@ private let amber = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(red
 private struct AgentDot: View {
     let agent: String
     var size: CGFloat = 20
+    var fullColor = true
     var body: some View {
         Image(systemName: AgentStyle.symbol(agent))
             .font(.system(size: size * 0.48, weight: .bold))
-            .foregroundStyle(.white)
+            .foregroundStyle(fullColor ? Color.white : Color.primary)
             .frame(width: size, height: size)
-            .background(AgentStyle.color(agent), in: Circle())
+            .background(fullColor ? AgentStyle.color(agent) : Color.clear, in: Circle())
     }
 }
 
@@ -44,18 +45,22 @@ private func shortStatus(_ status: String) -> String {
 /// One line: agent (in its colour) · folder, and what it wants.
 private struct RowView: View {
     let row: LiveRow
+    var fullColor = true
     var body: some View {
         let needs = AgentStyle.needsYou(row.status)
         HStack(spacing: 8) {
-            AgentDot(agent: row.agent)
-            (Text(row.agent).fontWeight(.semibold).foregroundColor(AgentStyle.color(row.agent))
-                + Text("  \(row.repo)").foregroundColor(.secondary))
+            AgentDot(agent: row.agent, fullColor: fullColor)
+            let agent = Text(row.agent).fontWeight(.semibold)
+                .foregroundColor(fullColor ? AgentStyle.color(row.agent) : .primary)
+            let repo = Text(row.repo).foregroundColor(.secondary)
+            Text("\(agent)  \(repo)")
                 .font(.footnote)
                 .lineLimit(1)
             Spacer(minLength: 6)
             Text(shortStatus(row.status))
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(needs ? amber : Color.secondary)
+                .foregroundStyle(needs && fullColor ? amber : Color.secondary)
+                .widgetAccentable(needs && !fullColor)
         }
     }
 }
@@ -161,6 +166,7 @@ struct AgentsProvider: TimelineProvider {
 
 struct AgentsWidgetView: View {
     @Environment(\.widgetFamily) private var family
+    @Environment(\.widgetRenderingMode) private var renderingMode
     let entry: AgentsEntry
 
     var body: some View {
@@ -181,23 +187,27 @@ struct AgentsWidgetView: View {
                 }
             }
         default:
+            let fullColor = renderingMode == .fullColor
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
-                    Image("Wheel").resizable().frame(width: 18, height: 18)
+                    Image("Wheel").resizable()
+                        .widgetAccentedRenderingMode(.accentedDesaturated)
+                        .frame(width: 18, height: 18)
                     Text("Styrman").font(.caption.weight(.semibold))
                     Spacer()
                 }
                 Text(summary(s))
                     .font(.headline)
-                    .foregroundStyle(s.needs > 0 ? amber : Color.primary)
+                    .foregroundStyle(s.needs > 0 && fullColor ? amber : Color.primary)
+                    .widgetAccentable(s.needs > 0)
                 ForEach(s.rows.prefix(family == .systemSmall ? 2 : 3), id: \.self) { r in
                     if family == .systemSmall {
                         HStack(spacing: 6) {
-                            AgentDot(agent: r.agent, size: 18)
+                            AgentDot(agent: r.agent, size: 18, fullColor: fullColor)
                             Text(r.repo).font(.caption.weight(.medium)).lineLimit(1)
                         }
                     } else {
-                        RowView(row: r)
+                        RowView(row: r, fullColor: fullColor)
                     }
                 }
                 Spacer(minLength: 0)
@@ -205,7 +215,7 @@ struct AgentsWidgetView: View {
                     Text("Updated \(u, style: .relative) ago").font(.caption2).foregroundStyle(.tertiary)
                 }
             }
-            .containerBackground(.fill.tertiary, for: .widget)
+            .containerBackground(.background, for: .widget)
         }
     }
 }

@@ -70,5 +70,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-      - uses: android-actions/setup-android@v3
+      # The runner has the Android SDK; accept its licenses so Gradle can fetch platforms.
+      - name: Accept Android SDK licenses
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
       - run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
