@@ -458,6 +458,35 @@ impl Connection {
                     Err(message) => send(tx, &ServerMsg::Error { message }).await,
                 }
             }
+            ClientMsg::Command {
+                session,
+                command: styr_core::Command::SendPrompt { text },
+            } => match self
+                .daemon
+                .send_prompt(&session, &text, self.device.as_str().into())
+            {
+                Ok(crate::prompts::Delivery::Delivered) => Ok(()),
+                Ok(crate::prompts::Delivery::Queued(position)) => {
+                    send(
+                        tx,
+                        &ServerMsg::PromptQueued {
+                            session,
+                            text: text.trim().to_owned(),
+                            position: position as u32,
+                        },
+                    )
+                    .await
+                }
+                Err(e) => {
+                    send(
+                        tx,
+                        &ServerMsg::Error {
+                            message: format!("{e:#}"),
+                        },
+                    )
+                    .await
+                }
+            },
             ClientMsg::Command { .. } => {
                 send(
                     tx,

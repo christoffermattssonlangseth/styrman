@@ -60,8 +60,8 @@ Design details and the reasoning behind them are in [`docs/design.md`](docs/desi
 | 2. `styr hook` plus the Claude plugin (mirroring only) and the fake-agent test harness | ✅ done |
 | 3. iOS app: pairing and live sessions (read-only) | ✅ done |
 | 4. Permission round-trip | ✅ done |
-| 5. Prompts from the phone | next |
-| 6. Push notifications | |
+| 5. Prompts from the phone | ✅ done |
+| 6. Push notifications | next |
 | 7. Pairing and auth hardening, launchd, install docs | |
 
 ## Try it (checkpoint 2)
@@ -105,6 +105,17 @@ When a shared session needs permission, the phone shows a card with **Allow once
 The phone can answer for 9 minutes; set `STYR_PERMISSION_TIMEOUT` (seconds) on `styrd` to change that. Unshared sessions never wait.
 
 If your Claude Code runs in `auto` permission mode, it approves routine actions itself, so cards only appear for the actions it would ask you about.
+
+### Prompts from the phone
+
+Type in the message box at the bottom of a session.
+
+- **Claude is idle:** it wakes up and answers within a couple of seconds.
+- **Claude is working:** the message is queued and sent the moment Claude finishes, and the phone shows it as queued until then.
+- **Typing in the terminal still works:** whatever you type there takes priority, and the phone's pending wait steps aside.
+- **From the Mac:** `styr send <ID> <text>` does the same, for scripts.
+
+This uses a second, background `Stop` hook in the plugin (`async` + `asyncRewake`). It waits for a phone message and, when one arrives, exits with code 2 to wake Claude. In the terminal, the message appears as "Stop hook feedback".
 
 ### The iPhone app
 

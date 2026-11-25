@@ -272,3 +272,46 @@ fn malformed_payloads_are_rejected_not_panicking() {
     let plan = a.on_hook(&h, &v).unwrap(); // missing fields degrade gracefully
     assert_eq!(plan.events.len(), 1);
 }
+
+#[test]
+fn rewake_turns_are_not_user_messages_and_phone_prompts_exit_2() {
+    let a = ClaudeAdapter::default();
+    // Captured from Claude Code 2.1.332 after our StopWait hook exited 2.
+    let internal = "<task-notification>\n<summary>Stop hook feedback</summary>\n</task-notification>\n<system-reminder>\nStop hook blocking error from command \"Stop\": The user sent this message from their phone via Styrman. Treat it as their next prompt and respond to it:\n\nReply with exactly the word PHONE-ONE\n</system-reminder>";
+    let h = RawHook {
+        agent: AgentKind::Claude,
+        event: "UserPromptSubmit".into(),
+        payload: json!({"session_id": "x", "prompt": internal}),
+        launched_by_styr: false,
+    };
+    let v = SessionView {
+        id: "S".into(),
+        native: NativeSessionRef::new(AgentKind::Claude, "x"),
+        shared: true,
+        open_requests: vec!["r".into()],
+    };
+    let plan = a.on_hook(&h, &v).unwrap();
+    assert_eq!(
+        plan.events.iter().map(|e| e.name()).collect::<Vec<_>>(),
+        vec!["turn_started"]
+    );
+
+    let wait = RawHook {
+        event: STOP_WAIT.into(),
+        payload: json!({"session_id": "x"}),
+        ..h
+    };
+    let plan = a.on_hook(&wait, &v).unwrap();
+    assert!(plan.events.is_empty());
+    assert!(matches!(plan.wait, Some(WaitFor::NextPrompt { .. })));
+    let (code, stderr) = a
+        .render_exit(&wait, &HookDecision::Prompt("run it".into()))
+        .unwrap();
+    assert_eq!(code, 2);
+    assert!(stderr.ends_with("run it"));
+    assert_eq!(a.render_exit(&wait, &HookDecision::PassThrough), None);
+    assert_eq!(
+        a.render_reply(&wait, &HookDecision::Prompt("x".into())),
+        None
+    );
+}

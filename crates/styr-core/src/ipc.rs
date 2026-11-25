@@ -54,6 +54,11 @@ pub enum Request {
     RevokeDevice {
         id: String,
     },
+    /// Queue a prompt for a shared session, as if sent from a phone (CLI, tests).
+    SendPrompt {
+        session: SessionId,
+        text: String,
+    },
 }
 
 fn default_limit() -> u32 {
@@ -81,6 +86,10 @@ pub enum Response {
     /// What `styr hook` prints on stdout (`None`: print nothing, exit 0).
     HookReply {
         stdout: Option<serde_json::Value>,
+        /// Non-zero only on the adapter's explicit request (e.g. 2 to wake Claude
+        /// from an `asyncRewake` hook); absent means exit 0.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit: Option<HookExit>,
     },
     Pairing {
         code: String,
@@ -91,6 +100,10 @@ pub enum Response {
     },
     Devices {
         devices: Vec<DeviceInfo>,
+    },
+    PromptAccepted {
+        /// False: queued until the agent next stops.
+        delivered: bool,
     },
     Ok,
     Error {
@@ -130,6 +143,20 @@ pub struct SessionSummary {
     pub created_ms: TimestampMs,
     pub updated_ms: TimestampMs,
     pub last_seq: u64,
+}
+
+/// An exit code plus stderr text for `styr hook` to finish with.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HookExit {
+    pub code: i32,
+    pub stderr: String,
+}
+
+/// What `styr hook` should do: print `stdout` (if any), then exit as told (default 0).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct HookOutput {
+    pub stdout: Option<serde_json::Value>,
+    pub exit: Option<HookExit>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -216,9 +243,9 @@ use std::io::Read as _;
 pub fn forward_hook(
     client: &Client,
     hook: crate::adapter::RawHook,
-) -> Result<Option<serde_json::Value>, IpcError> {
+) -> Result<HookOutput, IpcError> {
     match client.call(&Request::Hook { hook })? {
-        Response::HookReply { stdout } => Ok(stdout),
+        Response::HookReply { stdout, exit } => Ok(HookOutput { stdout, exit }),
         other => Err(IpcError::Protocol(format!("unexpected reply {other:?}"))),
     }
 }

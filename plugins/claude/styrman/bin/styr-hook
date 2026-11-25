@@ -11,5 +11,6 @@ if [ -z "$STYR" ]; then
   done
 fi
 [ -n "$STYR" ] || exit 0
-"$STYR" hook "$@"
-exit 0
+# styr hook itself exits 0 in every case except one it chooses deliberately
+# (exit 2 from the background Stop hook, which wakes Claude with a phone prompt).
+exec "$STYR" hook "$@"

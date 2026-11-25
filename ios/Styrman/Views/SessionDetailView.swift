@@ -13,6 +13,9 @@ struct SessionDetailView: View {
                     ForEach(timeline.items) { item in
                         TimelineRow(item: item, cwd: summary?.cwd, sessionId: sessionId).id(item.id)
                     }
+                    ForEach(timeline.pending) { p in
+                        PendingPromptRow(prompt: p, working: summary?.status == .working)
+                    }
                     if !timeline.isLive {
                         HStack { Spacer(); ProgressView(); Spacer() }.padding()
                     }
@@ -22,7 +25,7 @@ struct SessionDetailView: View {
                 .padding(.vertical, 12)
             }
             .defaultScrollAnchor(.bottom)
-            .onChange(of: timeline.items.count) {
+            .onChange(of: timeline.items.count + timeline.pending.count) {
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
         }
@@ -59,6 +62,8 @@ struct SessionDetailView: View {
                 Text("This session is no longer shared.")
                     .font(.footnote).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity).padding(10).background(.bar)
+            } else if let summary {
+                Composer(sessionId: sessionId, status: summary.status)
             }
         }
         .onAppear { connection.watch(sessionId) }
@@ -294,5 +299,66 @@ struct ToolDetailView: View {
             }
         }
         .presentationDetents([.medium, .large])
+    }
+}
+
+/// Message box at the bottom of a session.
+struct Composer: View {
+    @Environment(DaemonConnection.self) private var connection
+    let sessionId: String
+    let status: SessionStatus
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    private var canSend: Bool {
+        connection.state == .connected && status != .done
+            && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if status == .working {
+                Text("Claude is working. Your message is sent when it finishes.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if status == .done {
+                Text("This session has ended.").font(.caption).foregroundStyle(.secondary)
+            }
+            HStack(alignment: .bottom, spacing: 8) {
+                TextField("Message Claude", text: $text, axis: .vertical)
+                    .lineLimit(1...6)
+                    .focused($focused)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20))
+                    .disabled(status == .done)
+                Button {
+                    if connection.sendPrompt(session: sessionId, text: text) { text = "" }
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 34))
+                }
+                .disabled(!canSend)
+                .accessibilityLabel("Send")
+            }
+        }
+        .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 6)
+        .background(.bar)
+    }
+}
+
+struct PendingPromptRow: View {
+    let prompt: SessionTimeline.PendingPrompt
+    let working: Bool
+
+    var body: some View {
+        HStack {
+            Spacer(minLength: 40)
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(prompt.text)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .background(Theme.accent.opacity(0.15), in: RoundedRectangle(cornerRadius: 16))
+                Label(prompt.queued || working ? "Queued, sent when Claude finishes" : "Sending…",
+                      systemImage: prompt.queued || working ? "clock" : "arrow.up.circle")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
     }
 }

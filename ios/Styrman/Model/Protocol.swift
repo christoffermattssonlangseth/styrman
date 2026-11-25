@@ -314,11 +314,12 @@ enum ServerMsg: Decodable, Sendable {
     case events(session: String, events: [Event])
     case subscribed(session: String, lastSeq: UInt64)
     case event(Event)
+    case promptQueued(session: String, text: String, position: Int)
     case error(String)
     case unknown(type: String)
 
     private enum K: String, CodingKey {
-        case type, `protocol`, host, sessions, session, id, events, event, message
+        case type, `protocol`, host, sessions, session, id, events, event, message, text, position
         case daemonVersion = "daemon_version", deviceId = "device_id", lastSeq = "last_seq"
     }
 
@@ -338,6 +339,10 @@ enum ServerMsg: Decodable, Sendable {
         case "events": self = .events(session: try c.decode(String.self, forKey: .session), events: try c.decode([Event].self, forKey: .events))
         case "subscribed": self = .subscribed(session: try c.decode(String.self, forKey: .session), lastSeq: try c.decode(UInt64.self, forKey: .lastSeq))
         case "event": self = .event(try c.decode(Event.self, forKey: .event))
+        case "prompt_queued":
+            self = .promptQueued(session: try c.decode(String.self, forKey: .session),
+                                 text: try c.decode(String.self, forKey: .text),
+                                 position: try c.decode(Int.self, forKey: .position))
         case "error": self = .error(try c.decode(String.self, forKey: .message))
         default: self = .unknown(type: type)
         }
@@ -351,8 +356,9 @@ enum ClientMsg: Encodable, Sendable {
     case subscribe(session: String, sinceSeq: UInt64)
     case unsubscribe(session: String)
     case resolvePermission(session: String, request: String, option: String)
+    case sendPrompt(session: String, text: String)
 
-    private enum K: String, CodingKey { case type, session, command, request, option, sinceSeq = "since_seq" }
+    private enum K: String, CodingKey { case type, session, command, request, option, text, sinceSeq = "since_seq" }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: K.self)
@@ -369,6 +375,11 @@ enum ClientMsg: Encodable, Sendable {
             try cmd.encode("resolve_permission", forKey: .type)
             try cmd.encode(request, forKey: .request)
             try cmd.encode(option, forKey: .option)
+        case .sendPrompt(let s, let text):
+            try c.encode("command", forKey: .type); try c.encode(s, forKey: .session)
+            var cmd = c.nestedContainer(keyedBy: K.self, forKey: .command)
+            try cmd.encode("send_prompt", forKey: .type)
+            try cmd.encode(text, forKey: .text)
         }
     }
 }

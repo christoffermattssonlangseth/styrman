@@ -52,6 +52,13 @@ enum Cmd {
         #[arg(long)]
         off: bool,
     },
+    /// Send a prompt to a shared session (delivered when the agent next stops).
+    Send {
+        /// Session id (or the ID column of `styr status`).
+        session: String,
+        /// The prompt.
+        text: Vec<String>,
+    },
     /// Pair a phone: shows a QR code with a one-time code (valid 5 minutes).
     Pair {
         /// Use this phone-API URL instead of the detected Tailscale one,
@@ -166,6 +173,17 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Pair { url, json } => pair(url, json)?,
+        Cmd::Send { session, text } => {
+            let id = resolve_session(&session)?;
+            let text = text.join(" ");
+            match call(Request::SendPrompt { session: id, text })? {
+                Response::PromptAccepted { delivered: true } => println!("delivered"),
+                Response::PromptAccepted { delivered: false } => {
+                    println!("queued: delivered when the agent next stops")
+                }
+                other => bail!("unexpected response: {other:?}"),
+            }
+        }
         Cmd::Devices { action: None } => {
             let Response::Devices { devices } = call(Request::ListDevices)? else {
                 bail!("unexpected response");

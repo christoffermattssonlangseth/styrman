@@ -96,6 +96,32 @@ private func event(_ seq: UInt64, _ kind: String) -> String {
     }
 }
 
+@Suite struct PromptTests {
+    @Test func sendPromptMatchesRust() throws {
+        let data = try JSONEncoder().encode(ClientMsg.sendPrompt(session: "S", text: "run the tests"))
+        let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        #expect(obj["type"] as? String == "command")
+        let cmd = try #require(obj["command"] as? [String: Any])
+        #expect(cmd["type"] as? String == "send_prompt")
+        #expect(cmd["text"] as? String == "run the tests")
+    }
+
+    @Test func queuedDecodes() throws {
+        let m = try decode(ServerMsg.self, #"{"type":"prompt_queued","session":"S","text":"hi","position":2}"#)
+        guard case .promptQueued(let s, let t, let p) = m else { Issue.record("wrong"); return }
+        #expect((s, t, p) == ("S", "hi", 2))
+    }
+
+    @Test @MainActor func pendingClearsWhenDelivered() throws {
+        let t = SessionTimeline(sessionId: "S")
+        t.addPending("hi")
+        t.markQueued("hi")
+        #expect(t.pending.first?.queued == true)
+        t.apply([try decode(Event.self, event(1, #"{"type":"user_message","text":"hi","origin":{"from":"remote","device":"d"}}"#))])
+        #expect(t.pending.isEmpty)
+    }
+}
+
 @Suite struct PairingTests {
     @Test func parsesTheLinkStyrPairPrints() throws {
         // Same string as `link_is_url_safe` in crates/styr-core/src/phone.rs.

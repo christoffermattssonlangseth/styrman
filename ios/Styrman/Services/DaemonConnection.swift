@@ -144,6 +144,8 @@ final class DaemonConnection {
             timelines[sid]?.isLive = true
         case .event(let e):
             timelines[e.session]?.apply([e])
+        case .promptQueued(let sid, let text, _):
+            timelines[sid]?.markQueued(text)
         case .error(let message):
             lastError = message
         case .unknown:
@@ -176,6 +178,16 @@ final class DaemonConnection {
     }
 
     func session(_ id: String) -> SessionSummary? { sessions.first { $0.id == id } }
+
+    /// Send a prompt; it shows as pending until the agent picks it up.
+    @discardableResult
+    func sendPrompt(session: String, text: String) -> Bool {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard state == .connected, !text.isEmpty else { return false }
+        timeline(for: session).addPending(text)
+        send(.sendPrompt(session: session, text: text))
+        return true
+    }
 
     /// Answer a permission request. The card closes when the daemon's
     /// `permission_resolved` event arrives; returns false if not connected.

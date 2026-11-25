@@ -67,6 +67,24 @@ final class SessionTimeline {
     private(set) var lastSeq: UInt64 = 0
     /// History caught up and live events flowing.
     var isLive = false
+    /// Prompts sent from this phone that the agent hasn't picked up yet.
+    private(set) var pending: [PendingPrompt] = []
+
+    struct PendingPrompt: Identifiable, Hashable, Sendable {
+        let id = UUID()
+        let text: String
+        var queued = false
+    }
+
+    func addPending(_ text: String) { pending.append(PendingPrompt(text: text)) }
+
+    func markQueued(_ text: String) {
+        if let i = pending.firstIndex(where: { $0.text == text && !$0.queued }) { pending[i].queued = true }
+    }
+
+    func dropPending(_ text: String) {
+        if let i = pending.firstIndex(where: { $0.text == text }) { pending.remove(at: i) }
+    }
 
     @ObservationIgnored private var toolIndex: [String: Int] = [:]
     @ObservationIgnored private var permissionIndex: [String: Int] = [:]
@@ -103,6 +121,7 @@ final class SessionTimeline {
         case .sharingChanged(let shared):
             append(.divider(id: key, text: shared ? "Shared with this phone" : "Sharing stopped", at: e.at))
         case .userMessage(let text, let fromPhone):
+            if fromPhone { dropPending(text) }
             append(.user(id: key, text: text, fromPhone: fromPhone, at: e.at))
         case .assistantMessage(let id, let text, let delta):
             if let i = messageIndex[id], case .assistant(let iid, let old, let at) = items[i] {

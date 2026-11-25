@@ -1,6 +1,6 @@
 # Styrman design (phase 1 proposal)
 
-Status: **approved; checkpoints 1–4 built.** Verified findings are recorded in §8.
+Status: **approved; checkpoints 1–5 built.** Verified findings are recorded in §8.
 
 ## 1. What the three agents actually offer
 
@@ -269,3 +269,10 @@ Each checkpoint ends with something runnable and its tests green.
   - If nobody answers, the terminal prompt stays up.
   - So the Claude adapter is `PermissionMode::Concurrent`. The phone's answer window defaults to 540 s, below the plugin's 600 s hook timeout, and never delays the terminal.
 - **Permission mode `auto`.** In `auto`, Claude's classifier approves routine actions itself, and `PermissionRequest` only fires for the ones it would ask about.
+- **Phone prompts on Claude Code 2.1.332, via the `asyncRewake` Stop hook.** The plugin's second `Stop` hook (`StopWait`, `async: true`, `asyncRewake: true`, `timeout: 86400`) waits in `styrd` for a phone prompt and exits 2 with it on stderr.
+  - An idle interactive session wakes within about 2 s and answers it.
+  - Claude Code then submits an internal `<task-notification>…Stop hook feedback…` prompt. The adapter ignores it as a user message.
+  - A prompt sent while Claude works is queued and taken by the next `StopWait`.
+  - A newer wait, a prompt typed in the terminal, `/styr off` or `SessionEnd` releases the waiting hook, so at most one waits per session.
+  - If the daemon restarts mid-wait, the hook reconnects for up to an hour.
+- **Channels, considered and deferred.** The official push mechanism (`notifications/claude/channel`, plus permission relay) needs `--dangerously-load-development-channels` and shows a full-screen confirmation in every interactive session during the research preview. It's possible later as an opt-in through `styr claude` for delivery mid-turn.

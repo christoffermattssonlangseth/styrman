@@ -54,6 +54,7 @@ fn main() {
     });
     let runner = HookRunner::new(styr, &Paths::resolve(), AgentKind::Claude);
 
+    let replaying = replay.is_some();
     let steps = match replay {
         Some(path) => load_fixture(path),
         None => demo(&session, &cwd, share),
@@ -72,6 +73,9 @@ fn main() {
             if reply.is_empty() { "-" } else { reply }
         );
         std::thread::sleep(Duration::from_millis(delay));
+    }
+    if wait_for_phone && !replaying {
+        phone_prompt_rounds(&runner, &session, &cwd);
     }
 }
 
@@ -162,4 +166,45 @@ fn permission_step(runner: &HookRunner, payload: &serde_json::Value, wait_for_ph
     let _ = child.kill();
     let _ = child.wait();
     println!("PermissionRequest  answered in the (simulated) terminal");
+}
+
+/// After the demo turn, wait like the plugin's background Stop hook does for a
+/// message typed on the phone, and answer it (twice at most).
+fn phone_prompt_rounds(runner: &HookRunner, session: &str, cwd: &str) {
+    use std::io::Read;
+    let s = ClaudeScript::new(session, cwd);
+    for _ in 0..2 {
+        println!("StopWait           waiting for a message from the phone (2 min)…");
+        let (_, payload) = s.stop("");
+        let mut child = runner.spawn("StopWait", &payload);
+        let start = std::time::Instant::now();
+        let status = loop {
+            if let Ok(Some(st)) = child.try_wait() {
+                break Some(st);
+            }
+            if start.elapsed() > Duration::from_secs(120) {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        let mut err = String::new();
+        if let Some(mut e) = child.stderr.take() {
+            let _ = e.read_to_string(&mut err);
+        }
+        match status {
+            Some(st) if st.code() == Some(2) => {
+                let text = err.rsplit("\n\n").next().unwrap_or("").trim().to_owned();
+                println!("StopWait           woke up with: {text}");
+                std::thread::sleep(Duration::from_millis(800));
+                let (e, p) = s.stop(&format!("(fake agent) You said from your phone: “{text}”"));
+                runner.run(&e, &p);
+            }
+            _ => {
+                println!("StopWait           no message; done");
+                return;
+            }
+        }
+    }
 }

@@ -68,6 +68,12 @@ pub enum ServerMsg {
     Event {
         event: Event,
     },
+    /// A prompt from the phone is waiting until the agent next stops.
+    PromptQueued {
+        session: SessionId,
+        text: String,
+        position: u32,
+    },
     Error {
         message: String,
     },

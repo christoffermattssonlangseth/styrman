@@ -126,6 +126,24 @@ fn close_open_requests(view: &SessionView, events: &mut Vec<EventKind>) {
     }
 }
 
+/// Prompts Claude Code submits on its own, such as the wake-up turn after an
+/// `asyncRewake` hook (`<task-notification>…Stop hook feedback…`).
+pub fn is_internal_prompt(prompt: &str) -> bool {
+    prompt.trim_start().starts_with("<task-notification>")
+}
+
+/// Event name the plugin passes for its background (asyncRewake) Stop hook.
+pub const STOP_WAIT: &str = "StopWait";
+/// How long that hook waits for a phone prompt; below the plugin's 86 400 s timeout.
+pub const STOP_WAIT_TIMEOUT: Duration = Duration::from_secs(23 * 3600);
+
+/// How a phone prompt reads to Claude when it is delivered through the Stop hook.
+pub fn frame_phone_prompt(text: &str) -> String {
+    format!(
+        "The user sent this message from their phone via Styrman. Treat it as their next prompt and respond to it:\n\n{text}"
+    )
+}
+
 pub const OPT_ALLOW: &str = "allow";
 pub const OPT_ALWAYS: &str = "always";
 pub const OPT_DENY: &str = "deny";
@@ -212,6 +230,12 @@ impl AgentAdapter for ClaudeAdapter {
                         } else {
                             "Styrman: this session is no longer shared.".into()
                         },
+                    });
+                } else if is_internal_prompt(&prompt) {
+                    // Claude Code's own wake-up turn (e.g. after our asyncRewake hook
+                    // delivered a phone prompt): not something the user typed.
+                    ev.push(EventKind::TurnStarted {
+                        turn: s(p, "prompt_id").map(TurnId),
                     });
                 } else {
                     close_open_requests(view, ev);
@@ -341,6 +365,14 @@ impl AgentAdapter for ClaudeAdapter {
             "SessionEnd" => ev.push(EventKind::SessionEnded {
                 reason: s(p, "reason"),
             }),
+            // The plugin's second Stop hook (async + asyncRewake): wait in the
+            // background for a prompt from the phone; exit 2 delivers it and wakes Claude.
+            STOP_WAIT => {
+                plan.session = None;
+                plan.wait = Some(WaitFor::NextPrompt {
+                    timeout: STOP_WAIT_TIMEOUT,
+                });
+            }
             _ => {}
         }
         Ok(plan)
@@ -377,6 +409,13 @@ impl AgentAdapter for ClaudeAdapter {
             ("Stop", HookDecision::Prompt(text)) => {
                 Some(json!({"decision": "block", "reason": text}))
             }
+            _ => None,
+        }
+    }
+
+    fn render_exit(&self, hook: &RawHook, decision: &HookDecision) -> Option<(i32, String)> {
+        match (hook.event.as_str(), decision) {
+            (STOP_WAIT, HookDecision::Prompt(text)) => Some((2, frame_phone_prompt(text))),
             _ => None,
         }
     }

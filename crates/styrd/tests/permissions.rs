@@ -47,7 +47,11 @@ fn permission_hook(session: &str) -> RawHook {
 /// Send a hook the way `styr hook` does, on a blocking thread; returns its stdout JSON.
 fn spawn_hook(d: &Daemon, h: RawHook) -> tokio::task::JoinHandle<Option<Value>> {
     let c = Client::new(&d.paths.socket).with_timeout(None);
-    tokio::task::spawn_blocking(move || styr_core::ipc::forward_hook(&c, h).expect("hook call"))
+    tokio::task::spawn_blocking(move || {
+        styr_core::ipc::forward_hook(&c, h)
+            .expect("hook call")
+            .stdout
+    })
 }
 
 async fn share(d: &Daemon, session: &str) {
@@ -60,7 +64,13 @@ async fn share(d: &Daemon, session: &str) {
             hook: hook(session, "UserPromptSubmit", json!({"prompt": "/styr"})),
         })
         .await;
-    assert!(matches!(r, Response::HookReply { stdout: Some(_) }));
+    assert!(matches!(
+        r,
+        Response::HookReply {
+            stdout: Some(_),
+            ..
+        }
+    ));
 }
 
 /// Wait for the next `permission_requested` event on the phone; returns its request id.

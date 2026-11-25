@@ -189,3 +189,42 @@ fn history_survives_a_daemon_restart_mid_session() {
         (1..=after.len() as u64).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn background_stop_hook_exits_2_with_the_phone_prompt() {
+    let d = TestDaemon::start();
+    let r = runner(&d);
+    let mut s = ClaudeScript::new("sess-3", "/work/repo");
+    for (e, p) in [s.start(), s.prompt("/styr"), s.stop("Done.")] {
+        r.run(&e, &p);
+    }
+    // The plugin's second Stop hook: `styr hook claude StopWait`, async + asyncRewake.
+    let (_, stop) = s.stop("Done.");
+    let child = r.spawn("StopWait", &stop);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let sid = d.session_by_native("sess-3").unwrap().id;
+    let reply = d
+        .client()
+        .call(&styr_core::ipc::Request::SendPrompt {
+            session: sid,
+            text: "add a test for it".into(),
+        })
+        .unwrap();
+    assert_eq!(
+        reply,
+        styr_core::ipc::Response::PromptAccepted { delivered: true }
+    );
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(2), "exit 2 wakes Claude");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("add a test for it"), "{stderr}");
+    assert!(out.stdout.is_empty());
+
+    // Without a daemon the same hook exits 0 at once.
+    let gone = TestDaemon::stopped();
+    let out = runner(&gone).run_raw(&["claude", "StopWait"], stop.to_string().as_bytes());
+    assert_eq!(
+        (out.exit_code, out.stdout.as_str(), out.stderr.as_str()),
+        (0, "", "")
+    );
+}

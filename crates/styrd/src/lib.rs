@@ -5,6 +5,7 @@ pub mod auth;
 pub mod daemon;
 pub mod ipc;
 pub mod permissions;
+pub mod prompts;
 pub mod store;
 
 use anyhow::{Context, Result, bail};
@@ -25,6 +26,17 @@ pub fn lock_instance(paths: &Paths) -> Result<InstanceLock> {
         .truncate(false)
         .write(true)
         .open(paths.data_dir.join("styrd.lock"))?;
+    // A just-stopped instance (or a child process mid-exec) can hold the lock for a
+    // moment; retry briefly before declaring another daemon alive.
+    for _ in 0..20 {
+        match file.try_lock() {
+            Ok(()) => return Ok(InstanceLock(file)),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                std::thread::sleep(std::time::Duration::from_millis(100))
+            }
+            Err(std::fs::TryLockError::Error(e)) => return Err(e).context("locking instance"),
+        }
+    }
     match file.try_lock() {
         Ok(()) => Ok(InstanceLock(file)),
         Err(std::fs::TryLockError::WouldBlock) => {

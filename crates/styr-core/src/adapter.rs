@@ -175,6 +175,13 @@ pub trait AgentAdapter: Send + Sync + 'static {
         None
     }
 
+    /// A non-zero exit code plus stderr for `decision`, for agents whose hook protocol
+    /// needs one (Claude's `asyncRewake` wakes on exit 2). `None` = exit 0.
+    /// Never return one for `PassThrough`: exit 2 means "block" on many hook events.
+    fn render_exit(&self, _hook: &RawHook, _decision: &HookDecision) -> Option<(i32, String)> {
+        None
+    }
+
     // ---- protocol path ----
 
     fn attach(

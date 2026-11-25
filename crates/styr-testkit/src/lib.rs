@@ -67,6 +67,13 @@ impl TestDaemon {
             ))
         });
         for _ in 0..500 {
+            if thread.is_finished() {
+                match thread.join() {
+                    Ok(Err(e)) => panic!("styrd failed to start: {e:#}"),
+                    Ok(Ok(())) => panic!("styrd exited during start-up"),
+                    Err(_) => panic!("styrd panicked during start-up"),
+                }
+            }
             if self.paths.socket.exists() {
                 self.stop = Some(tx);
                 self.thread = Some(thread);
@@ -199,7 +206,7 @@ impl HookRunner {
             .env_remove("STYR_HOOK_RECORD")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .spawn()
             .expect("spawn styr");
         child

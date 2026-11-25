@@ -35,6 +35,7 @@ pub struct Daemon {
     pub revoked: broadcast::Sender<String>,
     adapters: HashMap<AgentKind, Arc<dyn AgentAdapter>>,
     pub(crate) broker: crate::permissions::Broker,
+    pub(crate) prompts: crate::prompts::Prompts,
 }
 
 struct Inner {
@@ -100,6 +101,7 @@ impl Daemon {
             api_urls: Mutex::new(Vec::new()),
             adapters: adapters.into_iter().map(|a| (a.kind(), a)).collect(),
             broker: Default::default(),
+            prompts: Default::default(),
         }))
     }
 
@@ -135,8 +137,10 @@ impl Daemon {
 
     /// Handle one hook. Never fails: anything unexpected becomes `PassThrough`,
     /// so the agent behaves exactly as it would without Styrman.
-    pub async fn handle_hook(self: &Arc<Self>, hook: RawHook) -> Option<serde_json::Value> {
-        let adapter = self.adapter(hook.agent).cloned()?;
+    pub async fn handle_hook(self: &Arc<Self>, hook: RawHook) -> styr_core::ipc::HookOutput {
+        let Some(adapter) = self.adapter(hook.agent).cloned() else {
+            return Default::default();
+        };
         let decision = match self.process_hook(adapter.as_ref(), &hook).await {
             Ok(d) => d,
             Err(e) => {
@@ -144,7 +148,15 @@ impl Daemon {
                 HookDecision::PassThrough
             }
         };
-        adapter.render_reply(&hook, &decision)
+        if decision == HookDecision::PassThrough {
+            return Default::default();
+        }
+        styr_core::ipc::HookOutput {
+            stdout: adapter.render_reply(&hook, &decision),
+            exit: adapter
+                .render_exit(&hook, &decision)
+                .map(|(code, stderr)| styr_core::ipc::HookExit { code, stderr }),
+        }
     }
 
     async fn process_hook(
@@ -178,6 +190,21 @@ impl Daemon {
                 _ => None,
             })
         };
+        // A prompt typed in the terminal, unsharing or the session ending stands down
+        // any background wait for a phone prompt.
+        let typed_in_terminal = events.iter().any(|e| {
+            matches!(
+                e,
+                EventKind::UserMessage {
+                    origin: styr_core::event::Origin::Terminal,
+                    ..
+                }
+            )
+        });
+        let gone = plan.set_sharing == Some(false)
+            || events
+                .iter()
+                .any(|e| matches!(e, EventKind::SessionEnded { .. }));
         let wait = match &plan.wait {
             Some(WaitFor::Permission { request, timeout }) => {
                 options_for(request).map(|o| (request.clone(), o, *timeout))
@@ -185,10 +212,32 @@ impl Daemon {
             _ => None,
         };
         self.ingest(&update, EventSource::Hook, events)?;
+        if gone {
+            self.prompts.clear(&view.id);
+        } else if typed_in_terminal {
+            self.prompts.release(&view.id);
+        }
         if let Some(reply) = plan.reply {
             return Ok(reply);
         }
         let shared_now = plan.set_sharing.unwrap_or(view.shared);
+        if let (true, Some(WaitFor::NextPrompt { timeout })) = (shared_now, &plan.wait) {
+            return Ok(match self.wait_for_prompt(&view.id, *timeout).await {
+                Some(p) => {
+                    tracing::info!(session = %view.id, "delivering a prompt from the phone");
+                    let ev = vec![
+                        EventKind::TurnStarted { turn: None },
+                        EventKind::UserMessage {
+                            text: p.text.clone(),
+                            origin: styr_core::event::Origin::Remote(p.device),
+                        },
+                    ];
+                    self.ingest(&SessionUpdate::for_native(native), EventSource::Daemon, ev)?;
+                    HookDecision::Prompt(p.text)
+                }
+                None => HookDecision::PassThrough,
+            });
+        }
         if let (true, Some((request, options, timeout))) = (shared_now, wait) {
             // Only shared sessions ever wait for the phone; others pass straight through.
             let outcome = self
@@ -280,6 +329,9 @@ impl Daemon {
             EventSource::Daemon,
             vec![EventKind::SharingChanged { shared }],
         )?;
+        if !shared {
+            self.prompts.clear(&id);
+        }
         Ok(id)
     }
 
@@ -324,6 +376,38 @@ impl Daemon {
     }
 
     // ---- phones ----
+
+    /// A prompt typed on the phone for a shared session.
+    pub fn send_prompt(
+        &self,
+        session: &SessionId,
+        text: &str,
+        device: styr_core::ids::DeviceId,
+    ) -> Result<crate::prompts::Delivery> {
+        let text = text.trim();
+        anyhow::ensure!(!text.is_empty(), "empty prompt");
+        anyhow::ensure!(
+            text.chars().count() <= crate::prompts::MAX_PROMPT_CHARS,
+            "prompt too long"
+        );
+        let summary = self
+            .summary(session)?
+            .filter(|s| s.shared)
+            .context("unknown session")?;
+        anyhow::ensure!(
+            summary.status != styr_core::SessionStatus::Done,
+            "the session has ended"
+        );
+        let delivery = self.prompts.submit(
+            session,
+            crate::prompts::QueuedPrompt {
+                text: text.to_owned(),
+                device,
+            },
+        );
+        tracing::info!(%session, ?delivery, "prompt from the phone");
+        Ok(delivery)
+    }
 
     pub fn set_api_urls(&self, urls: Vec<String>) {
         *self.api_urls.lock().unwrap_or_else(|p| p.into_inner()) = urls;
@@ -427,9 +511,13 @@ impl Daemon {
             Request::SetSharing { native, shared } => {
                 self.set_sharing(&native, shared).map(|_| Response::Ok)
             }
-            Request::Hook { hook } => Ok(Response::HookReply {
-                stdout: self.handle_hook(hook).await,
-            }),
+            Request::Hook { hook } => {
+                let out = self.handle_hook(hook).await;
+                Ok(Response::HookReply {
+                    stdout: out.stdout,
+                    exit: out.exit,
+                })
+            }
             Request::CreatePairing => {
                 let (code, expires_ms) = self.auth.new_code();
                 Ok(Response::Pairing {
@@ -439,6 +527,11 @@ impl Daemon {
                     host: Self::host_name(),
                 })
             }
+            Request::SendPrompt { session, text } => self
+                .send_prompt(&session, &text, "cli".into())
+                .map(|d| Response::PromptAccepted {
+                    delivered: d == crate::prompts::Delivery::Delivered,
+                }),
             Request::ListDevices => self.devices().map(|devices| Response::Devices { devices }),
             Request::RevokeDevice { id } => {
                 let revoked = self.lock().store.revoke_device(&id);
