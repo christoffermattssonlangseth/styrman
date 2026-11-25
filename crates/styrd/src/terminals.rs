@@ -106,7 +106,16 @@ pub fn menu_tool(p: &styr_core::ipc::TerminalPrompt) -> ToolInfo {
             };
         }
     }
-    if let Some(cmd) = lines.iter().find_map(|l| l.strip_prefix("$ ")) {
+    if let Some(i) = lines.iter().position(|l| l.starts_with("$ ")) {
+        // The command is the "$ " line plus whatever wrapped below it (the options
+        // aren't part of the detail).
+        let mut cmd = lines[i].trim_start_matches("$ ").to_owned();
+        for l in &lines[i + 1..] {
+            if !(cmd.ends_with('/') || cmd.ends_with('-') && !cmd.ends_with(" -")) {
+                cmd.push(' ');
+            }
+            cmd.push_str(l);
+        }
         return ToolInfo {
             name: "command".into(),
             kind: ToolKind::Execute,
@@ -404,13 +413,20 @@ impl Daemon {
                 else {
                     return Ok(());
                 };
-                let tool = self
-                    .terminals
-                    .lock()
-                    .last_tool
-                    .get(&summary.id)
-                    .cloned()
-                    .unwrap_or_else(|| menu_tool(&p));
+                // What the menu itself says it's about ("$ command", "Destination:")
+                // wins: the last tool the agent announced can be an older one, and an
+                // approval card must never show a different command than the one asked about.
+                let from_screen = menu_tool(&p);
+                let tool = if from_screen.kind != ToolKind::Other {
+                    from_screen
+                } else {
+                    self.terminals
+                        .lock()
+                        .last_tool
+                        .get(&summary.id)
+                        .cloned()
+                        .unwrap_or(from_screen)
+                };
                 let options: Vec<PermissionOption> = p
                     .options
                     .iter()

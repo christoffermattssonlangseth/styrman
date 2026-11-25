@@ -497,13 +497,24 @@ pub fn detect_codex_prompt(screen: &str) -> Option<TerminalPrompt> {
     let title_at = (block_start..first_option)
         .find(|&i| lines[i].trim().ends_with('?'))
         .or_else(|| (block_start..first_option).find(|&i| !lines[i].trim().is_empty()))?;
+    // In a narrow pane the question wraps ("Would you like to run the following" /
+    // "command?"): take the whole sentence, back to the start of its paragraph.
+    let mut title_start = title_at;
+    while title_start > block_start && !lines[title_start - 1].trim().is_empty() {
+        title_start -= 1;
+    }
+    let title = lines[title_start..=title_at]
+        .iter()
+        .map(|l| l.trim())
+        .collect::<Vec<_>>()
+        .join(" ");
     let detail: Vec<String> = lines[title_at + 1..first_option]
         .iter()
         .map(|l| l.trim().to_owned())
         .filter(|l| !l.is_empty())
         .collect();
     (options.len() >= 2).then(|| TerminalPrompt {
-        title: lines[title_at].trim().to_owned(),
+        title,
         detail: detail.join("\n"),
         options,
         selected,
