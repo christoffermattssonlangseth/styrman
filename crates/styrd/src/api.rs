@@ -353,6 +353,7 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
 }
 
 /// The device behind the request's bearer token (with the same brake on bad tokens as the WebSocket).
+#[allow(clippy::result_large_err)] // the Err is the ready response, used once
 fn authed(st: &AppState, headers: &HeaderMap) -> Result<String, Response> {
     if st.daemon.auth_throttle.blocked() {
         return Err(error(
