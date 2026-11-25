@@ -7,7 +7,7 @@ use styr_core::event::{Event, EventKind, EventSource, TimestampMs};
 use styr_core::ids::{AgentKind, NativeSessionRef, SessionId};
 use styr_core::ipc::SessionUpdate;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS sessions (
@@ -34,6 +34,29 @@ CREATE TABLE IF NOT EXISTS events (
     PRIMARY KEY (session_id, seq)
 );
 "#;
+
+/// v2: paired phones. Only a SHA-256 of each device secret is stored.
+const SCHEMA_V2: &str = r#"
+CREATE TABLE IF NOT EXISTS devices (
+    id           TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    secret_hash  BLOB NOT NULL,
+    created_ms   INTEGER NOT NULL,
+    last_seen_ms INTEGER,
+    revoked      INTEGER NOT NULL DEFAULT 0
+);
+"#;
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct DeviceRecord {
+    pub id: String,
+    pub name: String,
+    #[serde(skip)]
+    pub secret_hash: Vec<u8>,
+    pub created_ms: TimestampMs,
+    pub last_seen_ms: Option<TimestampMs>,
+    pub revoked: bool,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionRecord {
@@ -84,6 +107,7 @@ impl Store {
             bail!("database schema v{version} is newer than this styrd (v{SCHEMA_VERSION})");
         }
         conn.execute_batch(SCHEMA)?;
+        conn.execute_batch(SCHEMA_V2)?;
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(Self { conn })
     }
@@ -291,6 +315,68 @@ impl Store {
             .prepare("SELECT body FROM events WHERE session_id = ?1 ORDER BY seq")?;
         let rows = st.query_map([session.as_str()], |r| r.get::<_, String>(0))?;
         rows.map(|b| Ok(serde_json::from_str(&b?)?)).collect()
+    }
+}
+
+impl Store {
+    pub fn insert_device(
+        &mut self,
+        id: &str,
+        name: &str,
+        secret_hash: &[u8],
+        now: TimestampMs,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO devices (id, name, secret_hash, created_ms) VALUES (?1, ?2, ?3, ?4)",
+            params![id, name, secret_hash, now],
+        )?;
+        Ok(())
+    }
+
+    fn row_to_device(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeviceRecord> {
+        Ok(DeviceRecord {
+            id: r.get("id")?,
+            name: r.get("name")?,
+            secret_hash: r.get("secret_hash")?,
+            created_ms: r.get("created_ms")?,
+            last_seen_ms: r.get("last_seen_ms")?,
+            revoked: r.get::<_, i64>("revoked")? != 0,
+        })
+    }
+
+    pub fn device(&self, id: &str) -> Result<Option<DeviceRecord>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT * FROM devices WHERE id = ?1",
+                [id],
+                Self::row_to_device,
+            )
+            .optional()?)
+    }
+
+    pub fn devices(&self) -> Result<Vec<DeviceRecord>> {
+        let mut st = self
+            .conn
+            .prepare("SELECT * FROM devices ORDER BY created_ms")?;
+        let rows = st.query_map([], Self::row_to_device)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn touch_device(&mut self, id: &str, now: TimestampMs) -> Result<()> {
+        self.conn.execute(
+            "UPDATE devices SET last_seen_ms = ?2 WHERE id = ?1",
+            params![id, now],
+        )?;
+        Ok(())
+    }
+
+    /// Returns whether a device was revoked.
+    pub fn revoke_device(&mut self, id: &str) -> Result<bool> {
+        Ok(self.conn.execute(
+            "UPDATE devices SET revoked = 1 WHERE id = ?1 AND revoked = 0",
+            [id],
+        )? > 0)
     }
 }
 

@@ -58,8 +58,8 @@ Design details and the reasoning behind them are in [`docs/design.md`](docs/desi
 |---|---|
 | 1. Daemon, Unix socket, SQLite, `styr status` | ✅ done |
 | 2. `styr hook` plus the Claude plugin (mirroring only) and the fake-agent test harness | ✅ done |
-| 3. iOS app: pairing and live sessions (read-only) | next |
-| 4. Permission round-trip | |
+| 3. iOS app: pairing and live sessions (read-only) | ✅ done |
+| 4. Permission round-trip | next |
 | 5. Prompts from the phone | |
 | 6. Push notifications | |
 | 7. Pairing and auth hardening, launchd, install docs | |
@@ -97,6 +97,21 @@ Optional: `alias claude='styr claude'` (likewise `agy`, `codex`). This runs the 
 **Fail-open guarantee.** Every hook goes through `styr hook`. It always exits 0, and prints nothing unless the daemon has an answer. If `styrd` isn't running, or `styr` isn't installed at all, Claude Code behaves exactly as it would without Styrman.
 
 **Privacy.** Until you type `/styr`, Styrman keeps only a session's start and end (for `styr status --all`). Your prompts, Claude's replies and tool calls are not stored, and nothing about the session is visible to the phone.
+
+### The iPhone app
+
+```sh
+cd ios && xcodegen            # regenerate Styrman.xcodeproj after changing project.yml
+open Styrman.xcodeproj        # run on your iPhone (team 7R6QL53THM is preset)
+styr pair                     # on the Mac: shows a QR code; scan it with the iPhone camera
+styr devices                  # list paired phones; `styr devices revoke <ID>` unpairs one
+```
+
+The phone reaches `styrd` over Tailscale only. Have Tailscale running on both the Mac and the iPhone.
+
+- The daemon binds to loopback and the Mac's Tailscale addresses on port 4719 (`STYR_PORT`), never to `0.0.0.0`. `STYR_TAILSCALE=0` restricts it to loopback.
+- Pairing links use the Mac's MagicDNS name (`*.ts.net`). iOS only lets the app make unencrypted connections to `ts.net` hosts, and Tailscale's WireGuard tunnel already encrypts that traffic.
+- The QR code holds a one-time code that expires after 5 minutes. Redeeming it gives the phone a device token, which is stored in the iOS Keychain and sent only in the `Authorization` header.
 
 ### Developing
 

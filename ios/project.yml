@@ -1,0 +1,71 @@
+# Generate Styrman.xcodeproj with:  cd ios && xcodegen
+name: Styrman
+options:
+  bundleIdPrefix: com.christoffermattssonlangseth
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # Set your Apple team id here (or in Xcode › Signing) to run on a device.
+    DEVELOPMENT_TEAM: 7R6QL53THM
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    SWIFT_STRICT_CONCURRENCY: complete
+targets:
+  Styrman:
+    type: application
+    platform: iOS
+    sources:
+      - path: Styrman
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.christoffermattssonlangseth.styrman
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+    info:
+      path: Styrman/Info.plist
+      properties:
+        CFBundleDisplayName: Styrman
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        ITSAppUsesNonExemptEncryption: false
+        NSCameraUsageDescription: Scan the pairing QR code shown by `styr pair` on your Mac.
+        NSLocalNetworkUsageDescription: Styrman connects to the styrd daemon on your Mac.
+        # styrd is reached over Tailscale by its MagicDNS name (*.ts.net); the tunnel is
+        # WireGuard-encrypted, so plain ws:// is allowed for ts.net only (plus loopback
+        # for the simulator). Everything else keeps ATS's TLS requirement.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            ts.net:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
+        CFBundleURLTypes:
+          - CFBundleURLName: com.christoffermattssonlangseth.styrman.pair
+            CFBundleURLSchemes: [styrman]
+  StyrmanTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: StyrmanTests
+    dependencies:
+      - target: Styrman
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.christoffermattssonlangseth.styrman.tests
+schemes:
+  Styrman:
+    build:
+      targets:
+        Styrman: all
+        StyrmanTests: [test]
+    test:
+      targets: [StyrmanTests]

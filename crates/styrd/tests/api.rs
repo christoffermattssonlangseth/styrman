@@ -1,0 +1,314 @@
+//! The phone API over real TCP + WebSocket: pairing, auth, snapshot, backfill,
+//! live events, list updates, unsharing and revocation.
+
+use futures_util::{SinkExt, StreamExt};
+use serde_json::{Value, json};
+use std::time::Duration;
+use styr_core::event::*;
+use styr_core::ids::*;
+use styr_core::ipc::{Client, Request, Response, SessionUpdate};
+use styr_core::paths::Paths;
+use styr_core::phone::{PairResponse, ServerMsg};
+use tokio::sync::oneshot;
+use tokio_tungstenite::tungstenite::{self, client::IntoClientRequest};
+
+struct Daemon {
+    paths: Paths,
+    _dir: tempfile::TempDir,
+    stop: Option<oneshot::Sender<()>>,
+    task: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
+}
+
+impl Daemon {
+    async fn start() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::in_dir(dir.path());
+        let (stop, rx) = oneshot::channel::<()>();
+        let p = paths.clone();
+        let task = tokio::spawn(async move {
+            styrd::run_with(p, styrd::api::ApiConfig::loopback_ephemeral(), async {
+                let _ = rx.await;
+            })
+            .await
+        });
+        let d = Self {
+            paths,
+            _dir: dir,
+            stop: Some(stop),
+            task: Some(task),
+        };
+        for _ in 0..300 {
+            if d.paths.socket.exists() && !d.pairing().await.2.is_empty() {
+                return d;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("daemon/API did not start");
+    }
+
+    async fn call(&self, req: Request) -> Response {
+        let c = Client::new(&self.paths.socket);
+        tokio::task::spawn_blocking(move || c.call(&req))
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    /// (code, host, urls)
+    async fn pairing(&self) -> (String, String, Vec<String>) {
+        match self.call(Request::CreatePairing).await {
+            Response::Pairing {
+                code, host, urls, ..
+            } => (code, host, urls),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    async fn ingest(&self, native: &str, events: Vec<EventKind>) {
+        let update = SessionUpdate {
+            native: Some(NativeSessionRef::new(AgentKind::Claude, native)),
+            cwd: Some("/work/repo".into()),
+            ..Default::default()
+        };
+        self.call(Request::Ingest {
+            session: update,
+            source: EventSource::Hook,
+            events,
+        })
+        .await;
+    }
+
+    async fn stop(mut self) {
+        let _ = self.stop.take().unwrap().send(());
+        self.task.take().unwrap().await.unwrap().unwrap();
+    }
+}
+
+fn http_base(ws_url: &str) -> String {
+    ws_url.replace("ws://", "http://").replace("/v1/ws", "")
+}
+
+async fn pair(_d: &Daemon, base: &str, code: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(format!("{base}/v1/pair"))
+        .json(&json!({"code": code, "device_name": "Test iPhone"}))
+        .send()
+        .await
+        .unwrap()
+}
+
+type Ws =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+async fn connect(url: &str, token: &str) -> Result<Ws, tungstenite::Error> {
+    let mut req = url.into_client_request().unwrap();
+    req.headers_mut()
+        .insert("authorization", format!("Bearer {token}").parse().unwrap());
+    tokio_tungstenite::connect_async(req)
+        .await
+        .map(|(ws, _)| ws)
+}
+
+async fn recv(ws: &mut Ws) -> ServerMsg {
+    loop {
+        let msg = tokio::time::timeout(Duration::from_secs(5), ws.next())
+            .await
+            .expect("timed out")
+            .expect("closed")
+            .unwrap();
+        if let tungstenite::Message::Text(t) = msg {
+            return serde_json::from_str(t.as_str()).unwrap_or_else(|e| panic!("{e}: {t}"));
+        }
+    }
+}
+
+async fn send(ws: &mut Ws, v: Value) {
+    ws.send(tungstenite::Message::Text(v.to_string().into()))
+        .await
+        .unwrap();
+}
+
+fn user(text: &str) -> EventKind {
+    EventKind::UserMessage {
+        text: text.into(),
+        origin: Origin::Terminal,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn phone_api_end_to_end() {
+    let d = Daemon::start().await;
+    let (code, host, urls) = d.pairing().await;
+    let ws_url = urls[0].clone();
+    assert!(ws_url.starts_with("ws://127.0.0.1:"), "{ws_url}");
+    let base = http_base(&ws_url);
+
+    // Health needs no token.
+    let h: Value = reqwest::get(format!("{base}/v1/health"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(h["ok"], true);
+
+    // Wrong code → 401; the right one works exactly once.
+    assert_eq!(pair(&d, &base, "WRONGCODE1").await.status(), 401);
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/v1/pair"))
+        .json(&json!({"code": code.to_lowercase(), "device_name": "Test iPhone"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let paired: PairResponse = resp.json().await.unwrap();
+    assert_eq!(paired.host, host);
+    assert!(paired.token.starts_with("sd1."));
+    assert_eq!(
+        pair(&d, &base, &code).await.status(),
+        401,
+        "codes are one-time"
+    );
+
+    // No token / bad token → refused before the upgrade.
+    assert!(connect(&ws_url, "sd1.nope.nope").await.is_err());
+    let forged = format!("{}x", paired.token);
+    assert!(connect(&ws_url, &forged).await.is_err());
+
+    // A shared session with some history, and an unshared one.
+    d.call(Request::SetSharing {
+        native: NativeSessionRef::new(AgentKind::Claude, "s1"),
+        shared: true,
+    })
+    .await;
+    d.ingest("s1", vec![user("one"), user("two")]).await;
+    d.ingest("hidden", vec![user("private")]).await;
+
+    let mut ws = connect(&ws_url, &paired.token)
+        .await
+        .expect("connect with token");
+    let ServerMsg::Hello {
+        device_id,
+        protocol,
+        ..
+    } = recv(&mut ws).await
+    else {
+        panic!()
+    };
+    assert_eq!(
+        (device_id.as_str(), protocol),
+        (paired.device_id.as_str(), 1)
+    );
+    let ServerMsg::Sessions { sessions } = recv(&mut ws).await else {
+        panic!()
+    };
+    assert_eq!(sessions.len(), 1, "unshared sessions are invisible");
+    let sid = sessions[0].id.clone();
+
+    // Unknown/unshared sessions cannot be subscribed to.
+    send(&mut ws, json!({"type": "subscribe", "session": "nope"})).await;
+    assert!(matches!(recv(&mut ws).await, ServerMsg::Error { .. }));
+
+    // Subscribe from seq 1: backfill the rest, then live events.
+    send(
+        &mut ws,
+        json!({"type": "subscribe", "session": sid, "since_seq": 1}),
+    )
+    .await;
+    let ServerMsg::Events { events, .. } = recv(&mut ws).await else {
+        panic!()
+    };
+    assert_eq!(events.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![2, 3]);
+    let ServerMsg::Subscribed { last_seq, .. } = recv(&mut ws).await else {
+        panic!()
+    };
+    assert_eq!(last_seq, 3);
+
+    d.ingest("s1", vec![user("three")]).await;
+    let mut got_event = false;
+    let mut got_update = false;
+    while !(got_event && got_update) {
+        match recv(&mut ws).await {
+            ServerMsg::Event { event } => {
+                assert_eq!(event.seq, 4);
+                assert_eq!(event.kind, user("three"));
+                got_event = true;
+            }
+            ServerMsg::SessionUpdated { session } => {
+                assert_eq!(session.id, sid);
+                got_update = true;
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    // Activity in an unshared session leaks nothing.
+    d.ingest("hidden", vec![user("still private")]).await;
+    // Unsharing removes the session from the phone.
+    d.call(Request::SetSharing {
+        native: NativeSessionRef::new(AgentKind::Claude, "s1"),
+        shared: false,
+    })
+    .await;
+    loop {
+        match recv(&mut ws).await {
+            ServerMsg::SessionRemoved { id } => {
+                assert_eq!(id, sid);
+                break;
+            }
+            ServerMsg::SessionUpdated { session } => panic!("leaked {session:?}"),
+            ServerMsg::Event { event } => panic!("leaked {event:?}"),
+            _ => {}
+        }
+    }
+
+    // Revoking the device closes its live connection and kills the token.
+    let suffix = &paired.device_id;
+    assert!(matches!(
+        d.call(Request::RevokeDevice { id: suffix.clone() }).await,
+        Response::Ok
+    ));
+    let closed = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match ws.next().await {
+                None | Some(Err(_)) | Some(Ok(tungstenite::Message::Close(_))) => return,
+                _ => {}
+            }
+        }
+    })
+    .await;
+    assert!(closed.is_ok(), "revoked connection must close");
+    assert!(connect(&ws_url, &paired.token).await.is_err());
+
+    match d.call(Request::ListDevices).await {
+        Response::Devices { devices } => {
+            assert_eq!(devices.len(), 1);
+            assert!(devices[0].revoked);
+            assert!(devices[0].last_seen_ms.is_some());
+        }
+        other => panic!("{other:?}"),
+    }
+    d.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn shutdown_closes_open_phone_connections() {
+    let d = Daemon::start().await;
+    let (code, _, urls) = d.pairing().await;
+    let base = http_base(&urls[0]);
+    let paired: PairResponse = reqwest::Client::new()
+        .post(format!("{base}/v1/pair"))
+        .json(&json!({"code": code, "device_name": "x"}))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let mut ws = connect(&urls[0], &paired.token).await.unwrap();
+    recv(&mut ws).await;
+    // Must not hang on the open WebSocket.
+    tokio::time::timeout(Duration::from_secs(10), d.stop())
+        .await
+        .expect("daemon stopped with a phone connected");
+}

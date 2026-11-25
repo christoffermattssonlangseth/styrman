@@ -18,6 +18,17 @@ styr-adapter-pty.workspace = true
 tokio = { version = "1.54.1", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+axum = { version = "0.8.9", features = ["ws"] }
+if-addrs = "0.15.0"
+rand = "0.10.4"
+sha2 = "0.11.1"
+subtle = "2.6.1"
+base64 = "0.23.1"
+hex = "0.4.3"
+futures-util = "0.3.34"
+gethostname = "1.1.0"
 
 [dev-dependencies]
+reqwest = { version = "0.13.5", features = ["json"] }
 tempfile = "3.27.0"
+tokio-tungstenite = "0.30.0"

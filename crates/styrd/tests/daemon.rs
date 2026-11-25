@@ -19,7 +19,7 @@ async fn start(paths: &Paths) -> Running {
     let (stop, rx) = oneshot::channel::<()>();
     let p = paths.clone();
     let task = tokio::spawn(async move {
-        styrd::run(p, async {
+        styrd::run_with(p, styrd::api::ApiConfig::loopback_ephemeral(), async {
             let _ = rx.await;
         })
         .await
@@ -154,7 +154,13 @@ async fn second_instance_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let paths = Paths::in_dir(dir.path());
     let d = start(&paths).await;
-    let err = styrd::run(paths.clone(), async {}).await.unwrap_err();
+    let err = styrd::run_with(
+        paths.clone(),
+        styrd::api::ApiConfig::loopback_ephemeral(),
+        async {},
+    )
+    .await
+    .unwrap_err();
     assert!(format!("{err}").contains("already running"), "{err}");
     // …and the first one still answers.
     assert!(matches!(

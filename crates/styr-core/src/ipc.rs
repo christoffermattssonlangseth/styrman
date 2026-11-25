@@ -48,6 +48,12 @@ pub enum Request {
     Hook {
         hook: crate::adapter::RawHook,
     },
+    /// Start pairing a phone: a one-time code plus the URLs the phone can reach.
+    CreatePairing,
+    ListDevices,
+    RevokeDevice {
+        id: String,
+    },
 }
 
 fn default_limit() -> u32 {
@@ -75,6 +81,16 @@ pub enum Response {
     /// What `styr hook` prints on stdout (`None`: print nothing, exit 0).
     HookReply {
         stdout: Option<serde_json::Value>,
+    },
+    Pairing {
+        code: String,
+        expires_ms: TimestampMs,
+        /// Phone-API WebSocket URLs, Tailscale first.
+        urls: Vec<String>,
+        host: String,
+    },
+    Devices {
+        devices: Vec<DeviceInfo>,
     },
     Ok,
     Error {
@@ -114,6 +130,15 @@ pub struct SessionSummary {
     pub created_ms: TimestampMs,
     pub updated_ms: TimestampMs,
     pub last_seq: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeviceInfo {
+    pub id: String,
+    pub name: String,
+    pub created_ms: TimestampMs,
+    pub last_seen_ms: Option<TimestampMs>,
+    pub revoked: bool,
 }
 
 #[derive(Debug, thiserror::Error)]

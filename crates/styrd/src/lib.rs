@@ -1,5 +1,7 @@
 //! `styrd`, the Styrman daemon. A library so integration tests can run it in-process.
 
+pub mod api;
+pub mod auth;
 pub mod daemon;
 pub mod ipc;
 pub mod store;
@@ -44,14 +46,26 @@ pub fn default_adapters() -> Vec<Arc<dyn styr_core::adapter::AgentAdapter>> {
     ]
 }
 
-/// Run the daemon until `shutdown` resolves.
+/// Run the daemon until `shutdown` resolves, with the phone API configured from the environment.
 pub async fn run(paths: Paths, shutdown: impl Future<Output = ()>) -> Result<()> {
+    run_with(paths, api::ApiConfig::from_env(), shutdown).await
+}
+
+pub async fn run_with(
+    paths: Paths,
+    api_cfg: api::ApiConfig,
+    shutdown: impl Future<Output = ()>,
+) -> Result<()> {
     let _lock = lock_instance(&paths)?;
     let store = store::Store::open(&paths.db)?;
     let daemon: Arc<Daemon> = Daemon::open(store, default_adapters())?;
     let listener = ipc::bind(&paths.socket)?;
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    let api = tokio::spawn(api::run_listeners(daemon.clone(), api_cfg, stop_rx));
     tracing::info!(socket = %paths.socket.display(), db = %paths.db.display(), "styrd {} ready", styr_core::VERSION);
     let result = ipc::serve(daemon, listener, shutdown).await;
+    let _ = stop_tx.send(true);
+    let _ = api.await;
     let _ = std::fs::remove_file(&paths.socket);
     tracing::info!("styrd stopped");
     result

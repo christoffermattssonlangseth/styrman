@@ -16,9 +16,23 @@ use styr_core::ids::{AgentKind, NativeSessionRef, SessionId};
 use styr_core::ipc::{Request, Response, SessionSummary, SessionUpdate};
 use tokio::sync::broadcast;
 
+/// What the phone API listens to.
+#[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)] // short-lived broadcast values
+pub enum BusMsg {
+    /// A persisted event of a shared session.
+    Event(Event),
+    /// A session's summary (status, metadata, sharing) may have changed.
+    SessionChanged(SessionId),
+}
+
 pub struct Daemon {
     inner: Mutex<Inner>,
-    bus: broadcast::Sender<Event>,
+    bus: broadcast::Sender<BusMsg>,
+    pub auth: crate::auth::Auth,
+    api_urls: Mutex<Vec<String>>,
+    /// Device ids revoked while connected; their WebSockets close.
+    pub revoked: broadcast::Sender<String>,
     adapters: HashMap<AgentKind, Arc<dyn AgentAdapter>>,
 }
 
@@ -66,6 +80,9 @@ impl Daemon {
         Ok(Arc::new(Self {
             inner: Mutex::new(inner),
             bus,
+            auth: crate::auth::Auth::default(),
+            revoked: broadcast::channel(16).0,
+            api_urls: Mutex::new(Vec::new()),
             adapters: adapters.into_iter().map(|a| (a.kind(), a)).collect(),
         }))
     }
@@ -145,7 +162,7 @@ impl Daemon {
     }
 
     /// Live stream of persisted events of shared sessions (for the phone API).
-    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
+    pub fn subscribe(&self) -> broadcast::Receiver<BusMsg> {
         self.bus.subscribe()
     }
 
@@ -185,9 +202,11 @@ impl Daemon {
             }
         }
         drop(g);
+        // No subscribers is fine.
         for ev in published {
-            let _ = self.bus.send(ev); // no subscribers is fine
+            let _ = self.bus.send(BusMsg::Event(ev));
         }
+        let _ = self.bus.send(BusMsg::SessionChanged(rec.id.clone()));
         Ok((rec.id, seqs))
     }
 
@@ -220,33 +239,117 @@ impl Daemon {
         self.lock().store.session_by_native(native)
     }
 
+    fn summary_of(inner: &Inner, rec: SessionRecord) -> SessionSummary {
+        let status = inner
+            .trackers
+            .get(&rec.id)
+            .map(|t| t.status())
+            .unwrap_or(styr_core::SessionStatus::Waiting);
+        SessionSummary {
+            id: rec.id,
+            agent: rec.native.agent,
+            native_id: rec.native.native_id,
+            cwd: rec.cwd,
+            title: rec.title,
+            model: rec.model,
+            shared: rec.shared,
+            status,
+            created_ms: rec.created_ms,
+            updated_ms: rec.updated_ms,
+            last_seq: rec.last_seq,
+        }
+    }
+
     pub fn summaries(&self, include_unshared: bool) -> Result<Vec<SessionSummary>> {
         let g = self.lock();
-        let mut out = Vec::new();
-        for rec in g.store.sessions()? {
-            if !include_unshared && !rec.shared {
-                continue;
-            }
-            let status = g
-                .trackers
-                .get(&rec.id)
-                .map(|t| t.status())
-                .unwrap_or(styr_core::SessionStatus::Waiting);
-            out.push(SessionSummary {
-                id: rec.id,
-                agent: rec.native.agent,
-                native_id: rec.native.native_id,
-                cwd: rec.cwd,
-                title: rec.title,
-                model: rec.model,
-                shared: rec.shared,
-                status,
-                created_ms: rec.created_ms,
-                updated_ms: rec.updated_ms,
-                last_seq: rec.last_seq,
-            });
+        let recs = g.store.sessions()?;
+        Ok(recs
+            .into_iter()
+            .filter(|r| include_unshared || r.shared)
+            .map(|r| Self::summary_of(&g, r))
+            .collect())
+    }
+
+    pub fn summary(&self, id: &SessionId) -> Result<Option<SessionSummary>> {
+        let g = self.lock();
+        Ok(g.store.session(id)?.map(|r| Self::summary_of(&g, r)))
+    }
+
+    // ---- phones ----
+
+    pub fn set_api_urls(&self, urls: Vec<String>) {
+        *self.api_urls.lock().unwrap_or_else(|p| p.into_inner()) = urls;
+    }
+
+    pub fn api_urls(&self) -> Vec<String> {
+        self.api_urls
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    pub fn host_name() -> String {
+        let h = gethostname::gethostname().to_string_lossy().into_owned();
+        h.strip_suffix(".local").unwrap_or(&h).to_owned()
+    }
+
+    /// Redeem a pairing code for a new device token. `Ok(None)`: bad or used code.
+    pub fn pair(
+        &self,
+        code: &str,
+        device_name: &str,
+    ) -> Result<Option<styr_core::phone::PairResponse>> {
+        if !self.auth.redeem(code) {
+            return Ok(None);
         }
-        Ok(out)
+        let id = SessionId::generate().0; // a ULID
+        let secret = crate::auth::new_secret();
+        let name: String = device_name.trim().chars().take(64).collect();
+        let name = if name.is_empty() {
+            "iPhone".to_owned()
+        } else {
+            name
+        };
+        self.lock().store.insert_device(
+            &id,
+            &name,
+            &crate::auth::hash_secret(&secret),
+            now_ms(),
+        )?;
+        tracing::info!(device = %id, %name, "paired a new device");
+        Ok(Some(styr_core::phone::PairResponse {
+            token: crate::auth::make_token(&id, &secret),
+            device_id: id,
+            host: Self::host_name(),
+        }))
+    }
+
+    /// The device id for a valid, unrevoked bearer token.
+    pub fn authenticate(&self, token: &str) -> Option<String> {
+        let (id, secret) = crate::auth::parse_token(token)?;
+        let mut g = self.lock();
+        let dev = g.store.device(id).ok()??;
+        if dev.revoked || !crate::auth::secret_matches(secret, &dev.secret_hash) {
+            return None;
+        }
+        let _ = g.store.touch_device(id, now_ms());
+        Some(dev.id)
+    }
+
+    pub fn devices(&self) -> Result<Vec<styr_core::ipc::DeviceInfo>> {
+        Ok(self
+            .lock()
+            .store
+            .devices()?
+            .into_iter()
+            .map(|d| styr_core::ipc::DeviceInfo {
+                id: d.id,
+                name: d.name,
+                created_ms: d.created_ms,
+                last_seen_ms: d.last_seen_ms,
+                revoked: d.revoked,
+            })
+            .collect())
     }
 
     pub fn events(&self, session: &SessionId, since_seq: u64, limit: u32) -> Result<Vec<Event>> {
@@ -279,6 +382,27 @@ impl Daemon {
             Request::Hook { hook } => Ok(Response::HookReply {
                 stdout: self.handle_hook(hook).await,
             }),
+            Request::CreatePairing => {
+                let (code, expires_ms) = self.auth.new_code();
+                Ok(Response::Pairing {
+                    code,
+                    expires_ms,
+                    urls: self.api_urls(),
+                    host: Self::host_name(),
+                })
+            }
+            Request::ListDevices => self.devices().map(|devices| Response::Devices { devices }),
+            Request::RevokeDevice { id } => {
+                let revoked = self.lock().store.revoke_device(&id);
+                match revoked {
+                    Ok(true) => {
+                        let _ = self.revoked.send(id);
+                        Ok(Response::Ok)
+                    }
+                    Ok(false) => Err(anyhow::anyhow!("no active device {id}")),
+                    Err(e) => Err(e),
+                }
+            }
             Request::Events {
                 session,
                 since_seq,

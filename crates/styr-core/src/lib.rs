@@ -7,6 +7,7 @@ pub mod event;
 pub mod ids;
 pub mod ipc;
 pub mod paths;
+pub mod phone;
 pub mod status;
 
 pub use command::Command;

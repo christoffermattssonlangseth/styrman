@@ -52,6 +52,21 @@ enum Cmd {
         #[arg(long)]
         off: bool,
     },
+    /// Pair a phone: shows a QR code with a one-time code (valid 5 minutes).
+    Pair {
+        /// Use this phone-API URL instead of the detected Tailscale one,
+        /// e.g. ws://my-mac.tailnet.ts.net:4719/v1/ws
+        #[arg(long)]
+        url: Option<String>,
+        /// Print the pairing details as JSON instead of a QR code.
+        #[arg(long)]
+        json: bool,
+    },
+    /// List paired phones, or revoke one.
+    Devices {
+        #[command(subcommand)]
+        action: Option<DeviceCmd>,
+    },
     /// Hook helper called by agent hooks: `styr hook <agent> <event>` (stdin: payload).
     /// Always exits 0; prints nothing unless the daemon has an answer.
     Hook {
@@ -61,6 +76,15 @@ enum Cmd {
     /// Launch an agent through Styrman: `styr claude …`, `styr agy …`, `styr codex …`.
     #[command(external_subcommand)]
     Launch(Vec<OsString>),
+}
+
+#[derive(Subcommand)]
+enum DeviceCmd {
+    /// Revoke a device (its connection closes at once; it must pair again).
+    Revoke {
+        /// Device id, or a unique suffix of it (the ID column of `styr devices`).
+        id: String,
+    },
 }
 
 fn client() -> Client {
@@ -140,6 +164,47 @@ fn main() -> Result<()> {
             for e in events {
                 println!("{:>5}  {}", e.seq, serde_json::to_string(&e.kind)?);
             }
+        }
+        Cmd::Pair { url, json } => pair(url, json)?,
+        Cmd::Devices { action: None } => {
+            let Response::Devices { devices } = call(Request::ListDevices)? else {
+                bail!("unexpected response");
+            };
+            if devices.is_empty() {
+                println!("no paired devices (run `styr pair`)");
+            }
+            let now = now_ms();
+            for d in devices {
+                println!(
+                    "{:<10} {:<24} {:<8} last seen {}",
+                    &d.id[d.id.len().saturating_sub(8)..],
+                    d.name,
+                    if d.revoked { "revoked" } else { "active" },
+                    d.last_seen_ms
+                        .map(|t| format!("{} ago", ago(now - t)))
+                        .unwrap_or_else(|| "never".into())
+                );
+            }
+        }
+        Cmd::Devices {
+            action: Some(DeviceCmd::Revoke { id }),
+        } => {
+            let Response::Devices { devices } = call(Request::ListDevices)? else {
+                bail!("unexpected response");
+            };
+            let up = id.to_ascii_uppercase();
+            let hits: Vec<_> = devices
+                .iter()
+                .filter(|d| !d.revoked && d.id.ends_with(&up))
+                .collect();
+            let [d] = hits.as_slice() else {
+                bail!(
+                    "'{id}' must match exactly one active device ({} matched)",
+                    hits.len()
+                );
+            };
+            call(Request::RevokeDevice { id: d.id.clone() })?;
+            println!("revoked {} ({})", d.name, d.id);
         }
         Cmd::Share {
             agent,
@@ -240,4 +305,48 @@ fn ago(ms: i64) -> String {
         3600..86400 => format!("{}h", s / 3600),
         _ => format!("{}d", s / 86400),
     }
+}
+
+fn pair(url_override: Option<String>, json: bool) -> Result<()> {
+    let Response::Pairing {
+        code,
+        expires_ms,
+        urls,
+        host,
+    } = call(Request::CreatePairing)?
+    else {
+        bail!("unexpected response");
+    };
+    let url = match url_override.or_else(|| urls.first().cloned()) {
+        Some(u) => u,
+        None => bail!("styrd has no phone API listener (is the port in use? see the daemon log)"),
+    };
+    let link = styr_core::phone::pair_link(&url, &code, &host);
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({"link": link, "url": url, "code": code, "host": host, "expires_ms": expires_ms})
+        );
+        return Ok(());
+    }
+    let qr = qrcode::QrCode::new(link.as_bytes())
+        .map_err(|e| anyhow::anyhow!("encoding QR code: {e:?}"))?;
+    let art = qr
+        .render::<qrcode::render::unicode::Dense1x2>()
+        .dark_color(qrcode::render::unicode::Dense1x2::Light)
+        .light_color(qrcode::render::unicode::Dense1x2::Dark)
+        .quiet_zone(true)
+        .build();
+    println!("\nScan with the iPhone camera to pair Styrman with {host}:\n");
+    println!("{art}");
+    println!("Or enter manually in the app:");
+    println!("  address  {url}");
+    println!("  code     {}-{}", &code[..5], &code[5..]);
+    println!("\nThe code works once and expires in 5 minutes.");
+    if url.contains("127.0.0.1") {
+        println!(
+            "Note: Tailscale was not detected, so this address only works on this Mac (e.g. the iOS Simulator)."
+        );
+    }
+    Ok(())
 }

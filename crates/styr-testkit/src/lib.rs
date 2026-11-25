@@ -58,9 +58,13 @@ impl TestDaemon {
                 .worker_threads(2)
                 .enable_all()
                 .build()?;
-            rt.block_on(styrd::run(paths, async {
-                let _ = rx.await;
-            }))
+            rt.block_on(styrd::run_with(
+                paths,
+                styrd::api::ApiConfig::loopback_ephemeral(),
+                async {
+                    let _ = rx.await;
+                },
+            ))
         });
         for _ in 0..500 {
             if self.paths.socket.exists() {
