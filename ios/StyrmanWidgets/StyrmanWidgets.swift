@@ -14,42 +14,48 @@ struct StyrmanWidgets: WidgetBundle {
 
 // MARK: - Pieces
 
+/// The app's amber: bright on dark, deeper on light.
+private let amber = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(red: 1, green: 0.81, blue: 0.51, alpha: 1)
+                                                                 : UIColor(red: 0.66, green: 0.39, blue: 0, alpha: 1) })
+
+/// A solid circle in the agent's colour with its glyph in white.
 private struct AgentDot: View {
     let agent: String
-    var size: CGFloat = 22
+    var size: CGFloat = 20
     var body: some View {
         Image(systemName: AgentStyle.symbol(agent))
-            .font(.system(size: size * 0.45, weight: .bold))
-            .foregroundStyle(AgentStyle.color(agent))
+            .font(.system(size: size * 0.48, weight: .bold))
+            .foregroundStyle(.white)
             .frame(width: size, height: size)
-            .background(AgentStyle.color(agent).opacity(0.16), in: Circle())
+            .background(AgentStyle.color(agent), in: Circle())
     }
 }
 
-private struct StatusText: View {
-    let status: String
-    var body: some View {
-        let needs = AgentStyle.needsYou(status)
-        HStack(spacing: 4) {
-            Circle().fill(needs ? Color.orange : Color.red.opacity(0.8)).frame(width: 6, height: 6)
-            Text(AgentStyle.label(status))
-        }
-        .font(.caption2.weight(.semibold))
-        .foregroundStyle(needs ? Color.orange : Color.secondary)
+/// "Approve", "Your turn", "Working": what each row wants, in a word.
+private func shortStatus(_ status: String) -> String {
+    switch status {
+    case "needs_approval": "Approve"
+    case "waiting": "Your turn"
+    case "error": "Error"
+    default: "Working"
     }
 }
 
+/// One line: agent (in its colour) · folder, and what it wants.
 private struct RowView: View {
     let row: LiveRow
     var body: some View {
+        let needs = AgentStyle.needsYou(row.status)
         HStack(spacing: 8) {
             AgentDot(agent: row.agent)
-            VStack(alignment: .leading, spacing: 0) {
-                Text(row.repo).font(.subheadline.weight(.semibold)).lineLimit(1)
-                Text(row.agent).font(.caption2).foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 4)
-            StatusText(status: row.status)
+            (Text(row.agent).fontWeight(.semibold).foregroundColor(AgentStyle.color(row.agent))
+                + Text("  \(row.repo)").foregroundColor(.secondary))
+                .font(.footnote)
+                .lineLimit(1)
+            Spacer(minLength: 6)
+            Text(shortStatus(row.status))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(needs ? amber : Color.secondary)
         }
     }
 }
@@ -69,18 +75,18 @@ struct StyrmanLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: StyrmanActivityAttributes.self) { context in
             let s = context.state
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
-                    Image("Wheel").resizable().frame(width: 18, height: 18)
+                    Image("Wheel").resizable().frame(width: 16, height: 16)
                     Text("Styrman").font(.footnote.weight(.semibold))
                     Spacer()
-                    Text(summary(s)).font(.footnote.weight(.medium))
-                        .foregroundStyle(s.needs > 0 ? Color.orange : Color.secondary)
+                    Text(summary(s)).font(.footnote.weight(.semibold))
+                        .foregroundStyle(s.needs > 0 ? amber : Color.secondary)
                 }
                 ForEach(s.rows, id: \.self) { RowView(row: $0) }
             }
-            .padding(16)
-            .activityBackgroundTint(Color(.systemBackground).opacity(0.85))
+            .padding(.horizontal, 16).padding(.vertical, 14)
+            // No tint: the system's own Lock Screen material, like the other activities.
         } dynamicIsland: { context in
             let s = context.state
             return DynamicIsland {
@@ -92,7 +98,7 @@ struct StyrmanLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.trailing) {
                     Text(summary(s)).font(.caption.weight(.medium))
-                        .foregroundStyle(s.needs > 0 ? Color.orange : Color.secondary)
+                        .foregroundStyle(s.needs > 0 ? amber : Color.secondary)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(spacing: 8) {
@@ -108,19 +114,19 @@ struct StyrmanLiveActivity: Widget {
                 }
             } compactTrailing: {
                 if s.needs > 0 {
-                    Text("\(s.needs)").font(.caption.weight(.bold)).foregroundStyle(.orange)
+                    Text("\(s.needs)").font(.caption.weight(.bold)).foregroundStyle(amber)
                 } else {
                     Image(systemName: "circle.fill").font(.system(size: 7)).foregroundStyle(.red)
                         .symbolEffect(.pulse, options: .repeating)
                 }
             } minimal: {
                 if s.needs > 0 {
-                    Text("\(s.needs)").font(.caption.weight(.bold)).foregroundStyle(.orange)
+                    Text("\(s.needs)").font(.caption.weight(.bold)).foregroundStyle(amber)
                 } else {
                     Image("Wheel").resizable().frame(width: 16, height: 16)
                 }
             }
-            .keylineTint(s.needs > 0 ? .orange : .red)
+            .keylineTint(s.needs > 0 ? amber : .red)
         }
     }
 }
@@ -183,7 +189,7 @@ struct AgentsWidgetView: View {
                 }
                 Text(summary(s))
                     .font(.headline)
-                    .foregroundStyle(s.needs > 0 ? Color.orange : Color.primary)
+                    .foregroundStyle(s.needs > 0 ? amber : Color.primary)
                 ForEach(s.rows.prefix(family == .systemSmall ? 2 : 3), id: \.self) { r in
                     if family == .systemSmall {
                         HStack(spacing: 6) {
