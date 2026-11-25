@@ -103,29 +103,51 @@ struct SessionRow: View {
     let session: SessionSummary
 
     var body: some View {
+        // Three calm lines; nothing important competes for width:
+        //   repo                          [status]
+        //   Agent · first message              time
+        //   ~/folder
         HStack(alignment: .center, spacing: 12) {
             AgentAvatar(agent: session.agent)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(session.repoName)
+                        .font(.headline)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    StatusChip(status: session.status)
+                        .fixedSize()
+                }
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(session.agent.displayName)
-                        .font(.subheadline.weight(.bold))
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Theme.color(for: session.agent))
-                    Text(session.repoName).font(.headline).lineLimit(1)
+                        .fixedSize()
+                    if let title = session.title, !title.isEmpty {
+                        Text("· \(title)")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                    Text(session.updated, format: .relative(presentation: .named))
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .fixedSize()
                 }
-                if let title = session.title, !title.isEmpty {
-                    Text(title).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                if let cwd = session.cwd, !cwd.isEmpty {
+                    Text(shortPath(cwd))
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-                Text(session.cwd.map(shortPath) ?? "")
-                    .font(.caption).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
-            }
-            Spacer(minLength: 8)
-            VStack(alignment: .trailing, spacing: 4) {
-                StatusChip(status: session.status)
-                Text(session.updated, format: .relative(presentation: .named))
-                    .font(.caption2).foregroundStyle(.tertiary)
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
     }
 }
 
