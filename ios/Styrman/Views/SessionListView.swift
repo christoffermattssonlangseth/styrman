@@ -16,8 +16,8 @@ struct SessionListView: View {
     var body: some View {
         NavigationStack(path: $path) {
             List {
-                SummaryHeader(working: working.count, needs: needsYou.count, done: done.count)
-                    .plainRow(top: 4, bottom: 10)
+                SummaryHeader()
+                    .plainRow(top: 2, bottom: 4)
                 if connection.state == .unauthorized {
                     UnpairedCard().plainRow()
                 }
@@ -73,7 +73,6 @@ struct SessionListView: View {
             }
             .animation(.snappy, value: connection.troubled)
             .navigationTitle("Styrman")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { WheelMark(size: 26) }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -178,38 +177,15 @@ private struct HomeBackground: View {
     }
 }
 
-/// "2 need you · 1 working", the Mac, and the connection, at a glance.
+/// The Mac and the connection, quietly, under the title.
 private struct SummaryHeader: View {
     @Environment(DaemonConnection.self) private var connection
-    let working: Int
-    let needs: Int
-    let done: Int
-
-    /// "2 need you" in amber, the rest plain.
-    private var headline: Text {
-        let needsText = Text(needs == 1 ? "1 needs you" : "\(needs) need you").foregroundStyle(Theme.attention)
-        let workText = Text(working == 1 ? "1 at work" : "\(working) at work")
-        switch (needs, working) {
-        case (0, 0): return Text(connection.sessions.isEmpty ? "Ready when you are" : "All quiet")
-        case (_, 0): return needsText
-        case (0, _): return workText
-        default: return Text("\(needsText), \(workText)")
-        }
-    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            headline
-                .font(.system(.largeTitle, design: .rounded, weight: .bold))
-                .contentTransition(.numericText())
-                .animation(.snappy, value: needs * 1000 + working)
-                .lineLimit(2)
-                .minimumScaleFactor(0.7)
-            HStack(spacing: 8) {
-                ConnectionDot()
-                Text(connection.host.isEmpty ? "Your Mac" : connection.host)
-                    .font(.subheadline.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
-            }
+        HStack(spacing: 7) {
+            ConnectionDot()
+            Text(connection.host.isEmpty ? "Your Mac" : connection.host)
+                .font(.footnote.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
