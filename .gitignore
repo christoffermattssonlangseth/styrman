@@ -8,3 +8,8 @@
 xcuserdata/
 DerivedData/
 *.xcuserstate
+
+# Xcode build output (xcodebuild -derivedDataPath build)
+ios/build/
+# Per-developer signing (see ios/Signing.xcconfig)
+ios/Signing.local.xcconfig
