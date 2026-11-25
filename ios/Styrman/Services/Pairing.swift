@@ -88,7 +88,8 @@ enum Pairing {
 
 /// Device credentials in the Keychain (this device only, available after first unlock).
 enum CredentialStore {
-    private static let service = "com.christoffermattssonlangseth.styrman"
+    // The app's own bundle id (same value as before, so existing pairings stay).
+    private static let service = Bundle.main.bundleIdentifier ?? "styrman"
     private static let account = "daemon"
 
     static func load() -> Credentials? {

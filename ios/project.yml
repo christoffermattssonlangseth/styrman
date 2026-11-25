@@ -1,17 +1,19 @@
 # Generate Styrman.xcodeproj with:  cd ios && xcodegen
 name: Styrman
 options:
-  bundleIdPrefix: com.christoffermattssonlangseth
   deploymentTarget:
     iOS: "26.0"
   createIntermediateGroups: true
+configFiles:
+  Debug: Signing.xcconfig
+  Release: Signing.xcconfig
 settings:
   base:
     SWIFT_VERSION: "6.0"
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
-    # Set your Apple team id here (or in Xcode › Signing) to run on a device.
-    DEVELOPMENT_TEAM: 7R6QL53THM
+    # Team and bundle id come from Signing.xcconfig (override in Signing.local.xcconfig).
+    DEVELOPMENT_TEAM: $(STYRMAN_TEAM_ID)
     CODE_SIGN_STYLE: Automatic
     ENABLE_USER_SCRIPT_SANDBOXING: YES
     SWIFT_STRICT_CONCURRENCY: complete
@@ -23,13 +25,20 @@ targets:
       - path: Styrman
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.christoffermattssonlangseth.styrman
+        PRODUCT_BUNDLE_IDENTIFIER: $(STYRMAN_BUNDLE_ID)
         TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         CODE_SIGN_ENTITLEMENTS: Styrman/Styrman.entitlements
         # APNs environment the app reports to styrd: development builds use the sandbox.
-        STYRMAN_APNS_ENV: sandbox
+      configs:
+        Debug:
+          STYRMAN_APNS_ENV: sandbox
+          STYRMAN_APS_ENVIRONMENT: development
+        # TestFlight / App Store builds get push through Apple's production servers.
+        Release:
+          STYRMAN_APNS_ENV: production
+          STYRMAN_APS_ENVIRONMENT: production
     info:
       path: Styrman/Info.plist
       properties:
@@ -54,7 +63,7 @@ targets:
               NSIncludesSubdomains: true
               NSExceptionAllowsInsecureHTTPLoads: true
         CFBundleURLTypes:
-          - CFBundleURLName: com.christoffermattssonlangseth.styrman.pair
+          - CFBundleURLName: $(STYRMAN_BUNDLE_ID).pair
             CFBundleURLSchemes: [styrman]
   StyrmanTests:
     type: bundle.unit-test
@@ -66,7 +75,7 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
-        PRODUCT_BUNDLE_IDENTIFIER: com.christoffermattssonlangseth.styrman.tests
+        PRODUCT_BUNDLE_IDENTIFIER: $(STYRMAN_BUNDLE_ID).tests
 schemes:
   Styrman:
     build:

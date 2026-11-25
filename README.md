@@ -84,7 +84,7 @@ styr doctor         # checks every part; `styr doctor --live` also runs an end-t
 
 `styr setup` installs the Claude Code plugin from a copy built into `styr`, so you don't need to keep the checkout around. It asks before touching your shell config.
 
-The iPhone app, for now: `cd ios && xcodegen && open Styrman.xcodeproj`, set your signing team, then Run on your iPhone. TestFlight is on the roadmap.
+The iPhone app: `cd ios && xcodegen && open Styrman.xcodeproj`, then Run on your iPhone. To build under your own Apple developer account, put your team and bundle id in `ios/Signing.local.xcconfig` (see `ios/Signing.xcconfig`). Releasing to TestFlight: [`docs/testflight.md`](docs/testflight.md).
 
 **Claude Code updates.** Styrman records the Claude Code version each session runs. If it's a version Styrman hasn't been checked with, `styr status`, `styr doctor` and the phone tell you. `styr doctor --live` then checks it end to end with one small Haiku call, and marks the version verified if everything works.
 

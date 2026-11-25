@@ -1,0 +1,14 @@
+// Apple signing for Styrman.
+//
+// These are the published app's values. To build under your own Apple developer
+// account, create ios/Signing.local.xcconfig (git-ignored) with your own:
+//
+//   STYRMAN_TEAM_ID = ABCDE12345
+//   STYRMAN_BUNDLE_ID = com.example.styrman
+//
+// then run `xcodegen` again. The bundle id must also be the APNs topic you give
+// `styr push setup --topic` if you send notifications with your own key.
+STYRMAN_TEAM_ID = 7R6QL53THM
+STYRMAN_BUNDLE_ID = com.christoffermattssonlangseth.styrman
+
+#include? "Signing.local.xcconfig"

@@ -15,6 +15,7 @@
 		4B398F324DB74E7B8197541E /* DaemonConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C5647A67574DB7C5E369840 /* DaemonConnection.swift */; };
 		6542962E87DA49169ADCCC5B /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B27AED31838D3975D0DCEFA /* PairingView.swift */; };
 		706EB106558B1B609DC45E2B /* StyrmanApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E2DA42B6895A9B2D3DE2D56 /* StyrmanApp.swift */; };
+		7310210765518C68DB35E424 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = CB9682178940E3A389F29142 /* PrivacyInfo.xcprivacy */; };
 		787DEFC79040854312CEC7F9 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45DBF7130A3704CEE2895C33 /* Theme.swift */; };
 		9A2CCECF57DD603D691229D5 /* Protocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72FCEE349C47E9D8119B9F44 /* Protocol.swift */; };
 		9B9388375EFD227C2D3B3ED8 /* Timeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = B220CBE574863299DA11C433 /* Timeline.swift */; };
@@ -52,8 +53,10 @@
 		B220CBE574863299DA11C433 /* Timeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Timeline.swift; sourceTree = "<group>"; };
 		BD19E4712373962A32F05800 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C7E776EFAAFF5AC5CE31CE09 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		CB9682178940E3A389F29142 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		E25ACD30D61B8467E406440F /* VoiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceTests.swift; sourceTree = "<group>"; };
 		ECC7E94075932B81BE650100 /* Styrman.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Styrman.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		"TEMP_EFE6EBB8-9112-456C-B075-30CE11DA52E6" /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -61,6 +64,7 @@
 			isa = PBXGroup;
 			children = (
 				C7E776EFAAFF5AC5CE31CE09 /* Info.plist */,
+				CB9682178940E3A389F29142 /* PrivacyInfo.xcprivacy */,
 				A5D69A43CF54A86119E59F1F /* Styrman.entitlements */,
 				C7727E17018E47D4EBDB694F /* App */,
 				7972A398EDBF1167613C532F /* Model */,
@@ -146,6 +150,14 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
+		"TEMP_60693973-D92B-4358-86FD-B34F8B802F78" /* ios */ = {
+			isa = PBXGroup;
+			children = (
+				"TEMP_EFE6EBB8-9112-456C-B075-30CE11DA52E6" /* Signing.xcconfig */,
+			);
+			path = ios;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -195,11 +207,11 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					98E73CEC518E6537A36666D3 = {
-						DevelopmentTeam = 7R6QL53THM;
+						DevelopmentTeam = "$(STYRMAN_TEAM_ID)";
 						ProvisioningStyle = Automatic;
 					};
 					F46751F00B68623934D45768 = {
-						DevelopmentTeam = 7R6QL53THM;
+						DevelopmentTeam = "$(STYRMAN_TEAM_ID)";
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -230,6 +242,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				2CD508C7B0318C2DEE1E960E /* Assets.xcassets in Resources */,
+				7310210765518C68DB35E424 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -285,7 +298,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.christoffermattssonlangseth.styrman.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(STYRMAN_BUNDLE_ID).tests";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Styrman.app/Styrman";
@@ -302,7 +315,7 @@
 					"@executable_path/Frameworks",
 					"@loader_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.christoffermattssonlangseth.styrman.tests;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(STYRMAN_BUNDLE_ID).tests";
 				SDKROOT = iphoneos;
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Styrman.app/Styrman";
@@ -321,15 +334,17 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.christoffermattssonlangseth.styrman;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(STYRMAN_BUNDLE_ID)";
 				SDKROOT = iphoneos;
 				STYRMAN_APNS_ENV = sandbox;
+				STYRMAN_APS_ENVIRONMENT = development;
 				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Debug;
 		};
 		BAA986BF9E9D340762FAAD97 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = "TEMP_EFE6EBB8-9112-456C-B075-30CE11DA52E6" /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -365,7 +380,7 @@
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = 7R6QL53THM;
+				DEVELOPMENT_TEAM = "$(STYRMAN_TEAM_ID)";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -402,15 +417,17 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.christoffermattssonlangseth.styrman;
+				PRODUCT_BUNDLE_IDENTIFIER = "$(STYRMAN_BUNDLE_ID)";
 				SDKROOT = iphoneos;
-				STYRMAN_APNS_ENV = sandbox;
+				STYRMAN_APNS_ENV = production;
+				STYRMAN_APS_ENVIRONMENT = production;
 				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Release;
 		};
 		ED1BF44AF1A5A2C8867941FD /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = "TEMP_EFE6EBB8-9112-456C-B075-30CE11DA52E6" /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -446,7 +463,7 @@
 				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
 				DEBUG_INFORMATION_FORMAT = dwarf;
-				DEVELOPMENT_TEAM = 7R6QL53THM;
+				DEVELOPMENT_TEAM = "$(STYRMAN_TEAM_ID)";
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
