@@ -101,7 +101,7 @@ exec "$real" "$@"
 
 pub fn exec(agent: AgentKind, args: Vec<OsString>) -> Result<std::convert::Infallible> {
     let spec = launch_spec(agent).with_context(|| format!("no launcher for {agent}"))?;
-    let path = std::env::var_os("PATH").unwrap_or_default();
+    let path = without_spent_wrappers(agent, std::env::var_os("PATH").unwrap_or_default());
     let exe = std::env::current_exe().ok();
     let Some(bin) = find_on_path(&spec.program, &path, exe.as_deref()) else {
         bail!("`{}` not found on PATH", spec.program);
@@ -140,6 +140,36 @@ pub fn exec(agent: AgentKind, args: Vec<OsString>) -> Result<std::convert::Infal
     // Only returns on failure.
     let err = cmd.exec();
     Err(err).with_context(|| format!("exec {}", bin.display()))
+}
+
+/// PATH without the directories of agent wrappers that already ran before us.
+///
+/// cmux's codex wrapper adds its hook options and then execs the first other
+/// `codex` on PATH; when cmux's shims come before ours, that is our shim, so
+/// running cmux's wrapper again would add its options twice (Codex refuses).
+/// cmux marks a run with `CMUX_CODEX_WRAPPER_SHIM` (and `…_SHIM_ROOT`).
+pub fn without_spent_wrappers(agent: AgentKind, path: OsString) -> OsString {
+    if agent != AgentKind::Codex {
+        return path;
+    }
+    let canon = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_owned());
+    let spent: Vec<PathBuf> = [
+        std::env::var_os("CMUX_CODEX_WRAPPER_SHIM_ROOT").map(PathBuf::from),
+        std::env::var_os("CMUX_CODEX_WRAPPER_SHIM")
+            .map(PathBuf::from)
+            .and_then(|p| p.parent().map(Path::to_owned)),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|p| canon(&p))
+    .collect();
+    if spent.is_empty() {
+        return path;
+    }
+    let kept: Vec<PathBuf> = std::env::split_paths(&path)
+        .filter(|d| !spent.contains(&canon(d)))
+        .collect();
+    std::env::join_paths(kept).unwrap_or(path)
 }
 
 /// `codex exec …`, `codex login`, `codex --version`, …: not the interactive TUI.
