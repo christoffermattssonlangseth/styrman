@@ -9,6 +9,7 @@ pub mod peers;
 pub mod permissions;
 pub mod prompts;
 pub mod push;
+pub mod quick;
 pub mod store;
 pub mod terminals;
 mod usage;

@@ -4,5 +4,11 @@
 <dict>
 	<key>aps-environment</key>
 	<string>$(STYRMAN_APS_ENVIRONMENT)</string>
+	<!-- The app's own group (same as its app id, so existing items stay); the
+	     notification extension shares it to read the pairing. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)$(STYRMAN_BUNDLE_ID)</string>
+	</array>
 </dict>
 </plist>

@@ -47,12 +47,6 @@ struct PairingLink: Equatable, Sendable {
     }
 }
 
-struct Credentials: Codable, Equatable, Sendable {
-    let wsURL: URL
-    let token: String
-    let deviceId: String
-    let host: String
-}
 
 enum PairingError: LocalizedError {
     case rejected, server(Int), unreachable(String)
@@ -83,45 +77,5 @@ enum Pairing {
         guard status == 200 else { throw PairingError.server(status) }
         let r = try JSONDecoder().decode(PairResponse.self, from: data)
         return Credentials(wsURL: link.wsURL, token: r.token, deviceId: r.deviceId, host: r.host)
-    }
-}
-
-/// Device credentials in the Keychain (this device only, available after first unlock).
-enum CredentialStore {
-    // The app's own bundle id (same value as before, so existing pairings stay).
-    private static let service = Bundle.main.bundleIdentifier ?? "styrman"
-    private static let account = "daemon"
-
-    static func load() -> Credentials? {
-        let q: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-        ]
-        var out: AnyObject?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess, let data = out as? Data else { return nil }
-        return try? JSONDecoder().decode(Credentials.self, from: data)
-    }
-
-    static func save(_ c: Credentials) throws {
-        delete()
-        let add: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
-            kSecValueData as String: try JSONEncoder().encode(c),
-        ]
-        let status = SecItemAdd(add as CFDictionary, nil)
-        guard status == errSecSuccess else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
-    }
-
-    static func delete() {
-        SecItemDelete([
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-        ] as CFDictionary)
     }
 }

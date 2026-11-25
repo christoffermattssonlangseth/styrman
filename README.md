@@ -126,6 +126,8 @@ Scan it with the iPhone Camera and tap **Pair**. `styr devices` lists paired pho
 2. Run `styr push setup ~/Downloads/AuthKey_XXXXXXXXXX.p8`. The key is copied into Styrman's data folder (0600), and the Key ID is read from the filename.
 3. Open the app and allow notifications. Then run `styr push test`.
 
+Approval notifications get **Allow once** and **Deny** buttons (long-press the notification). The push only says "needs your approval": the app's notification extension asks your Mac for the actual command, directly over Tailscale, and shows it before you choose. If the Mac can't be reached, the notification just opens the session. Allowing needs the phone unlocked.
+
 ## Antigravity (agy)
 
 `styr setup` also installs a `styrman` plugin for agy and a user-level `/styr` skill. With `alias agy='styr agy'`, agy works just like Claude Code:

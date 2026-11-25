@@ -964,6 +964,18 @@ impl Daemon {
             .collect())
     }
 
+    /// Whether `request` of `session` is still waiting for an answer.
+    pub fn is_open_request(
+        &self,
+        session: &SessionId,
+        request: &styr_core::ids::RequestId,
+    ) -> bool {
+        self.lock()
+            .trackers
+            .get(session)
+            .is_some_and(|t| t.open_requests().any(|r| r == request))
+    }
+
     pub fn events(&self, session: &SessionId, since_seq: u64, limit: u32) -> Result<Vec<Event>> {
         self.lock()
             .store
@@ -1072,6 +1084,7 @@ impl Daemon {
                     session: None,
                     category: None,
                     collapse_id: Some("styrman-test".into()),
+                    request: None,
                 };
                 let results = self.push_to_devices(&n, true).await;
                 Ok(Response::PushResults {

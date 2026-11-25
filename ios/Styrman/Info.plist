@@ -58,6 +58,10 @@
 	<string>Turn what you say into text for your message. Recognition stays on this iPhone when it supports that.</string>
 	<key>StyrmanAPNsEnvironment</key>
 	<string>$(STYRMAN_APNS_ENV)</string>
+	<key>StyrmanAppBundleID</key>
+	<string>$(STYRMAN_BUNDLE_ID)</string>
+	<key>StyrmanKeychainGroup</key>
+	<string>$(AppIdentifierPrefix)$(STYRMAN_BUNDLE_ID)</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

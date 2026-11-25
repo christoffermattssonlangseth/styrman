@@ -189,6 +189,12 @@ pub fn router(daemon: Arc<Daemon>, stop: watch::Receiver<bool>) -> Router {
             post(pair).layer(axum::extract::DefaultBodyLimit::max(16 * 1024)),
         )
         .route("/v1/ws", get(ws))
+        .route(
+            "/v1/permission/{session}/{request}",
+            get(permission_get)
+                .post(permission_answer)
+                .layer(axum::extract::DefaultBodyLimit::max(4 * 1024)),
+        )
         .layer(axum::middleware::from_fn(reject_browsers))
         .with_state(AppState { daemon, stop })
 }
@@ -344,6 +350,76 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
         .ok()?
         .strip_prefix("Bearer ")
         .map(str::trim)
+}
+
+/// The device behind the request's bearer token (with the same brake on bad tokens as the WebSocket).
+fn authed(st: &AppState, headers: &HeaderMap) -> Result<String, Response> {
+    if st.daemon.auth_throttle.blocked() {
+        return Err(error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many failed logins; try again in a minute",
+        ));
+    }
+    match bearer(headers).and_then(|t| st.daemon.authenticate(t)) {
+        Some(d) => Ok(d.to_string()),
+        None => {
+            st.daemon.auth_throttle.failed();
+            Err(error(
+                StatusCode::UNAUTHORIZED,
+                "missing or invalid device token",
+            ))
+        }
+    }
+}
+
+/// What an approval asks, for the phone's notification (see `quick`).
+async fn permission_get(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path((session, request)): axum::extract::Path<(String, String)>,
+) -> Response {
+    if let Err(r) = authed(&st, &headers) {
+        return r;
+    }
+    match st
+        .daemon
+        .permission_details(&SessionId::from(session.as_str()), &request.as_str().into())
+    {
+        Ok(Some(d)) => Json(d).into_response(),
+        Ok(None) => error(StatusCode::NOT_FOUND, "no such request"),
+        Err(e) => {
+            tracing::error!("permission details: {e:#}");
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "couldn't read the request",
+            )
+        }
+    }
+}
+
+/// Answer an approval from the phone's notification.
+async fn permission_answer(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path((session, request)): axum::extract::Path<(String, String)>,
+    Json(body): Json<crate::quick::AnswerBody>,
+) -> Response {
+    let device = match authed(&st, &headers) {
+        Ok(d) => d,
+        Err(r) => return r,
+    };
+    match st.daemon.answer_permission(
+        &SessionId::from(session.as_str()),
+        &request.as_str().into(),
+        &body.option,
+        device.as_str().into(),
+    ) {
+        Ok(()) => {
+            tracing::info!(%device, %request, option = %body.option, "permission answered from a notification");
+            Json(serde_json::json!({"ok": true})).into_response()
+        }
+        Err(message) => error(StatusCode::CONFLICT, &message),
+    }
 }
 
 async fn ws(State(st): State<AppState>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
@@ -632,27 +708,12 @@ impl Connection {
                 session,
                 command: styr_core::Command::ResolvePermission { request, option },
             } => {
-                let visible = self.daemon.summary(&session)?.is_some_and(|s| s.shared);
-                let screen = visible
-                    .then(|| {
-                        self.daemon.resolve_screen_permission(
-                            &session,
-                            &request,
-                            &option,
-                            self.device.as_str().into(),
-                        )
-                    })
-                    .flatten();
-                let result = if let Some(r) = screen {
-                    r.map_err(|e| format!("{e:#}"))
-                } else if visible {
-                    self.daemon
-                        .broker
-                        .resolve(&session, &request, &option, self.device.as_str().into())
-                        .map_err(|e| e.to_string())
-                } else {
-                    Err(format!("unknown session {session}"))
-                };
+                let result = self.daemon.answer_permission(
+                    &session,
+                    &request,
+                    &option,
+                    self.device.as_str().into(),
+                );
                 match result {
                     Ok(()) => {
                         tracing::info!(device = %self.device, %request, %option, "permission answered from the phone");

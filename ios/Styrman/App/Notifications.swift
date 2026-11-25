@@ -11,7 +11,19 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
-        UNUserNotificationCenter.current().delegate = self
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        // Approvals the extension could look up get Allow / Deny right on the notification.
+        // Allowing needs the phone unlocked (Face ID); denying doesn't.
+        let allow = UNNotificationAction(identifier: "ALLOW", title: "Allow once",
+                                         options: [.authenticationRequired], icon: .init(systemImageName: "checkmark"))
+        let deny = UNNotificationAction(identifier: "DENY", title: "Deny",
+                                        options: [.destructive], icon: .init(systemImageName: "xmark"))
+        center.setNotificationCategories([
+            UNNotificationCategory(identifier: "PERMISSION_ACT", actions: [allow, deny], intentIdentifiers: [],
+                                   hiddenPreviewsBodyPlaceholder: "Needs your approval", options: []),
+            UNNotificationCategory(identifier: "PERMISSION", actions: [], intentIdentifiers: [], options: []),
+        ])
         return true
     }
 
@@ -45,7 +57,28 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        let session = response.notification.request.content.userInfo["session"] as? String
+        let content = response.notification.request.content
+        let info = content.userInfo
+        let session = info["session"] as? String
+        let action = response.actionIdentifier
+        if action == "ALLOW" || action == "DENY" {
+            // Answered from the notification: send it to the Mac without opening the app.
+            guard let session, let request = info["request"] as? String,
+                  let option = info[action == "ALLOW" ? "allow" : "deny"] as? String,
+                  let creds = CredentialStore.load() else { return }
+            do {
+                try await QuickAnswer.answer(creds, session: session, request: request, option: option)
+            } catch {
+                // Say so, and let a tap open the session to answer there.
+                let n = UNMutableNotificationContent()
+                n.title = content.title
+                n.body = "Couldn't answer from here: \(error.localizedDescription) Tap to open the session."
+                n.userInfo = ["session": session]
+                n.threadIdentifier = content.threadIdentifier
+                try? await center.add(UNNotificationRequest(identifier: "answer-failed-\(request)", content: n, trigger: nil))
+            }
+            return
+        }
         await MainActor.run {
             if let session { self.connection?.requestedSession = session }
         }

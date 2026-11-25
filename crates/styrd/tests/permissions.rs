@@ -289,3 +289,107 @@ async fn unshared_sessions_never_wait() {
     assert!(reply.contains("hook_reply"), "{reply}");
     d.stop().await;
 }
+
+/// The notification route: the phone's extension reads the request from the Mac and
+/// answers it over HTTP with its device token (no WebSocket, no app open).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn answered_from_a_notification() {
+    init();
+    let d = Daemon::start().await;
+    share(&d, "n1").await;
+    let (url, token) = paired_phone(&d).await;
+    let base = http_base(&url);
+    let mut ws = connect(&url, &token).await.unwrap();
+    recv(&mut ws).await; // hello
+    let ServerMsg::Sessions { sessions } = recv(&mut ws).await else {
+        panic!()
+    };
+    let s = sessions
+        .iter()
+        .find(|s| s.native_id == "n1")
+        .unwrap()
+        .clone();
+    let sid = s.id.to_string();
+    send(
+        &mut ws,
+        json!({"type": "subscribe", "session": sid, "since_seq": s.last_seq}),
+    )
+    .await;
+    loop {
+        if let ServerMsg::Subscribed { .. } = recv(&mut ws).await {
+            break;
+        }
+    }
+
+    let pending = spawn_hook(&d, permission_hook("n1"));
+    let req = next_request(&mut ws).await;
+    let http = reqwest::Client::new();
+    let path = format!("{base}/v1/permission/{sid}/{req}");
+
+    // No token: refused.
+    assert_eq!(http.get(&path).send().await.unwrap().status(), 401);
+
+    // What the notification shows: the actual command.
+    let v: Value = http
+        .get(&path)
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(v["open"], true);
+    assert_eq!(v["agent"], "Claude");
+    assert_eq!(v["repo"], "repo");
+    assert_eq!(v["text"], "rm -rf build");
+    assert!(
+        v["options"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["kind"] == "allow_once")
+    );
+
+    // Allow from the notification.
+    let r = http
+        .post(&path)
+        .bearer_auth(&token)
+        .json(&json!({"option": "allow"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let out = pending.await.unwrap().expect("allow reply");
+    assert_eq!(out["hookSpecificOutput"]["decision"]["behavior"], "allow");
+
+    // Answered: closed, and a second answer is refused.
+    let v: Value = http
+        .get(&path)
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(v["open"], false);
+    let r = http
+        .post(&path)
+        .bearer_auth(&token)
+        .json(&json!({"option": "allow"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 409);
+
+    // Unknown request.
+    let r = http
+        .get(format!("{base}/v1/permission/{sid}/nope"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404);
+    d.stop().await;
+}

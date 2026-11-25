@@ -56,6 +56,9 @@ pub struct Notification {
     pub session: Option<SessionId>,
     pub category: Option<&'static str>,
     pub collapse_id: Option<String>,
+    /// An approval's request id: the phone's notification extension looks it up on
+    /// this Mac (over the tailnet) to offer Allow/Deny with the actual command.
+    pub request: Option<String>,
 }
 
 impl Notification {
@@ -70,9 +73,15 @@ impl Notification {
         if let Some(c) = self.category {
             aps["category"] = c.into();
         }
+        if self.request.is_some() {
+            aps["mutable-content"] = 1.into();
+        }
         let mut p = serde_json::json!({ "aps": aps });
         if let Some(s) = &self.session {
             p["session"] = s.as_str().into();
+        }
+        if let Some(r) = &self.request {
+            p["request"] = r.as_str().into();
         }
         p
     }
@@ -273,6 +282,9 @@ pub fn relay_request(device_token: &str, env: &str, n: &Notification) -> serde_j
     if let Some(c) = &n.collapse_id {
         v["collapse_id"] = c.chars().take(64).collect::<String>().into();
     }
+    if let Some(r) = &n.request {
+        v["request"] = r.chars().take(64).collect::<String>().into();
+    }
     v
 }
 
@@ -329,8 +341,9 @@ pub fn notification_for(
             session: Some(session.clone()),
             category: None,
             collapse_id: Some(format!("share-{session}")),
+            request: None,
         }),
-        EventKind::PermissionRequested { tool, .. } => Some(Notification {
+        EventKind::PermissionRequested { tool, request, .. } => Some(Notification {
             title,
             body: if details {
                 format!("Needs your approval: {}", tool.title)
@@ -340,6 +353,7 @@ pub fn notification_for(
             session: Some(session.clone()),
             category: Some("PERMISSION"),
             collapse_id: Some(format!("perm-{session}")),
+            request: Some(request.to_string()),
         }),
         EventKind::TurnEnded {
             reason,
@@ -368,6 +382,7 @@ pub fn notification_for(
                 session: Some(session.clone()),
                 category: None,
                 collapse_id: Some(format!("turn-{session}")),
+                request: None,
             })
         }
         _ => None,
@@ -715,6 +730,7 @@ mod relay_tests {
             session: Some("01SESSION".into()),
             category: Some("PERMISSION"),
             collapse_id: Some("perm-01SESSION".into()),
+            request: Some("r1".into()),
         }
     }
 
@@ -729,6 +745,7 @@ mod relay_tests {
                 "category",
                 "collapse_id",
                 "env",
+                "request",
                 "session",
                 "title",
                 "token"

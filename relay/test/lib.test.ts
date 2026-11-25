@@ -13,6 +13,16 @@ test("valid requests pass, with optional ids", () => {
   });
 });
 
+test("an approval carries its request id, and wakes the phone's extension", () => {
+  const p = parsePush({ ...ok, session: "01ABC", category: "PERMISSION", request: "r-1" });
+  assert.deepEqual(apnsPayload(p as any), {
+    aps: { alert: { title: ok.title, body: ok.body }, sound: "default", "thread-id": "01ABC", category: "PERMISSION", "mutable-content": 1 },
+    session: "01ABC",
+    request: "r-1",
+  });
+  assert.match(parsePush({ ...ok, request: "x".repeat(65) }) as string, /request/);
+});
+
 test("anything beyond a short alert is rejected (no session content through the relay)", () => {
   assert.equal(parsePush({ ...ok, extra: "code" }), "unexpected field: extra");
   assert.match(parsePush({ ...ok, body: "x".repeat(241) }) as string, /body/);

@@ -23,6 +23,9 @@ targets:
     platform: iOS
     sources:
       - path: Styrman
+      - path: Shared
+    dependencies:
+      - target: StyrmanNotify
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(STYRMAN_BUNDLE_ID)
@@ -44,6 +47,8 @@ targets:
       properties:
         CFBundleDisplayName: Styrman
         StyrmanAPNsEnvironment: $(STYRMAN_APNS_ENV)
+        StyrmanAppBundleID: $(STYRMAN_BUNDLE_ID)
+        StyrmanKeychainGroup: $(AppIdentifierPrefix)$(STYRMAN_BUNDLE_ID)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
@@ -65,6 +70,36 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: $(STYRMAN_BUNDLE_ID).pair
             CFBundleURLSchemes: [styrman]
+  # Adds the actual command and Allow/Deny to approval notifications, fetched from
+  # the Mac over the tailnet (the push itself carries no command).
+  StyrmanNotify:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: StyrmanNotify
+      - path: Shared
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(STYRMAN_BUNDLE_ID).notify
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_ENTITLEMENTS: StyrmanNotify/StyrmanNotify.entitlements
+    info:
+      path: StyrmanNotify/Info.plist
+      properties:
+        CFBundleDisplayName: Styrman
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        StyrmanAppBundleID: $(STYRMAN_BUNDLE_ID)
+        StyrmanKeychainGroup: $(AppIdentifierPrefix)$(STYRMAN_BUNDLE_ID)
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            ts.net:
+              NSIncludesSubdomains: true
+              NSExceptionAllowsInsecureHTTPLoads: true
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
   StyrmanTests:
     type: bundle.unit-test
     platform: iOS

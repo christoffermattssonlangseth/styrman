@@ -7,7 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		295D971801867C07D245EF4E /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9799CB207FE4E99C65F078B8 /* NotificationService.swift */; };
 		2CD508C7B0318C2DEE1E960E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BD19E4712373962A32F05800 /* Assets.xcassets */; };
+		3704D8DC49294020DC1EA59C /* StyrmanNotify.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 8FD95A0FF08600353F60BC32 /* StyrmanNotify.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		3ECDDE310E80BA8E1ED61278 /* ProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F191B43A5982942A6A69A5A /* ProtocolTests.swift */; };
 		432241619CC5645D2E4C6CF7 /* Notifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C6177180C2ABCE5EC6CADE3 /* Notifications.swift */; };
 		494D951C69223CEE06CDB022 /* Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84CB105D71D3950864757BA8 /* Voice.swift */; };
@@ -18,6 +20,8 @@
 		706EB106558B1B609DC45E2B /* StyrmanApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E2DA42B6895A9B2D3DE2D56 /* StyrmanApp.swift */; };
 		7310210765518C68DB35E424 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = CB9682178940E3A389F29142 /* PrivacyInfo.xcprivacy */; };
 		787DEFC79040854312CEC7F9 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45DBF7130A3704CEE2895C33 /* Theme.swift */; };
+		819C0C4CF5B8CBADDBF409B9 /* Credentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00AE6AE82221B500B2447089 /* Credentials.swift */; };
+		86B5E7D5E4FF026347D46EF6 /* Credentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00AE6AE82221B500B2447089 /* Credentials.swift */; };
 		9A2CCECF57DD603D691229D5 /* Protocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72FCEE349C47E9D8119B9F44 /* Protocol.swift */; };
 		9B9388375EFD227C2D3B3ED8 /* Timeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = B220CBE574863299DA11C433 /* Timeline.swift */; };
 		E03A4B6D854582CE8012D99D /* Pairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70FD8EDA21890B223957635D /* Pairing.swift */; };
@@ -34,19 +38,45 @@
 			remoteGlobalIDString = 98E73CEC518E6537A36666D3;
 			remoteInfo = Styrman;
 		};
+		C76DCF22BB84A89F6D52A7F6 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 9A77FE4A79ED82E5B0470C02 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 96270DE6487340602952B476;
+			remoteInfo = StyrmanNotify;
+		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		E6DD6603E785455AFC716936 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				3704D8DC49294020DC1EA59C /* StyrmanNotify.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		00AE6AE82221B500B2447089 /* Credentials.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Credentials.swift; sourceTree = "<group>"; };
 		1C6177180C2ABCE5EC6CADE3 /* Notifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notifications.swift; sourceTree = "<group>"; };
 		26784D644CF00DF837CCAA4B /* NewSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionView.swift; sourceTree = "<group>"; };
 		2B27AED31838D3975D0DCEFA /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
 		2C5647A67574DB7C5E369840 /* DaemonConnection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DaemonConnection.swift; sourceTree = "<group>"; };
 		3F191B43A5982942A6A69A5A /* ProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProtocolTests.swift; sourceTree = "<group>"; };
+		3FB003D0B15D348C57FE29EC /* StyrmanNotify.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = StyrmanNotify.entitlements; sourceTree = "<group>"; };
 		45DBF7130A3704CEE2895C33 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		6D0ACD1C6115207E5344249C /* SessionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionListView.swift; sourceTree = "<group>"; };
 		70FD8EDA21890B223957635D /* Pairing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Pairing.swift; sourceTree = "<group>"; };
 		72FCEE349C47E9D8119B9F44 /* Protocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Protocol.swift; sourceTree = "<group>"; };
 		84CB105D71D3950864757BA8 /* Voice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Voice.swift; sourceTree = "<group>"; };
+		89E773CB56086386716F7E4C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		8FD95A0FF08600353F60BC32 /* StyrmanNotify.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = StyrmanNotify.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		9799CB207FE4E99C65F078B8 /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		9A0EFECC2598262BB3C5DE41 /* StyrmanTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = StyrmanTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9A494FA97E73F2292F21D283 /* SessionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDetailView.swift; sourceTree = "<group>"; };
 		9E2DA42B6895A9B2D3DE2D56 /* StyrmanApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StyrmanApp.swift; sourceTree = "<group>"; };
@@ -58,7 +88,7 @@
 		CB9682178940E3A389F29142 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		E25ACD30D61B8467E406440F /* VoiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceTests.swift; sourceTree = "<group>"; };
 		ECC7E94075932B81BE650100 /* Styrman.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Styrman.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		"TEMP_EFE6EBB8-9112-456C-B075-30CE11DA52E6" /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
+		"TEMP_2E2C4912-265E-41F1-AF6B-D4442D541AD6" /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -77,10 +107,22 @@
 			path = Styrman;
 			sourceTree = "<group>";
 		};
+		55D516231D8BA7E35FF302AE /* StyrmanNotify */ = {
+			isa = PBXGroup;
+			children = (
+				89E773CB56086386716F7E4C /* Info.plist */,
+				9799CB207FE4E99C65F078B8 /* NotificationService.swift */,
+				3FB003D0B15D348C57FE29EC /* StyrmanNotify.entitlements */,
+			);
+			path = StyrmanNotify;
+			sourceTree = "<group>";
+		};
 		626F1212395FC15C6758DA87 = {
 			isa = PBXGroup;
 			children = (
+				A43129FADC4D4FA6ABCAD8C3 /* Shared */,
 				16608040CDB8D4DD84289826 /* Styrman */,
+				55D516231D8BA7E35FF302AE /* StyrmanNotify */,
 				79A5D68AD2AF1A07EF054B22 /* StyrmanTests */,
 				EE5E3A00E7D8D5E5F29437F2 /* Products */,
 			);
@@ -112,6 +154,14 @@
 				84CB105D71D3950864757BA8 /* Voice.swift */,
 			);
 			path = Services;
+			sourceTree = "<group>";
+		};
+		A43129FADC4D4FA6ABCAD8C3 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				00AE6AE82221B500B2447089 /* Credentials.swift */,
+			);
+			path = Shared;
 			sourceTree = "<group>";
 		};
 		C7727E17018E47D4EBDB694F /* App */ = {
@@ -148,15 +198,16 @@
 			isa = PBXGroup;
 			children = (
 				ECC7E94075932B81BE650100 /* Styrman.app */,
+				8FD95A0FF08600353F60BC32 /* StyrmanNotify.appex */,
 				9A0EFECC2598262BB3C5DE41 /* StyrmanTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
 		};
-		"TEMP_60693973-D92B-4358-86FD-B34F8B802F78" /* ios */ = {
+		"TEMP_47864728-5D8C-451A-8DF0-1030067467A7" /* ios */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_EFE6EBB8-9112-456C-B075-30CE11DA52E6" /* Signing.xcconfig */,
+				"TEMP_2E2C4912-265E-41F1-AF6B-D4442D541AD6" /* Signing.xcconfig */,
 			);
 			path = ios;
 			sourceTree = "<group>";
@@ -164,16 +215,35 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		96270DE6487340602952B476 /* StyrmanNotify */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 8625EAB921909B8ED112E6CF /* Build configuration list for PBXNativeTarget "StyrmanNotify" */;
+			buildPhases = (
+				DC0AEF0A6B857545BB6449BA /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = StyrmanNotify;
+			packageProductDependencies = (
+			);
+			productName = StyrmanNotify;
+			productReference = 8FD95A0FF08600353F60BC32 /* StyrmanNotify.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		98E73CEC518E6537A36666D3 /* Styrman */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = B337687E702C1609B1C54555 /* Build configuration list for PBXNativeTarget "Styrman" */;
 			buildPhases = (
 				3832EB8025FCF8E6324D7E3D /* Sources */,
 				D47323E1FD42A0BC2B73E6F8 /* Resources */,
+				E6DD6603E785455AFC716936 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				FF64387FB9A92EE9152529C3 /* PBXTargetDependency */,
 			);
 			name = Styrman;
 			packageProductDependencies = (
@@ -209,6 +279,10 @@
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
+					96270DE6487340602952B476 = {
+						DevelopmentTeam = "$(STYRMAN_TEAM_ID)";
+						ProvisioningStyle = Automatic;
+					};
 					98E73CEC518E6537A36666D3 = {
 						DevelopmentTeam = "$(STYRMAN_TEAM_ID)";
 						ProvisioningStyle = Automatic;
@@ -234,6 +308,7 @@
 			projectRoot = "";
 			targets = (
 				98E73CEC518E6537A36666D3 /* Styrman */,
+				96270DE6487340602952B476 /* StyrmanNotify */,
 				F46751F00B68623934D45768 /* StyrmanTests */,
 			);
 		};
@@ -265,6 +340,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				819C0C4CF5B8CBADDBF409B9 /* Credentials.swift in Sources */,
 				4B398F324DB74E7B8197541E /* DaemonConnection.swift in Sources */,
 				E97A196F13C4270D91A22563 /* NewSessionView.swift in Sources */,
 				432241619CC5645D2E4C6CF7 /* Notifications.swift in Sources */,
@@ -281,6 +357,15 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DC0AEF0A6B857545BB6449BA /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				86B5E7D5E4FF026347D46EF6 /* Credentials.swift in Sources */,
+				295D971801867C07D245EF4E /* NotificationService.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -289,9 +374,30 @@
 			target = 98E73CEC518E6537A36666D3 /* Styrman */;
 			targetProxy = C148A639199AFA0DFCD3E669 /* PBXContainerItemProxy */;
 		};
+		FF64387FB9A92EE9152529C3 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 96270DE6487340602952B476 /* StyrmanNotify */;
+			targetProxy = C76DCF22BB84A89F6D52A7F6 /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		64987982F414EE7C0E8EC1AA /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = StyrmanNotify/StyrmanNotify.entitlements;
+				INFOPLIST_FILE = StyrmanNotify/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(STYRMAN_BUNDLE_ID).notify";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
 		6860B35443B5FFF06DBF8911 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -348,7 +454,7 @@
 		};
 		BAA986BF9E9D340762FAAD97 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_EFE6EBB8-9112-456C-B075-30CE11DA52E6" /* Signing.xcconfig */;
+			baseConfigurationReference = "TEMP_2E2C4912-265E-41F1-AF6B-D4442D541AD6" /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -429,9 +535,25 @@
 			};
 			name = Release;
 		};
+		E0F05E379B8DBBF9CCA53AAB /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = StyrmanNotify/StyrmanNotify.entitlements;
+				INFOPLIST_FILE = StyrmanNotify/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = "$(STYRMAN_BUNDLE_ID).notify";
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
 		ED1BF44AF1A5A2C8867941FD /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_EFE6EBB8-9112-456C-B075-30CE11DA52E6" /* Signing.xcconfig */;
+			baseConfigurationReference = "TEMP_2E2C4912-265E-41F1-AF6B-D4442D541AD6" /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -502,6 +624,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		8625EAB921909B8ED112E6CF /* Build configuration list for PBXNativeTarget "StyrmanNotify" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				64987982F414EE7C0E8EC1AA /* Debug */,
+				E0F05E379B8DBBF9CCA53AAB /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		AEC4B006DC19E35DC8C4B7D4 /* Build configuration list for PBXNativeTarget "StyrmanTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

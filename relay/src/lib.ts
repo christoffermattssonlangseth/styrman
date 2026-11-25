@@ -9,6 +9,8 @@ export interface PushRequest {
   session?: string; // opens that session when the notification is tapped
   category?: string;
   collapse_id?: string;
+  /** An approval's request id: the phone looks it up on the Mac itself (no command here). */
+  request?: string;
 }
 
 export const LIMITS = {
@@ -23,7 +25,7 @@ export const LIMITS = {
 export function parsePush(v: unknown): PushRequest | string {
   if (typeof v !== "object" || v === null) return "expected a JSON object";
   const o = v as Record<string, unknown>;
-  const allowed = new Set(["token", "env", "title", "body", "session", "category", "collapse_id"]);
+  const allowed = new Set(["token", "env", "title", "body", "session", "category", "collapse_id", "request"]);
   for (const k of Object.keys(o)) if (!allowed.has(k)) return `unexpected field: ${k}`;
   if (typeof o.token !== "string" || !/^[0-9a-f]{32,200}$/i.test(o.token)) return "bad token";
   if (o.env !== "sandbox" && o.env !== "production") return "env must be sandbox or production";
@@ -38,7 +40,8 @@ export function parsePush(v: unknown): PushRequest | string {
   const session = str("session", LIMITS.id, false);
   const category = str("category", LIMITS.id, false);
   const collapse = str("collapse_id", LIMITS.id, false);
-  for (const r of [title, body, session, category, collapse]) if (r instanceof Error) return r.message;
+  const request = str("request", LIMITS.id, false);
+  for (const r of [title, body, session, category, collapse, request]) if (r instanceof Error) return r.message;
   return {
     token: o.token,
     env: o.env,
@@ -47,6 +50,7 @@ export function parsePush(v: unknown): PushRequest | string {
     session: session as string | undefined,
     category: category as string | undefined,
     collapse_id: collapse as string | undefined,
+    request: request as string | undefined,
   };
 }
 
@@ -55,8 +59,10 @@ export function apnsPayload(p: PushRequest): Record<string, unknown> {
   const aps: Record<string, unknown> = { alert: { title: p.title, body: p.body }, sound: "default" };
   if (p.session) aps["thread-id"] = p.session;
   if (p.category) aps.category = p.category;
+  if (p.request) aps["mutable-content"] = 1;
   const out: Record<string, unknown> = { aps };
   if (p.session) out.session = p.session;
+  if (p.request) out.request = p.request;
   return out;
 }
 
