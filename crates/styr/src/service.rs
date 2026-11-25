@@ -76,6 +76,21 @@ fn loaded() -> bool {
     launchctl(&["print", &format!("{}/{LABEL}", domain())]).is_ok_and(|o| o.status.success())
 }
 
+/// A path that survives upgrades: Homebrew installs into a versioned Cellar folder
+/// that `brew upgrade` removes, so point launchd at the prefix's `bin` link instead.
+pub fn stable_path(resolved: &std::path::Path) -> PathBuf {
+    let s = resolved.to_string_lossy();
+    if let Some(i) = s.find("/Cellar/")
+        && let Some(name) = resolved.file_name()
+    {
+        let link = PathBuf::from(&s[..i]).join("bin").join(name);
+        if link.canonicalize().is_ok_and(|l| l == resolved) {
+            return link;
+        }
+    }
+    resolved.to_owned()
+}
+
 /// `styrd` next to this `styr`, else on PATH.
 fn find_styrd() -> Result<PathBuf> {
     if let Some(p) = std::env::current_exe()
@@ -109,7 +124,7 @@ fn install_inner(verbose: bool) -> Result<()> {
     if !cfg!(target_os = "macos") {
         bail!("launchd is macOS only; on Linux run styrd from a systemd user unit");
     }
-    let styrd = find_styrd()?.canonicalize()?;
+    let styrd = stable_path(&find_styrd()?.canonicalize()?);
     let home = PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?);
     let log = home.join("Library/Logs/styrd.log");
     let path = plist_path()?;
@@ -211,5 +226,19 @@ mod tests {
                 String::from_utf8_lossy(&o.stdout)
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod stable_path_tests {
+    use super::*;
+
+    #[test]
+    fn cargo_paths_are_kept_and_unknown_cellars_too() {
+        let p = PathBuf::from("/Users/me/.cargo/bin/styrd");
+        assert_eq!(stable_path(&p), p);
+        // A Cellar path whose bin link doesn't point back to it stays as is.
+        let c = PathBuf::from("/nonexistent/Cellar/styrman/0.1.0/bin/styrd");
+        assert_eq!(stable_path(&c), c);
     }
 }
