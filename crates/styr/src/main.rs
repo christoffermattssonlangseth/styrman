@@ -3,6 +3,7 @@
 
 mod hook;
 mod launch;
+mod pty;
 mod service;
 
 use anyhow::{Context, Result, bail};

@@ -51,6 +51,16 @@ pub fn exec(agent: AgentKind, args: Vec<OsString>) -> Result<std::convert::Infal
     let Some(bin) = find_on_path(&spec.program, &path, exe.as_deref()) else {
         bail!("`{}` not found on PATH", spec.program);
     };
+    // Interactive Claude: run it in our terminal wrapper so phone prompts can be
+    // typed into it. Everything else (pipes, -p, other agents for now): plain exec.
+    let interactive = !args.iter().any(|a| a == "-p" || a == "--print");
+    if agent == AgentKind::Claude && interactive && crate::pty::can_wrap() {
+        let launch_id = format!("{:016x}", rand_u64());
+        let mut all: Vec<OsString> = spec.extra_args.iter().map(OsString::from).collect();
+        all.extend(args);
+        let code = crate::pty::run(&bin, &all, &spec.env, &launch_id)?;
+        std::process::exit(code);
+    }
     let mut cmd = std::process::Command::new(&bin);
     cmd.args(&spec.extra_args).args(args);
     for (k, v) in &spec.env {
@@ -59,6 +69,15 @@ pub fn exec(agent: AgentKind, args: Vec<OsString>) -> Result<std::convert::Infal
     // Only returns on failure.
     let err = cmd.exec();
     Err(err).with_context(|| format!("exec {}", bin.display()))
+}
+
+fn rand_u64() -> u64 {
+    let mut b = [0u8; 8];
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        use std::io::Read;
+        let _ = f.read_exact(&mut b);
+    }
+    u64::from_ne_bytes(b) ^ std::process::id() as u64
 }
 
 #[cfg(test)]

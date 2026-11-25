@@ -299,3 +299,11 @@ Each checkpoint ends with something runnable and its tests green.
 - **Anyone else on the tailnet can try to pair.** They would still need a live code from the Mac's terminal.
 - **Markdown links in Claude's replies are tappable on the phone.**
 - **Permission prompts describe commands, not their effects.** As in the terminal, approve only what you would approve at the keyboard.
+- **Phone prompts shown natively (`styr claude` wrapper).** Claude Code renders an `asyncRewake` wake-up only as a collapsed "Stop hook feedback" line; neither stderr nor a `systemMessage` text is visible (verified). So `styr claude` now runs Claude in a pseudo-terminal it owns.
+  - It holds an `AttachTerminal` long-poll to `styrd` and types phone prompts into the prompt box: a bracketed paste for multi-line text, then Enter.
+  - `styrd` matches the following `UserPromptSubmit` to the typed text and records it as `Origin::Remote(device)`.
+  - **Safety:**
+    - Nothing is typed while a permission request is open (keys could answer it) or after the session has ended.
+    - The wrapper waits while the user has a half-typed line.
+    - If the wrapper disappears, its queued prompts fall back to the `StopWait` hook route.
+  - Verified on interactive Claude Code 2.1.332: the prompt appears as a normal `❯` line about 1 s after sending.

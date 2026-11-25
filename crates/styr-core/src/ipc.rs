@@ -59,6 +59,11 @@ pub enum Request {
     PushStatus,
     /// Send a test notification to every phone with a push token.
     PushTest,
+    /// Held open by `styr <agent>`'s terminal wrapper: answered with `TypePrompt`
+    /// when a phone prompt should be typed into that terminal.
+    AttachTerminal {
+        launch_id: String,
+    },
     /// Delete sessions and their history.
     ForgetSessions {
         ids: Vec<SessionId>,
@@ -119,6 +124,9 @@ pub enum Response {
     PushResults {
         /// (device id, outcome)
         results: Vec<(String, String)>,
+    },
+    TypePrompt {
+        text: String,
     },
     PromptAccepted {
         /// False: queued until the agent next stops.

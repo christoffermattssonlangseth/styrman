@@ -23,6 +23,7 @@ fn hook(session: &str, event: &str, extra: Value) -> RawHook {
         payload,
         launched_by_styr: false,
         agent_pid: None,
+        launch_id: None,
     }
 }
 
@@ -210,5 +211,105 @@ async fn unshared_or_ended_sessions_never_wait() {
         .expect("released on unshare")
         .unwrap();
     assert_eq!(out, HookOutput::default());
+    d.stop().await;
+}
+
+fn with_launch(mut h: RawHook, launch: &str) -> RawHook {
+    h.launch_id = Some(launch.into());
+    h
+}
+
+/// Play `styr claude`'s terminal wrapper: wait for the next prompt to type.
+fn attach(d: &Daemon, launch: &str) -> tokio::task::JoinHandle<Response> {
+    let c = Client::new(&d.paths.socket).with_timeout(None);
+    let req = Request::AttachTerminal {
+        launch_id: launch.into(),
+    };
+    tokio::task::spawn_blocking(move || c.call(&req).expect("attach"))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn inside_styr_claude_prompts_are_typed_into_the_terminal() {
+    let d = Daemon::start().await;
+    let l = "launch-1";
+    d.call(Request::Hook {
+        hook: with_launch(hook("t1", "SessionStart", json!({"source": "startup"})), l),
+    })
+    .await;
+    d.call(Request::Hook {
+        hook: with_launch(
+            hook("t1", "UserPromptSubmit", json!({"prompt": "/styr"})),
+            l,
+        ),
+    })
+    .await;
+    let (mut ws, sid) = phone(&d, "t1").await;
+
+    let wrapper = attach(&d, l);
+    settle().await;
+    prompt(&mut ws, &sid, "summarise the README").await;
+    let typed = tokio::time::timeout(Duration::from_secs(5), wrapper)
+        .await
+        .expect("typed")
+        .unwrap();
+    assert_eq!(
+        typed,
+        Response::TypePrompt {
+            text: "summarise the README".into()
+        }
+    );
+
+    // Claude reports the typed line as a normal prompt; it's credited to the phone.
+    d.call(Request::Hook {
+        hook: with_launch(
+            hook(
+                "t1",
+                "UserPromptSubmit",
+                json!({"prompt": "summarise the README"}),
+            ),
+            l,
+        ),
+    })
+    .await;
+    assert_eq!(next_remote_message(&mut ws).await, "summarise the README");
+
+    // While a permission prompt is open nothing is typed (keys could answer it).
+    let perm = with_launch(
+        hook(
+            "t1",
+            "PermissionRequest",
+            json!({"tool_name": "Bash", "tool_input": {"command": "rm x"}}),
+        ),
+        l,
+    );
+    let sock = d.paths.socket.clone();
+    let line = serde_json::to_string(&Request::Hook { hook: perm }).unwrap();
+    let perm_conn = tokio::task::spawn_blocking(move || {
+        use std::io::Write;
+        let s = std::os::unix::net::UnixStream::connect(sock).unwrap();
+        (&s).write_all(format!("{line}\n").as_bytes()).unwrap();
+        s
+    })
+    .await
+    .unwrap();
+    settle().await;
+    let wrapper = attach(&d, l);
+    prompt(&mut ws, &sid, "and then the tests").await;
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(
+        !wrapper.is_finished(),
+        "held while the permission prompt is open"
+    );
+    drop(perm_conn); // answered in the terminal: the hook goes away
+    let typed = tokio::time::timeout(Duration::from_secs(5), wrapper)
+        .await
+        .expect("typed after")
+        .unwrap();
+    assert_eq!(
+        typed,
+        Response::TypePrompt {
+            text: "and then the tests".into()
+        }
+    );
     d.stop().await;
 }

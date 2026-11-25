@@ -8,6 +8,7 @@ pub mod permissions;
 pub mod prompts;
 pub mod push;
 pub mod store;
+pub mod terminals;
 
 use anyhow::{Context, Result, bail};
 use std::fs::File;

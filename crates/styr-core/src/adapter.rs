@@ -76,6 +76,10 @@ pub struct RawHook {
     /// notice sessions whose process died without a SessionEnd).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_pid: Option<u32>,
+    /// Set when the agent runs inside `styr <agent>`'s terminal wrapper, which can
+    /// type phone prompts into it (`STYR_LAUNCH_ID` in the hook's environment).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_id: Option<String>,
 }
 
 /// What the daemon currently knows about the session a hook belongs to.

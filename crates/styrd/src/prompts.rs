@@ -141,6 +141,12 @@ impl Daemon {
         if let Some(p) = self.prompts.take_queued(session) {
             return Some(p);
         }
+        // Prompts meant for a terminal wrapper that has gone away come this way.
+        if !self.terminals.is_live(session)
+            && let Some(p) = self.terminals.take_queued(session)
+        {
+            return Some(p);
+        }
         let (generation, rx) = self.prompts.register(session);
         let mut guard = WaitGuard {
             prompts: &self.prompts,

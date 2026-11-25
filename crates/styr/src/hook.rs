@@ -70,6 +70,9 @@ fn run(args: &[String]) -> Result<HookOutput, String> {
         payload,
         launched_by_styr: std::env::var_os("STYR_LAUNCHED").is_some(),
         agent_pid,
+        launch_id: std::env::var("STYR_LAUNCH_ID")
+            .ok()
+            .filter(|s| !s.is_empty()),
     };
     // No client-side timeout: the agent's own per-hook timeout bounds us, and a
     // permission hook may legitimately wait for the phone.

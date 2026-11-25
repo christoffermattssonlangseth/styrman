@@ -32,6 +32,7 @@ fn hook(session: &str, event: &str, extra: Value) -> RawHook {
         payload,
         launched_by_styr: false,
         agent_pid: None,
+        launch_id: None,
     }
 }
 

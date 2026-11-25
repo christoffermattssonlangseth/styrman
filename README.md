@@ -90,7 +90,7 @@ cd ios && xcodegen && open Styrman.xcodeproj
 #    Select your iPhone, set your team in Signing (or DEVELOPMENT_TEAM in project.yml), Run.
 ```
 
-### Shell aliases (optional)
+### Shell aliases (recommended)
 
 ```sh
 # ~/.zshrc
@@ -99,7 +99,9 @@ alias agy='styr agy'        # adapter coming in phase 2
 alias codex='styr codex'    # adapter coming in phase 3
 ```
 
-`styr claude …` execs the next `claude` on your PATH, so wrappers such as cmux's stay in the chain, and it tags the session as started through Styrman. The plugin works without the aliases.
+`styr claude …` runs the next `claude` on your PATH (wrappers such as cmux's stay in the chain) inside a thin terminal wrapper. Your keys and Claude's screen pass straight through. When you send a message from the phone, the wrapper **types it into Claude's prompt box**, so it appears in the terminal exactly like a prompt you typed.
+
+Without the alias everything else still works, and phone messages still reach Claude. They arrive through a background hook instead and show in the terminal only as "Stop hook feedback".
 
 ### Pair your phone
 
@@ -129,7 +131,9 @@ On the phone:
 - **Sessions** are grouped into *Needs you*, *Working* and *Done*. Each row shows the repo and your first prompt. Swipe left to stop sharing a session or remove a finished one.
 - **The timeline** shows your prompts, Claude's replies, the plan, and every tool call. Tap a tool call to see its full output.
 - **Permission cards** offer *Allow once*, *Always allow* (Claude's own "don't ask again" rule) and *Deny*. Claude shows its own prompt in the terminal at the same time, and the first answer wins. Nothing is ever approved automatically. The phone can answer for 9 minutes (`STYR_PERMISSION_TIMEOUT` on `styrd`).
-- **The message box:** an idle Claude wakes up and answers. If Claude is busy, the message is queued and sent the moment it finishes. Typing in the terminal still works.
+- **The message box:** with the alias, your message is typed into the terminal and shows there as a normal prompt; Claude queues it if it's busy.
+  - It's never typed while a permission prompt is open, or while you're halfway through a line in the terminal.
+  - Without the alias, an idle Claude still wakes up and answers, and busy sessions get it as soon as they finish.
 - **Notifications:**
   - *Needs your approval* arrives if a permission is still unanswered after 8 s.
   - *Finished* arrives for turns of 30 s or more.

@@ -37,6 +37,7 @@ pub struct Daemon {
     adapters: HashMap<AgentKind, Arc<dyn AgentAdapter>>,
     pub(crate) broker: crate::permissions::Broker,
     pub(crate) prompts: crate::prompts::Prompts,
+    pub(crate) terminals: crate::terminals::Terminals,
     pusher: std::sync::RwLock<Option<Arc<crate::push::Pusher>>>,
     data_dir: Mutex<Option<std::path::PathBuf>>,
     /// Device id → open WebSocket count (a connected app is in the foreground).
@@ -108,6 +109,7 @@ impl Daemon {
             adapters: adapters.into_iter().map(|a| (a.kind(), a)).collect(),
             broker: Default::default(),
             prompts: Default::default(),
+            terminals: Default::default(),
             pusher: Default::default(),
             data_dir: Mutex::new(None),
             live: Mutex::new(HashMap::new()),
@@ -189,6 +191,19 @@ impl Daemon {
         {
             events.insert(0, EventKind::SharingChanged { shared });
         }
+        if let Some(launch) = &hook.launch_id {
+            self.terminals.link(&view.id, launch);
+        }
+        // A prompt we typed into the terminal for the phone comes back as a normal
+        // UserPromptSubmit: attribute it to the phone.
+        for e in events.iter_mut() {
+            if let EventKind::UserMessage { text, origin } = e
+                && *origin == styr_core::event::Origin::Terminal
+                && let Some(device) = self.terminals.claim_typed(&view.id, text)
+            {
+                *origin = styr_core::event::Origin::Remote(device);
+            }
+        }
         let options_for = |request: &styr_core::ids::RequestId| {
             events.iter().find_map(|e| match e {
                 EventKind::PermissionRequested {
@@ -223,6 +238,7 @@ impl Daemon {
         self.ingest(&update, EventSource::Hook, events)?;
         if gone {
             self.prompts.clear(&view.id);
+            self.terminals.forget(&view.id);
         } else if typed_in_terminal {
             self.prompts.release(&view.id);
         }
@@ -313,6 +329,8 @@ impl Daemon {
             let _ = self.bus.send(BusMsg::Event(ev));
         }
         let _ = self.bus.send(BusMsg::SessionChanged(rec.id.clone()));
+        // The status may now allow typing a held phone prompt.
+        self.pump_terminal(&rec.id);
         Ok((rec.id, seqs))
     }
 
@@ -386,6 +404,7 @@ impl Daemon {
 
     /// Delete a session and its history; phones drop it from their list.
     pub fn forget_session(&self, id: &SessionId) -> Result<bool> {
+        self.terminals.forget(id);
         let existed = {
             let mut g = self.lock();
             g.trackers.remove(id);
@@ -516,6 +535,22 @@ impl Daemon {
             summary.status != styr_core::SessionStatus::Done,
             "the session has ended"
         );
+        let prompt = crate::prompts::QueuedPrompt {
+            text: text.to_owned(),
+            device: device.clone(),
+        };
+        if self.terminals.is_live(session) {
+            // Runs inside `styr claude`: type it into the terminal (when it's safe).
+            let n = self.terminals.enqueue(session, prompt);
+            let typed = n == 1 && self.pump_terminal(session);
+            let delivery = if typed {
+                crate::prompts::Delivery::Delivered
+            } else {
+                crate::prompts::Delivery::Queued(n)
+            };
+            tracing::info!(%session, ?delivery, "prompt from the phone (terminal)");
+            return Ok(delivery);
+        }
         let delivery = self.prompts.submit(
             session,
             crate::prompts::QueuedPrompt {
@@ -685,6 +720,10 @@ impl Daemon {
                         .collect(),
                 })
             }
+            Request::AttachTerminal { launch_id } => match self.attach_terminal(&launch_id).await {
+                Some(text) => Ok(Response::TypePrompt { text }),
+                None => Err(anyhow::anyhow!("detached")),
+            },
             Request::ForgetSessions { ids } => ids
                 .iter()
                 .try_for_each(|id| self.forget_session(id).map(|_| ()))
