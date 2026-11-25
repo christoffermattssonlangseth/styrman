@@ -13,6 +13,11 @@ Each release:
    testers need a short beta review).
 
 Notes:
+- The app has two extensions: `….notify` (adds the command and Allow/Deny to approval
+  notifications) and `….widgets` (Live Activity and the Agents widget). With automatic
+  signing, Xcode registers their App IDs, the keychain group and the App Group
+  `group.<bundle id>` the first time you build for a device or archive (let it, when
+  it asks to update the provisioning).
 - Release builds report `production` to styrd, so pushes go through Apple's production
   servers. Development builds (Xcode › Run) keep using the sandbox.
 - For testers' phones to get notifications, the Mac they pair with needs push set up

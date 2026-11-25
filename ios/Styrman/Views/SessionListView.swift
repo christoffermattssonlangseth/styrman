@@ -224,6 +224,7 @@ struct SettingsView: View {
     @Environment(DaemonConnection.self) private var connection
     @Environment(\.dismiss) private var dismiss
     @State private var confirmForget = false
+    @State private var liveActivity = LiveActivities.shared.enabled
 
     var body: some View {
         NavigationStack {
@@ -234,6 +235,15 @@ struct SettingsView: View {
                     LabeledContent("Status", value: statusText)
                 }
                 VoiceSettings()
+                Section {
+                    Toggle("Live Activity", isOn: $liveActivity)
+                        .onChange(of: liveActivity) { _, on in
+                            LiveActivities.shared.enabled = on
+                            if on { LiveActivities.shared.update(connection.sessions, host: connection.host) }
+                        }
+                } footer: {
+                    Text("Shows which agents are working or need you on the Lock Screen and in the Dynamic Island. It only shows agent, folder and status.")
+                }
                 Section {
                     Button("Forget this Mac", role: .destructive) { confirmForget = true }
                 } footer: {

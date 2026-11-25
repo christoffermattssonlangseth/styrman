@@ -437,8 +437,9 @@ enum ClientMsg: Encodable, Sendable {
     case listFolders(path: String?)
     case startSession(agent: AgentKind, cwd: String, prompt: String?)
     case createFolder(parent: String, name: String)
+    case registerActivityToken(kind: String, token: String?)
 
-    private enum K: String, CodingKey { case type, session, command, request, option, text, token, env, shared, path, agent, cwd, prompt, parent, name, sinceSeq = "since_seq" }
+    private enum K: String, CodingKey { case type, kind, session, command, request, option, text, token, env, shared, path, agent, cwd, prompt, parent, name, sinceSeq = "since_seq" }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: K.self)
@@ -471,6 +472,9 @@ enum ClientMsg: Encodable, Sendable {
             try c.encode(agent.rawValue, forKey: .agent)
             try c.encode(cwd, forKey: .cwd)
             try c.encodeIfPresent(prompt, forKey: .prompt)
+        case .registerActivityToken(let kind, let token):
+            try c.encode("register_activity_token", forKey: .type); try c.encode(kind, forKey: .kind)
+            try c.encodeIfPresent(token, forKey: .token)
         case .registerPush(let token, let env):
             try c.encode("register_push", forKey: .type); try c.encode(token, forKey: .token); try c.encode(env, forKey: .env)
         case .sendPrompt(let s, let text):

@@ -15,6 +15,12 @@ struct StyrmanApp: App {
                 .onOpenURL { url in
                     if let link = PairingLink(url: url) { pendingLink = link }
                 }
+                .onChange(of: connection.sessions, initial: true) { _, sessions in
+                    LiveActivities.shared.connection = connection
+                    if connection.state == .connected {
+                        LiveActivities.shared.update(sessions, host: connection.host)
+                    }
+                }
                 .onChange(of: scenePhase, initial: true) { _, phase in
                     switch phase {
                     case .active:

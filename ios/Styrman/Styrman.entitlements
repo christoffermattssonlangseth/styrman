@@ -6,6 +6,11 @@
 	<string>$(STYRMAN_APS_ENVIRONMENT)</string>
 	<!-- The app's own group (same as its app id, so existing items stay); the
 	     notification extension shares it to read the pairing. -->
+	<!-- Shared with the widget: the last session state the app saw. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.$(STYRMAN_BUNDLE_ID)</string>
+	</array>
 	<key>keychain-access-groups</key>
 	<array>
 		<string>$(AppIdentifierPrefix)$(STYRMAN_BUNDLE_ID)</string>

@@ -5,10 +5,12 @@ sends notifications to the Styrman app. This tiny Cloudflare Worker holds it (as
 secret) and delivers short alerts for them.
 
 What it sees, per notification: the phone's push token, a short alert such as
-"Codex · styrman / Needs your approval" (≤ 240 characters; anything else is
-rejected) and, for approvals, the request's random id (the phone uses it to fetch
-the command from the Mac over the tailnet). No commands, code or replies: Styrman always turns details off when it
-uses a relay. Each Mac registers once and gets its own credentials; pushes are
+"Codex · styrman / Needs your approval" (≤ 240 characters) and, for approvals, the
+request's random id (the phone uses it to fetch the command from the Mac over the
+tailnet). For the Live Activity (`POST /v1/live`): the activity's push token, counts
+of working and waiting agents, and up to three agent · folder · status rows.
+Anything else is rejected. No commands, code or replies: Styrman always turns details
+off when it uses a relay. Each Mac registers once and gets its own credentials; pushes are
 rate-limited per Mac (200/hour) and registrations per IP (10/hour).
 
 ## Deploy (once)

@@ -26,6 +26,7 @@ targets:
       - path: Shared
     dependencies:
       - target: StyrmanNotify
+      - target: StyrmanWidgets
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(STYRMAN_BUNDLE_ID)
@@ -47,6 +48,8 @@ targets:
       properties:
         CFBundleDisplayName: Styrman
         StyrmanAPNsEnvironment: $(STYRMAN_APNS_ENV)
+        StyrmanAppGroup: group.$(STYRMAN_BUNDLE_ID)
+        NSSupportsLiveActivities: true
         StyrmanAppBundleID: $(STYRMAN_BUNDLE_ID)
         StyrmanKeychainGroup: $(AppIdentifierPrefix)$(STYRMAN_BUNDLE_ID)
         CFBundleShortVersionString: $(MARKETING_VERSION)
@@ -100,6 +103,28 @@ targets:
         NSExtension:
           NSExtensionPointIdentifier: com.apple.usernotifications.service
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+  # The Live Activity (Lock Screen + Dynamic Island) and the Agents widget.
+  StyrmanWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: StyrmanWidgets
+      - path: Shared/LiveActivity.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(STYRMAN_BUNDLE_ID).widgets
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_ENTITLEMENTS: StyrmanWidgets/StyrmanWidgets.entitlements
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: ""
+    info:
+      path: StyrmanWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: Styrman
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        StyrmanAppGroup: group.$(STYRMAN_BUNDLE_ID)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
   StyrmanTests:
     type: bundle.unit-test
     platform: iOS

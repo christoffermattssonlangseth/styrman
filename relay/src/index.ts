@@ -8,9 +8,11 @@
 //
 //   POST /v1/register  → {install_id, secret}      (a Mac registers once)
 //   POST /v1/push      Authorization: Bearer <install_id>.<secret>, body: PushRequest
+//   POST /v1/live      same auth, body: LiveRequest (Live Activity: counts and
+//                      agent · folder · status rows, nothing else)
 //   GET  /v1/health
 
-import { LIMITS, apnsPayload, b64url, parsePush, sameHex, sha256Hex, signApnsJwt } from "./lib";
+import { LIMITS, apnsPayload, b64url, livePayload, parseLive, parsePush, sameHex, sha256Hex, signApnsJwt } from "./lib";
 
 export interface Env {
   INSTALLS: KVNamespace; // install_id → sha256(secret); also rate-limit counters
@@ -52,7 +54,8 @@ async function register(req: Request, env: Env): Promise<Response> {
   return json({ install_id: id, secret });
 }
 
-async function push(req: Request, env: Env): Promise<Response> {
+/** The Mac's install id, or an error response (bad credentials, or over its hourly limit). */
+async function authorize(req: Request, env: Env): Promise<string | Response> {
   const auth = req.headers.get("authorization") ?? "";
   const m = /^Bearer ([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/.exec(auth);
   if (!m) return json({ error: "unauthorized" }, 401);
@@ -60,6 +63,45 @@ async function push(req: Request, env: Env): Promise<Response> {
   const stored = await env.INSTALLS.get(`install:${id}`);
   if (!stored || !sameHex(stored, await sha256Hex(secret))) return json({ error: "unauthorized" }, 401);
   if (await overLimit(env, `push:${id}`, LIMITS.perInstallPerHour)) return json({ error: "slow down" }, 429);
+  return id;
+}
+
+/** Send to APNs and turn its answer into the relay's result. */
+async function deliver(token: string, apnsEnv: string, headers: Record<string, string>, payload: unknown): Promise<Response> {
+  const host = apnsEnv === "production" ? "api.push.apple.com" : "api.sandbox.push.apple.com";
+  const r = await fetch(`https://${host}/3/device/${token}`, { method: "POST", headers, body: JSON.stringify(payload) });
+  if (r.ok) return json({ result: "sent" });
+  const reason = ((await r.json().catch(() => ({}))) as { reason?: string }).reason ?? `HTTP ${r.status}`;
+  // The phone uninstalled the app, or it's a sandbox/production mismatch.
+  if (r.status === 410 || reason === "BadDeviceToken" || reason === "Unregistered") {
+    return json({ result: "bad_token", reason });
+  }
+  return json({ result: "failed", reason }, 502);
+}
+
+async function live(req: Request, env: Env): Promise<Response> {
+  const id = await authorize(req, env);
+  if (id instanceof Response) return id;
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return json({ error: "bad json" }, 400);
+  }
+  const p = parseLive(body);
+  if (typeof p === "string") return json({ error: p }, 400);
+  return deliver(p.token, p.env, {
+    authorization: `bearer ${await apnsJwt(env)}`,
+    "apns-topic": `${env.APNS_TOPIC}.push-type.liveactivity`,
+    "apns-push-type": "liveactivity",
+    "apns-priority": String(p.priority),
+    "content-type": "application/json",
+  }, livePayload(p, Math.floor(Date.now() / 1000)));
+}
+
+async function push(req: Request, env: Env): Promise<Response> {
+  const id = await authorize(req, env);
+  if (id instanceof Response) return id;
 
   let body: unknown;
   try {
@@ -70,7 +112,6 @@ async function push(req: Request, env: Env): Promise<Response> {
   const p = parsePush(body);
   if (typeof p === "string") return json({ error: p }, 400);
 
-  const host = p.env === "production" ? "api.push.apple.com" : "api.sandbox.push.apple.com";
   const headers: Record<string, string> = {
     authorization: `bearer ${await apnsJwt(env)}`,
     "apns-topic": env.APNS_TOPIC,
@@ -79,18 +120,7 @@ async function push(req: Request, env: Env): Promise<Response> {
     "content-type": "application/json",
   };
   if (p.collapse_id) headers["apns-collapse-id"] = p.collapse_id;
-  const r = await fetch(`https://${host}/3/device/${p.token}`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(apnsPayload(p)),
-  });
-  if (r.ok) return json({ result: "sent" });
-  const reason = ((await r.json().catch(() => ({}))) as { reason?: string }).reason ?? `HTTP ${r.status}`;
-  // The phone uninstalled the app, or it's a sandbox/production mismatch.
-  if (r.status === 410 || reason === "BadDeviceToken" || reason === "Unregistered") {
-    return json({ result: "bad_token", reason });
-  }
-  return json({ result: "failed", reason }, 502);
+  return deliver(p.token, p.env, headers, apnsPayload(p));
 }
 
 export default {
@@ -99,6 +129,7 @@ export default {
     if (req.method === "GET" && pathname === "/v1/health") return json({ ok: true });
     if (req.method === "POST" && pathname === "/v1/register") return register(req, env);
     if (req.method === "POST" && pathname === "/v1/push") return push(req, env);
+    if (req.method === "POST" && pathname === "/v1/live") return live(req, env);
     return json({ error: "not found" }, 404);
   },
 };

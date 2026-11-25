@@ -103,3 +103,61 @@ export async function signApnsJwt(pem: string, keyId: string, teamId: string, no
   const sig = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, new TextEncoder().encode(input));
   return `${input}.${b64url(new Uint8Array(sig))}`;
 }
+
+/** A Live Activity update: counts and up to three agent · folder · status rows. */
+export interface LiveRequest {
+  token: string;
+  env: "sandbox" | "production";
+  event: "start" | "update" | "end";
+  priority: 5 | 10;
+  state: { working: number; needs: number; rows: { agent: string; repo: string; status: string }[] };
+}
+
+const STATUSES = new Set(["needs_approval", "waiting", "working", "error"]);
+
+/** Validate a Live Activity request. Returns an error message, or the request. */
+export function parseLive(v: unknown): LiveRequest | string {
+  if (typeof v !== "object" || v === null) return "expected a JSON object";
+  const o = v as Record<string, unknown>;
+  const allowed = new Set(["token", "env", "event", "priority", "state"]);
+  for (const k of Object.keys(o)) if (!allowed.has(k)) return `unexpected field: ${k}`;
+  if (typeof o.token !== "string" || !/^[0-9a-f]{32,400}$/i.test(o.token)) return "bad token";
+  if (o.env !== "sandbox" && o.env !== "production") return "env must be sandbox or production";
+  if (o.event !== "start" && o.event !== "update" && o.event !== "end") return "bad event";
+  if (o.priority !== 5 && o.priority !== 10) return "priority must be 5 or 10";
+  const s = o.state as Record<string, unknown> | null;
+  if (typeof s !== "object" || s === null) return "bad state";
+  for (const k of Object.keys(s)) if (!["working", "needs", "rows"].includes(k)) return `unexpected state field: ${k}`;
+  const count = (x: unknown) => Number.isInteger(x) && (x as number) >= 0 && (x as number) <= 999;
+  if (!count(s.working) || !count(s.needs)) return "bad counts";
+  if (!Array.isArray(s.rows) || s.rows.length > 3) return "bad rows";
+  for (const r of s.rows as Record<string, unknown>[]) {
+    if (typeof r !== "object" || r === null) return "bad row";
+    for (const k of Object.keys(r)) if (!["agent", "repo", "status"].includes(k)) return `unexpected row field: ${k}`;
+    if (typeof r.agent !== "string" || r.agent.length < 1 || r.agent.length > 20) return "bad agent";
+    if (typeof r.repo !== "string" || r.repo.length < 1 || r.repo.length > 40) return "bad repo";
+    if (typeof r.status !== "string" || !STATUSES.has(r.status)) return "bad status";
+  }
+  return o as unknown as LiveRequest;
+}
+
+/** The APNs payload for a Live Activity request (same shape styrd sends directly). */
+export function livePayload(p: LiveRequest, nowSecs: number): Record<string, unknown> {
+  const first = p.state.rows[0];
+  const headline = !first
+    ? "Your agents"
+    : first.status === "working"
+      ? `${first.agent} is working in ${first.repo}`
+      : `${first.agent} · ${first.repo} needs you`;
+  const aps: Record<string, unknown> = { timestamp: nowSecs, event: p.event, "content-state": p.state };
+  if (p.event === "start") {
+    aps["attributes-type"] = "StyrmanActivityAttributes";
+    aps.attributes = {};
+    aps.alert = { title: "Styrman", body: headline };
+  } else if (p.event === "end") {
+    aps["dismissal-date"] = nowSecs;
+  } else if (p.state.needs > 0) {
+    aps.alert = { title: "Styrman", body: headline };
+  }
+  return { aps };
+}

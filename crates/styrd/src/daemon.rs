@@ -24,6 +24,8 @@ pub enum BusMsg {
     Event(Event),
     /// A session's summary (status, metadata, sharing) may have changed.
     SessionChanged(SessionId),
+    /// A phone registered a Live Activity token.
+    LiveTokens,
 }
 
 pub struct Daemon {
@@ -649,6 +651,23 @@ impl Daemon {
         env: Option<&str>,
     ) -> Result<()> {
         self.lock().store.set_push_token(device, token, env)
+    }
+
+    /// Like `set_activity_token`, without waking the Live Activity loop (it calls this).
+    pub fn set_activity_token_quiet(
+        &self,
+        device: &str,
+        start: bool,
+        token: Option<&str>,
+    ) -> Result<()> {
+        self.lock().store.set_activity_token(device, start, token)
+    }
+
+    pub fn set_activity_token(&self, device: &str, start: bool, token: Option<&str>) -> Result<()> {
+        self.lock().store.set_activity_token(device, start, token)?;
+        // A new token gets the current state right away.
+        let _ = self.bus.send(BusMsg::LiveTokens);
+        Ok(())
     }
 
     pub fn device_connected(&self, device: &str, up: bool) {

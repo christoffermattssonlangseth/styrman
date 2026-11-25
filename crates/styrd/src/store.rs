@@ -61,6 +61,12 @@ pub struct DeviceRecord {
     /// "sandbox" or "production".
     #[serde(skip)]
     pub push_env: Option<String>,
+    /// The phone's current Live Activity push token (updates and ends it).
+    #[serde(skip)]
+    pub activity_token: Option<String>,
+    /// The phone's push-to-start token (starts a Live Activity while the app is closed).
+    #[serde(skip)]
+    pub start_token: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -141,6 +147,16 @@ impl Store {
             .exists([])?;
         if !has_launch {
             conn.execute_batch("ALTER TABLE sessions ADD COLUMN launch_id TEXT;")?;
+        }
+        // Live Activity tokens (update + push-to-start).
+        let has_live: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('devices') WHERE name = 'activity_token'")?
+            .exists([])?;
+        if !has_live {
+            conn.execute_batch(
+                "ALTER TABLE devices ADD COLUMN activity_token TEXT;
+                 ALTER TABLE devices ADD COLUMN start_token TEXT;",
+            )?;
         }
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(Self { conn })
@@ -425,6 +441,8 @@ impl Store {
             revoked: r.get::<_, i64>("revoked")? != 0,
             push_token: r.get("push_token")?,
             push_env: r.get("push_env")?,
+            activity_token: r.get("activity_token")?,
+            start_token: r.get("start_token")?,
         })
     }
 
@@ -465,6 +483,17 @@ impl Store {
             "UPDATE devices SET push_token = ?2, push_env = ?3 WHERE id = ?1",
             params![id, token, env],
         )?;
+        Ok(())
+    }
+
+    /// Set (or clear) a device's Live Activity token; `start` is the push-to-start token.
+    pub fn set_activity_token(&mut self, id: &str, start: bool, token: Option<&str>) -> Result<()> {
+        let sql = if start {
+            "UPDATE devices SET start_token = ?2 WHERE id = ?1"
+        } else {
+            "UPDATE devices SET activity_token = ?2 WHERE id = ?1"
+        };
+        self.conn.execute(sql, params![id, token])?;
         Ok(())
     }
 

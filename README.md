@@ -126,6 +126,8 @@ Scan it with the iPhone Camera and tap **Pair**. `styr devices` lists paired pho
 2. Run `styr push setup ~/Downloads/AuthKey_XXXXXXXXXX.p8`. The key is copied into Styrman's data folder (0600), and the Key ID is read from the filename.
 3. Open the app and allow notifications. Then run `styr push test`.
 
+While agents work, a **Live Activity** on the Lock Screen and in the Dynamic Island shows how many are working or waiting for you (agent · folder · status, nothing more), and an **Agents** widget shows the same on the home screen. With the app closed, the Mac keeps the Live Activity current through Apple's push service (Settings › Live Activity turns it off).
+
 Approval notifications get **Allow once** and **Deny** buttons (long-press the notification). The push only says "needs your approval": the app's notification extension asks your Mac for the actual command, directly over Tailscale, and shows it before you choose. If the Mac can't be reached, the notification just opens the session. Allowing needs the phone unlocked.
 
 ## Antigravity (agy)

@@ -180,6 +180,7 @@ final class DaemonConnection {
             state = .connected
             for id in watched { subscribe(id) }
             registerPush()
+            for (kind, token) in activityTokens { send(.registerActivityToken(kind: kind, token: token ?? nil)) }
         case .sessions(let list):
             sessions = list.sorted { $0.updatedMs > $1.updatedMs }
         case .sessionUpdated(let s):
@@ -243,6 +244,15 @@ final class DaemonConnection {
     }
 
     func session(_ id: String) -> SessionSummary? { sessions.first { $0.id == id } }
+
+    /// Live Activity tokens, kept so they're sent again after reconnecting.
+    @ObservationIgnored private var activityTokens: [String: String?] = [:]
+
+    func registerActivityToken(kind: String, token: String?) {
+        if activityTokens[kind] == .some(token) { return }
+        activityTokens[kind] = .some(token)
+        if state == .connected { send(.registerActivityToken(kind: kind, token: token)) }
+    }
 
     private func registerPush() {
         guard let pushToken else { return }

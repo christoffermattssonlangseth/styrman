@@ -177,6 +177,65 @@ impl Pusher {
             Mode::Direct(k) => k,
             Mode::Relay(r) => return self.send_via_relay(r, device_token, env, n).await,
         };
+        self.apns(
+            key,
+            device_token,
+            env,
+            "alert",
+            &self.cfg.topic,
+            10,
+            n.collapse_id.as_deref(),
+            &n.payload(),
+        )
+        .await
+    }
+
+    /// A Live Activity push (`payload` from `live::payload`).
+    pub async fn send_live(
+        &self,
+        token: &str,
+        env: &str,
+        payload: &serde_json::Value,
+        priority: u8,
+    ) -> SendResult {
+        match &self.mode {
+            Mode::Direct(k) => {
+                let topic = format!("{}.push-type.liveactivity", self.cfg.topic);
+                self.apns(
+                    k,
+                    token,
+                    env,
+                    "liveactivity",
+                    &topic,
+                    priority,
+                    None,
+                    payload,
+                )
+                .await
+            }
+            Mode::Relay(r) => {
+                self.relay_post(
+                    r,
+                    "live",
+                    &relay_live_request(token, env, payload, priority),
+                )
+                .await
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn apns(
+        &self,
+        key: &jsonwebtoken::EncodingKey,
+        device_token: &str,
+        env: &str,
+        push_type: &str,
+        topic: &str,
+        priority: u8,
+        collapse_id: Option<&str>,
+        payload: &serde_json::Value,
+    ) -> SendResult {
         let host = if env == "production" {
             "api.push.apple.com"
         } else {
@@ -190,11 +249,11 @@ impl Pusher {
             .client
             .post(format!("https://{host}/3/device/{device_token}"))
             .bearer_auth(jwt)
-            .header("apns-topic", &self.cfg.topic)
-            .header("apns-push-type", "alert")
-            .header("apns-priority", "10")
-            .json(&n.payload());
-        if let Some(c) = &n.collapse_id {
+            .header("apns-topic", topic)
+            .header("apns-push-type", push_type)
+            .header("apns-priority", priority.to_string())
+            .json(payload);
+        if let Some(c) = collapse_id {
             req = req.header("apns-collapse-id", c.chars().take(64).collect::<String>());
         }
         match req.send().await {
@@ -230,12 +289,21 @@ impl Pusher {
         env: &str,
         n: &Notification,
     ) -> SendResult {
-        let body = relay_request(device_token, env, n);
+        self.relay_post(r, "push", &relay_request(device_token, env, n))
+            .await
+    }
+
+    async fn relay_post(
+        &self,
+        r: &RelayConfig,
+        route: &str,
+        body: &serde_json::Value,
+    ) -> SendResult {
         let resp = self
             .client
-            .post(format!("{}/v1/push", r.url.trim_end_matches('/')))
+            .post(format!("{}/v1/{route}", r.url.trim_end_matches('/')))
             .bearer_auth(format!("{}.{}", r.install_id, r.secret))
-            .json(&body)
+            .json(body)
             .send()
             .await;
         match resp {
@@ -286,6 +354,24 @@ pub fn relay_request(device_token: &str, env: &str, n: &Notification) -> serde_j
         v["request"] = r.chars().take(64).collect::<String>().into();
     }
     v
+}
+
+/// What a Live Activity push sends to the relay: the token and the activity's state
+/// (counts, and agent · folder · status rows); the relay builds the APNs payload.
+fn relay_live_request(
+    token: &str,
+    env: &str,
+    payload: &serde_json::Value,
+    priority: u8,
+) -> serde_json::Value {
+    let aps = &payload["aps"];
+    serde_json::json!({
+        "token": token,
+        "env": if env == "production" { "production" } else { "sandbox" },
+        "event": aps["event"],
+        "state": aps["content-state"],
+        "priority": priority,
+    })
 }
 
 /// Register this Mac with a push relay and store its credentials (0600).

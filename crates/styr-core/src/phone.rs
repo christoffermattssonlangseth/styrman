@@ -42,6 +42,13 @@ pub enum ClientMsg {
         token: String,
         env: String,
     },
+    /// A Live Activity push token: `kind` "update" (the running activity's) or "start"
+    /// (push-to-start). No token clears it.
+    RegisterActivityToken {
+        kind: String,
+        #[serde(default)]
+        token: Option<String>,
+    },
     /// Folders for the new-session picker (default: the home directory).
     ListFolders {
         #[serde(default)]

@@ -540,6 +540,7 @@ impl Connection {
                             }
                     }
                     Ok(BusMsg::SessionChanged(id)) => self.on_session_changed(&mut tx, id).await?,
+                    Ok(BusMsg::LiveTokens) => {}
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!(device = %self.device, "phone lagged {n} messages; resyncing");
                         self.send_sessions(&mut tx).await?;
@@ -613,6 +614,25 @@ impl Connection {
     async fn on_client(&mut self, tx: &mut Tx, msg: ClientMsg) -> anyhow::Result<()> {
         match msg {
             ClientMsg::ListSessions => self.send_sessions(tx).await,
+            ClientMsg::RegisterActivityToken { kind, token } => {
+                let valid = token.as_deref().is_none_or(|t| {
+                    (32..=400).contains(&t.len()) && t.chars().all(|c| c.is_ascii_hexdigit())
+                });
+                if !valid || (kind != "update" && kind != "start") {
+                    return send(
+                        tx,
+                        &ServerMsg::Error {
+                            message: "invalid Live Activity token".into(),
+                        },
+                    )
+                    .await;
+                }
+                let token = token.map(|t| t.to_ascii_lowercase());
+                self.daemon
+                    .set_activity_token(&self.device, kind == "start", token.as_deref())?;
+                tracing::info!(device = %self.device, %kind, set = token.is_some(), "Live Activity token");
+                Ok(())
+            }
             ClientMsg::GetUsage => {
                 let providers = tokio::task::spawn_blocking(crate::usage::read)
                     .await

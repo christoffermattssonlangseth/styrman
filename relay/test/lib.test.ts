@@ -54,3 +54,21 @@ test("APNs JWT: ES256 with a .p8-style (PKCS#8 PEM) P-256 key, verifiable", asyn
   const valid = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, pair.publicKey, sig, new TextEncoder().encode(`${h}.${c}`));
   assert.ok(valid);
 });
+
+test("Live Activity requests carry only counts and agent · folder · status", async () => {
+  const { parseLive, livePayload } = await import("../src/lib.ts");
+  const ok = {
+    token: "b".repeat(64), env: "production", event: "update", priority: 10,
+    state: { working: 1, needs: 1, rows: [{ agent: "Codex", repo: "lighthouse", status: "needs_approval" }] },
+  };
+  const p = parseLive(ok);
+  assert.equal(typeof p, "object");
+  const out = livePayload(p as any, 100) as any;
+  assert.equal(out.aps.event, "update");
+  assert.equal(out.aps.alert.body, "Codex · lighthouse needs you");
+  assert.deepEqual(out.aps["content-state"], ok.state);
+  assert.equal((livePayload({ ...(p as any), event: "start" }, 1) as any).aps["attributes-type"], "StyrmanActivityAttributes");
+  assert.equal(parseLive({ ...ok, state: { ...ok.state, activity: "rm -rf" } }), "unexpected state field: activity");
+  assert.equal(parseLive({ ...ok, state: { ...ok.state, rows: [{ agent: "x", repo: "y", status: "z" }] } }), "bad status");
+  assert.equal(parseLive({ ...ok, state: { ...ok.state, rows: [{ agent: "x", repo: "y", status: "working", title: "secret" }] } }), "unexpected row field: title");
+});
