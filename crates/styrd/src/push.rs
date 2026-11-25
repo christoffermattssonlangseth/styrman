@@ -173,6 +173,13 @@ pub fn notification_for(
 ) -> Option<Notification> {
     let title = format!("{agent} · {repo}");
     match kind {
+        EventKind::SharingChanged { shared: true } => Some(Notification {
+            title,
+            body: "Now on your phone. Tap to follow along.".into(),
+            session: Some(session.clone()),
+            category: None,
+            collapse_id: Some(format!("share-{session}")),
+        }),
         EventKind::PermissionRequested { tool, .. } => Some(Notification {
             title,
             body: if details {
@@ -280,7 +287,9 @@ pub async fn run_notifier(daemon: Arc<Daemon>, mut stop: tokio::sync::watch::Rec
         }
         if !matches!(
             ev.kind,
-            EventKind::PermissionRequested { .. } | EventKind::TurnEnded { .. }
+            EventKind::PermissionRequested { .. }
+                | EventKind::TurnEnded { .. }
+                | EventKind::SharingChanged { shared: true }
         ) {
             continue;
         }
@@ -369,6 +378,36 @@ mod tests {
             reason,
             last_message: Some("Fixed the flaky test.\nDetails…".into()),
         }
+    }
+
+    #[test]
+    fn sharing_a_session_notifies() {
+        let s = SessionId::from("S");
+        let n = notification_for(
+            &EventKind::SharingChanged { shared: true },
+            &s,
+            "agy",
+            "styrman",
+            false,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            (n.title.as_str(), n.body.as_str()),
+            ("agy · styrman", "Now on your phone. Tap to follow along.")
+        );
+        assert_eq!(n.payload()["session"], "S", "tapping opens the session");
+        assert!(
+            notification_for(
+                &EventKind::SharingChanged { shared: false },
+                &s,
+                "agy",
+                "r",
+                false,
+                None
+            )
+            .is_none()
+        );
     }
 
     #[test]
