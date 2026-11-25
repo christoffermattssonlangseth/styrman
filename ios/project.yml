@@ -41,6 +41,8 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
         ITSAppUsesNonExemptEncryption: false
         NSCameraUsageDescription: Scan the pairing QR code shown by `styr pair` on your Mac.
+        NSMicrophoneUsageDescription: Dictate messages to your coding agents.
+        NSSpeechRecognitionUsageDescription: Turn what you say into text for your message. Recognition stays on this iPhone when it supports that.
         NSLocalNetworkUsageDescription: Styrman connects to the styrd daemon on your Mac.
         # styrd is reached over Tailscale by its MagicDNS name (*.ts.net); the tunnel is
         # WireGuard-encrypted, so plain ws:// is allowed for ts.net only (plus loopback

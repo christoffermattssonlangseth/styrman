@@ -3,15 +3,27 @@ import SwiftUI
 struct SessionDetailView: View {
     @Environment(DaemonConnection.self) private var connection
     let sessionId: String
+    @State private var speaker = Speaker.shared
+    /// Set once the history has loaded: the newest reply at that point. Only replies
+    /// after it are read aloud automatically.
+    @State private var baseline: String??
+
+    private func latestReply(_ timeline: SessionTimeline) -> (id: String, text: String)? {
+        for item in timeline.items.reversed() {
+            if case .assistant(let id, let text, _) = item { return (id, text) }
+        }
+        return nil
+    }
 
     var body: some View {
         let timeline = connection.timeline(for: sessionId)
         let summary = connection.session(sessionId)
+        let agent = summary?.agent ?? .unknown
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     ForEach(timeline.items) { item in
-                        TimelineRow(item: item, cwd: summary?.cwd, sessionId: sessionId).id(item.id)
+                        TimelineRow(item: item, cwd: summary?.cwd, sessionId: sessionId, agent: agent).id(item.id)
                     }
                     ForEach(timeline.pending) { p in
                         PendingPromptRow(prompt: p, working: summary?.status == .working, agent: summary?.agent.displayName ?? "the agent")
@@ -54,7 +66,19 @@ struct SessionDetailView: View {
                         Text(summary.repoName).font(.headline).lineLimit(1)
                     }
                 }
-                ToolbarItem(placement: .topBarTrailing) { StatusChip(status: summary.status) }
+                ToolbarItem(placement: .topBarTrailing) {
+                    HStack(spacing: 10) {
+                        Button {
+                            speaker.autoRead.toggle()
+                            if !speaker.autoRead { speaker.stop() }
+                        } label: {
+                            Image(systemName: speaker.autoRead ? "speaker.wave.2.fill" : "speaker.slash")
+                                .foregroundStyle(speaker.autoRead ? Theme.color(for: summary.agent) : .secondary)
+                        }
+                        .accessibilityLabel(speaker.autoRead ? "Stop reading replies aloud" : "Read replies aloud")
+                        StatusChip(status: summary.status)
+                    }
+                }
             }
         }
         .overlay(alignment: .top) {
@@ -78,6 +102,10 @@ struct SessionDetailView: View {
                 if summary.acceptsPrompts {
                     Composer(sessionId: sessionId, status: summary.status, agent: summary.agent.displayName,
                              agentColor: Theme.color(for: summary.agent))
+                        .onChange(of: speaker.autoRead) { _, on in
+                            // Turning it on reads the latest reply, so you hear where things are.
+                            if on, let r = latestReply(timeline) { speaker.speak(r.text, id: r.id, agent: summary.agent) }
+                        }
                 } else {
                     Label {
                         Text("Read-only: this \(summary.agent.displayName) session wasn't started through Styrman. Run `styr setup` on the Mac, then start it again in a new terminal tab to approve and send messages from here.")
@@ -88,7 +116,19 @@ struct SessionDetailView: View {
             }
         }
         .onAppear { connection.watch(sessionId) }
-        .onDisappear { connection.unwatch(sessionId) }
+        .onChange(of: timeline.isLive, initial: true) { _, live in
+            if live, baseline == nil { baseline = .some(latestReply(timeline)?.id) }
+        }
+        .onDisappear {
+            connection.unwatch(sessionId)
+            speaker.stop()
+        }
+        // Read new replies aloud as they arrive (when switched on).
+        .onChange(of: latestReply(timeline)?.id) { _, id in
+            guard let seen = baseline, let id, id != seen, let r = latestReply(timeline) else { return }
+            baseline = .some(id)
+            if speaker.autoRead { speaker.speak(r.text, id: r.id, agent: agent) }
+        }
     }
 }
 
@@ -107,6 +147,7 @@ struct TimelineRow: View {
     let item: TimelineItem
     var cwd: String? = nil
     var sessionId: String = ""
+    var agent: AgentKind = .unknown
 
     var body: some View {
         switch item {
@@ -130,8 +171,11 @@ struct TimelineRow: View {
                     }
                 }
             }
-        case .assistant(_, let text, _):
-            Text(markdown(text)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+        case .assistant(let id, let text, _):
+            VStack(alignment: .leading, spacing: 4) {
+                Text(markdown(text)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                ReadAloudButton(id: id, text: text, agent: agent)
+            }
         case .tool(_, let tool):
             ToolCallRow(item: tool, title: displayTitle(tool.tool, cwd: cwd))
         case .permission(_, let p):
@@ -149,6 +193,28 @@ struct TimelineRow: View {
     private func markdown(_ s: String) -> AttributedString {
         (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
             ?? AttributedString(s)
+    }
+}
+
+/// Play / stop reading one reply.
+struct ReadAloudButton: View {
+    let id: String
+    let text: String
+    let agent: AgentKind
+    @State private var speaker = Speaker.shared
+
+    var body: some View {
+        let playing = speaker.speakingId == id
+        Button {
+            speaker.toggle(text, id: id, agent: agent)
+        } label: {
+            Label(playing ? "Stop" : "Listen", systemImage: playing ? "stop.circle.fill" : "speaker.wave.2")
+                .font(.caption)
+                .foregroundStyle(playing ? AnyShapeStyle(Theme.color(for: agent)) : AnyShapeStyle(.secondary))
+                .symbolEffect(.variableColor.iterative, isActive: playing)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(playing ? "Stop reading" : "Read aloud")
     }
 }
 
@@ -332,6 +398,9 @@ struct Composer: View {
     let agentColor: Color
     @State private var text = ""
     @FocusState private var focused: Bool
+    @State private var dictation = Dictation()
+    /// What was in the box when dictation started; the transcript is added to it.
+    @State private var beforeDictation = ""
 
     private var canSend: Bool {
         connection.state == .connected && status != .done
@@ -354,6 +423,21 @@ struct Composer: View {
                     .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20))
                     .disabled(status == .done)
                 Button {
+                    if !dictation.isListening {
+                        beforeDictation = text.isEmpty || text.hasSuffix(" ") ? text : text + " "
+                        focused = false
+                    }
+                    Task { await dictation.toggle() }
+                } label: {
+                    Image(systemName: dictation.isListening ? "stop.circle.fill" : "mic.circle")
+                        .font(.system(size: 34))
+                        .symbolEffect(.pulse, isActive: dictation.isListening)
+                }
+                .tint(dictation.isListening ? agentColor : .secondary)
+                .disabled(status == .done)
+                .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Dictate")
+                Button {
+                    dictation.stop()
                     if connection.sendPrompt(session: sessionId, text: text) { text = "" }
                 } label: {
                     Image(systemName: "arrow.up.circle.fill").font(.system(size: 34))
@@ -365,6 +449,17 @@ struct Composer: View {
         }
         .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 6)
         .background(.bar)
+        .onChange(of: dictation.transcript) { _, t in
+            if dictation.isListening || !t.isEmpty { text = beforeDictation + t }
+        }
+        .onChange(of: dictation.state) { _, s in
+            switch s {
+            case .denied: connection.lastError = "Allow Microphone and Speech Recognition for Styrman in Settings to dictate."
+            case .unavailable: connection.lastError = "Dictation isn't available right now."
+            default: break
+            }
+        }
+        .onDisappear { dictation.stop() }
     }
 }
 

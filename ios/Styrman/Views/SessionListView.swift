@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 struct SessionListView: View {
@@ -156,6 +157,7 @@ struct SettingsView: View {
                     LabeledContent("Address", value: connection.credentials?.wsURL.host() ?? "—")
                     LabeledContent("Status", value: statusText)
                 }
+                VoiceSettings()
                 Section {
                     Button("Forget this Mac", role: .destructive) { confirmForget = true }
                 } footer: {
@@ -179,5 +181,67 @@ struct SettingsView: View {
         case .unauthorized: "Not authorized"
         case .unpaired: "Not paired"
         }
+    }
+}
+
+/// Read-aloud settings: auto-read, and which voice each agent speaks with.
+struct VoiceSettings: View {
+    @State private var speaker = Speaker.shared
+    @State private var choices: [AgentKind: String] = [:]
+    private let voices = VoiceChoice.available()
+
+    var body: some View {
+        Section {
+            Toggle("Read replies aloud", isOn: $speaker.autoRead)
+            ForEach(VoiceChoice.agents, id: \.self) { agent in
+                HStack {
+                    AgentBadge(agent: agent)
+                    Picker("Voice", selection: binding(agent)) {
+                        Text("Automatic").tag("")
+                        ForEach(voices, id: \.identifier) { v in
+                            Text(label(v)).tag(v.identifier)
+                        }
+                    }
+                    .labelsHidden()
+                    Spacer()
+                    Button {
+                        speaker.preview(agent)
+                    } label: {
+                        Image(systemName: speaker.speakingId == "preview-\(agent.rawValue)" ? "stop.circle" : "play.circle")
+                            .font(.title3)
+                    }
+                    .buttonStyle(.borderless)
+                    .tint(Theme.color(for: agent))
+                    .accessibilityLabel("Preview \(agent.displayName)'s voice")
+                }
+            }
+        } header: {
+            Text("Voice")
+        } footer: {
+            Text("Each agent reads its replies in its own voice. Dictation and speech happen on this iPhone. For more natural voices, download Enhanced or Premium voices in Settings › Accessibility › Read & Speak › Voices.")
+        }
+        .onAppear {
+            for a in VoiceChoice.agents { choices[a] = VoiceChoice.chosen(a) ?? "" }
+        }
+    }
+
+    private func binding(_ agent: AgentKind) -> Binding<String> {
+        Binding(
+            get: { choices[agent] ?? "" },
+            set: { id in
+                choices[agent] = id
+                VoiceChoice.choose(id.isEmpty ? nil : id, for: agent)
+                speaker.preview(agent)
+            }
+        )
+    }
+
+    private func label(_ v: AVSpeechSynthesisVoice) -> String {
+        let q: String = switch v.quality {
+        case .premium: " · Premium"
+        case .enhanced: " · Enhanced"
+        default: ""
+        }
+        return "\(v.name)\(q)"
     }
 }

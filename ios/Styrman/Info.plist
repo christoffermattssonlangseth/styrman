@@ -52,6 +52,10 @@
 	<string>Scan the pairing QR code shown by `styr pair` on your Mac.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Styrman connects to the styrd daemon on your Mac.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Dictate messages to your coding agents.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Turn what you say into text for your message. Recognition stays on this iPhone when it supports that.</string>
 	<key>StyrmanAPNsEnvironment</key>
 	<string>$(STYRMAN_APNS_ENV)</string>
 	<key>UILaunchScreen</key>

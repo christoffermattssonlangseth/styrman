@@ -10,6 +10,7 @@
 		2CD508C7B0318C2DEE1E960E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BD19E4712373962A32F05800 /* Assets.xcassets */; };
 		3ECDDE310E80BA8E1ED61278 /* ProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F191B43A5982942A6A69A5A /* ProtocolTests.swift */; };
 		432241619CC5645D2E4C6CF7 /* Notifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C6177180C2ABCE5EC6CADE3 /* Notifications.swift */; };
+		494D951C69223CEE06CDB022 /* Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84CB105D71D3950864757BA8 /* Voice.swift */; };
 		49C3228F71AD43C16091C244 /* SessionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A494FA97E73F2292F21D283 /* SessionDetailView.swift */; };
 		4B398F324DB74E7B8197541E /* DaemonConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C5647A67574DB7C5E369840 /* DaemonConnection.swift */; };
 		6542962E87DA49169ADCCC5B /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B27AED31838D3975D0DCEFA /* PairingView.swift */; };
@@ -19,6 +20,7 @@
 		9B9388375EFD227C2D3B3ED8 /* Timeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = B220CBE574863299DA11C433 /* Timeline.swift */; };
 		E03A4B6D854582CE8012D99D /* Pairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70FD8EDA21890B223957635D /* Pairing.swift */; };
 		F7DAEB408231CFB5BC40E109 /* SessionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D0ACD1C6115207E5344249C /* SessionListView.swift */; };
+		FB09420B4F8EB90EBC74C700 /* VoiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E25ACD30D61B8467E406440F /* VoiceTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -40,6 +42,7 @@
 		6D0ACD1C6115207E5344249C /* SessionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionListView.swift; sourceTree = "<group>"; };
 		70FD8EDA21890B223957635D /* Pairing.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Pairing.swift; sourceTree = "<group>"; };
 		72FCEE349C47E9D8119B9F44 /* Protocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Protocol.swift; sourceTree = "<group>"; };
+		84CB105D71D3950864757BA8 /* Voice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Voice.swift; sourceTree = "<group>"; };
 		9A0EFECC2598262BB3C5DE41 /* StyrmanTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = StyrmanTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9A494FA97E73F2292F21D283 /* SessionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDetailView.swift; sourceTree = "<group>"; };
 		9E2DA42B6895A9B2D3DE2D56 /* StyrmanApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StyrmanApp.swift; sourceTree = "<group>"; };
@@ -47,6 +50,7 @@
 		B220CBE574863299DA11C433 /* Timeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Timeline.swift; sourceTree = "<group>"; };
 		BD19E4712373962A32F05800 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C7E776EFAAFF5AC5CE31CE09 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		E25ACD30D61B8467E406440F /* VoiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceTests.swift; sourceTree = "<group>"; };
 		ECC7E94075932B81BE650100 /* Styrman.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Styrman.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -87,6 +91,7 @@
 			isa = PBXGroup;
 			children = (
 				3F191B43A5982942A6A69A5A /* ProtocolTests.swift */,
+				E25ACD30D61B8467E406440F /* VoiceTests.swift */,
 			);
 			path = StyrmanTests;
 			sourceTree = "<group>";
@@ -96,6 +101,7 @@
 			children = (
 				2C5647A67574DB7C5E369840 /* DaemonConnection.swift */,
 				70FD8EDA21890B223957635D /* Pairing.swift */,
+				84CB105D71D3950864757BA8 /* Voice.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -232,6 +238,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				3ECDDE310E80BA8E1ED61278 /* ProtocolTests.swift in Sources */,
+				FB09420B4F8EB90EBC74C700 /* VoiceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -249,6 +256,7 @@
 				706EB106558B1B609DC45E2B /* StyrmanApp.swift in Sources */,
 				787DEFC79040854312CEC7F9 /* Theme.swift in Sources */,
 				9B9388375EFD227C2D3B3ED8 /* Timeline.swift in Sources */,
+				494D951C69223CEE06CDB022 /* Voice.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
