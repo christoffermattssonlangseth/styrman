@@ -298,3 +298,14 @@ private func event(_ seq: UInt64, _ kind: String) -> String {
         #expect(t.pending.map(\.unconfirmed) == [false, false])
     }
 }
+
+@Suite struct OptionLabelTests {
+    @Test func longCodexOptionsAreShortened() {
+        let (h, c) = OptionLabel.split("Yes, and don't ask again for commands that start with `xcodebuild -project ios/Styrman.xcodeproj -quiet`")
+        #expect(h == "Always allow commands starting with")
+        #expect(c == "xcodebuild -project ios/Styrman.xcodeproj -quiet")
+        #expect(OptionLabel.split("Yes, proceed").0 == "Allow once")
+        #expect(OptionLabel.split("No, and tell Codex what to do differently").0 == "Deny and tell Codex what to do")
+        #expect(OptionLabel.split("Allow once") == ("Allow once", nil), "Claude's labels stay as they are")
+    }
+}

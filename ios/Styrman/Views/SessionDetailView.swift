@@ -327,18 +327,42 @@ struct PermissionCard: View {
     let title: String
     let sessionId: String
     @State private var sent: String?
+    @State private var showAll = false
+
+    /// "Would you like to run the following command?" says nothing the card doesn't.
+    private var reason: String? {
+        guard let r = item.reason, !r.hasPrefix("Would you like to") else { return nil }
+        return r
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             Label(item.isOpen ? "Permission needed" : "Permission", systemImage: "hand.raised.fill")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(item.isOpen ? Theme.accent : .secondary)
-            Text(title).font(item.tool.kind == .execute ? Theme.mono : .body).textSelection(.enabled)
-            if let reason = item.reason { Text(reason).font(.footnote).foregroundStyle(.secondary) }
+
+            // What it's about, compact: commands in a small monospaced box.
+            Group {
+                if item.tool.kind == .execute {
+                    Text(title)
+                        .font(.system(.footnote, design: .monospaced))
+                        .lineLimit(showAll ? nil : 6)
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+                } else {
+                    Text(title).font(.callout.weight(.medium)).lineLimit(showAll ? nil : 4)
+                }
+            }
+            .textSelection(.enabled)
+            if !showAll, title.count > 240 || title.split(separator: "\n").count > 6 {
+                Button("Show all") { showAll = true }.font(.caption).buttonStyle(.borderless)
+            }
+            if let reason { Text(reason).font(.footnote).foregroundStyle(.secondary) }
+
             if item.isOpen {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { buttons }
-                    VStack(alignment: .leading, spacing: 8) { buttons }
+                VStack(spacing: 8) {
+                    ForEach(item.options) { opt in option(opt) }
                 }
                 countdown
             } else if let text = item.resolutionText {
@@ -352,30 +376,57 @@ struct PermissionCard: View {
         .sensoryFeedback(.success, trigger: item.isOpen) { wasOpen, isOpen in wasOpen && !isOpen && sent != nil }
     }
 
-    @ViewBuilder private var buttons: some View {
-        ForEach(item.options) { opt in
-            Button {
-                if connection.resolvePermission(session: sessionId, request: item.request, option: opt.id,
-                                                failed: { sent = nil }) {
-                    sent = opt.id
-                    // The card closes when the Mac reports the answer. If it hasn't after
-                    // 10 s, unlock the buttons so you can try again.
-                    Task {
-                        try? await Task.sleep(for: .seconds(10))
-                        if item.isOpen, sent == opt.id { sent = nil }
+    /// One option as a full-width row of the same shape as the others.
+    private func option(_ opt: PermissionOption) -> some View {
+        let (head, code) = OptionLabel.split(opt.label)
+        let deny = !opt.kind.isAllow
+        let primary = opt.kind == .allowOnce
+        let tint: Color = deny ? .red : Theme.accent
+        return Button {
+            if connection.resolvePermission(session: sessionId, request: item.request, option: opt.id,
+                                            failed: { sent = nil }) {
+                sent = opt.id
+                // The card closes when the Mac reports the answer. If it hasn't after
+                // 10 s, unlock the buttons so you can try again.
+                Task {
+                    try? await Task.sleep(for: .seconds(10))
+                    if item.isOpen, sent == opt.id { sent = nil }
+                }
+            }
+        } label: {
+            HStack(alignment: .center, spacing: 10) {
+                Group {
+                    if sent == opt.id {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: deny ? "xmark" : opt.kind == .allowAlways ? "checkmark.seal" : "checkmark")
+                            .font(.callout.weight(.semibold))
                     }
                 }
-            } label: {
-                HStack(spacing: 6) {
-                    if sent == opt.id { ProgressView().controlSize(.mini) }
-                    Text(opt.label)
+                .frame(width: 20)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(head).font(.callout.weight(.semibold)).lineLimit(2)
+                    if let code {
+                        Text(code)
+                            .font(.system(.caption, design: .monospaced))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .opacity(0.8)
+                    }
                 }
-                .frame(minHeight: 30)
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(opt.kind.isAllow ? (opt.kind == .allowOnce ? Theme.ink.opacity(0.85) : .gray) : Theme.accent)
-            .disabled(sent != nil || connection.state != .connected)
+            .multilineTextAlignment(.leading)
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .foregroundStyle(primary ? Color.white : tint)
+            .background(primary ? tint : tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(primary ? .clear : tint.opacity(0.45)))
+            .contentShape(RoundedRectangle(cornerRadius: 12))
         }
+        .buttonStyle(.plain)
+        .disabled(sent != nil || connection.state != .connected)
+        .opacity(sent != nil && sent != opt.id ? 0.5 : 1)
     }
 
     @ViewBuilder private var countdown: some View {
@@ -385,7 +436,36 @@ struct PermissionCard: View {
                 Text(left > 0 ? "Answer here or in the terminal" : "Answer in the terminal")
                     .font(.caption).foregroundStyle(.secondary).monospacedDigit()
             }
+        } else {
+            Text("Answer here or in the terminal").font(.caption).foregroundStyle(.secondary)
         }
+    }
+}
+
+/// Option labels for the phone: the agent's long wording, made short.
+enum OptionLabel {
+    /// "Yes, and don't ask again for commands that start with `xcodebuild …`"
+    /// → ("Always allow commands starting with", "xcodebuild …").
+    static func split(_ label: String) -> (String, String?) {
+        var head = label
+        var code: String?
+        if let open = label.firstIndex(of: "`"),
+           let close = label[label.index(after: open)...].firstIndex(of: "`") {
+            code = String(label[label.index(after: open)..<close])
+            head = String(label[..<open]).trimmingCharacters(in: .whitespaces)
+        }
+        let rewrites: [(String, String)] = [
+            ("Yes, and don't ask again for commands that start with", "Always allow commands starting with"),
+            ("Yes, and don't ask again for these files", "Always allow edits to these files"),
+            ("Yes, and don't ask again", "Always allow"),
+            ("Yes, proceed", "Allow once"),
+            ("No, and tell Codex what to do differently", "Deny and tell Codex what to do"),
+        ]
+        for (from, to) in rewrites where head.hasPrefix(from) {
+            head = to + head.dropFirst(from.count)
+            break
+        }
+        return (head.isEmpty ? label : head, code)
     }
 }
 
