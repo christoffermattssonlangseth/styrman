@@ -124,7 +124,7 @@ fun SessionScreen(connection: DaemonConnection, speaker: Speaker, sessionId: Str
     }
     LaunchedEffect(timeline.items.size + timeline.pending.size) {
         val n = timeline.items.size + timeline.pending.size
-        if (n > 0) list.animateScrollToItem(n)
+        if (n > 0) list.animateScrollToItem(n - 1)
     }
 
     Scaffold(
@@ -159,15 +159,20 @@ fun SessionScreen(connection: DaemonConnection, speaker: Speaker, sessionId: Str
         },
         bottomBar = {
             Surface(tonalElevation = 3.dp, modifier = Modifier.imePadding().navigationBarsPadding()) {
-                when {
-                    summary == null && connection.state == DaemonConnection.State.Connected ->
-                        Notice("This session is no longer shared.")
-                    summary == null -> {}
-                    summary.acceptsPrompts -> Composer(connection, sessionId, summary.status, agent)
-                    else -> Notice(
-                        "Read-only: this ${agent.displayName} session wasn't started through Styrman. " +
-                            "Run `styr setup` on the Mac, then start it again in a new terminal tab.",
-                    )
+                Column {
+                    if (!timeline.isLive && (summary != null || connection.state != DaemonConnection.State.Connected)) {
+                        Notice(if (connection.state == DaemonConnection.State.Connected) "Catching up…" else "Disconnected from Mac")
+                    }
+                    when {
+                        summary == null && connection.state == DaemonConnection.State.Connected ->
+                            Notice("This session is no longer shared.")
+                        summary == null -> {}
+                        summary.acceptsPrompts -> Composer(connection, sessionId, summary.status, agent)
+                        else -> Notice(
+                            "Read-only: this ${agent.displayName} session wasn't started through Styrman. " +
+                                "Run `styr setup` on the Mac, then start it again in a new terminal tab.",
+                        )
+                    }
                 }
             }
         },
@@ -183,9 +188,10 @@ fun SessionScreen(connection: DaemonConnection, speaker: Speaker, sessionId: Str
                     connection.resolvePermission(sessionId, request, option)
                 }
             }
-            items(timeline.pending) { p -> PendingRow(p, summary?.status == SessionStatus.Working, agent) }
-            if (!timeline.isLive) item { Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
-            else if (!timeline.hasContent && timeline.pending.isEmpty()) item {
+            items(timeline.pending, key = { it.id }) { p ->
+                PendingRow(p) { timeline.dismissUnconfirmed(p.id) }
+            }
+            if (timeline.isLive && !timeline.hasContent && timeline.pending.isEmpty()) item {
                 Notice("Nothing yet. Prompts, tool calls and replies show up here as they happen.")
             }
         }
@@ -359,10 +365,12 @@ private fun PermissionCard(item: TimelineItem.Permission, title: String, answer:
 }
 
 @Composable
-private fun PendingRow(p: SessionTimeline.PendingPrompt, working: Boolean, agent: AgentKind) {
+private fun PendingRow(p: SessionTimeline.PendingPrompt, dismiss: () -> Unit) {
+    val clipboard = LocalContext.current.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     val label = when {
-        p.delivered -> if (working) "Delivered; ${agent.displayName} picks it up after the current step" else "Delivered"
-        p.queued || working -> "Queued, sent when ${agent.displayName} finishes"
+        p.delivered -> "Handed to agent"
+        p.queued -> "Queued on Mac"
+        p.unconfirmed -> "Delivery unconfirmed"
         else -> "Sending…"
     }
     Row(Modifier.fillMaxWidth()) {
@@ -370,6 +378,14 @@ private fun PendingRow(p: SessionTimeline.PendingPrompt, working: Boolean, agent
         Column(horizontalAlignment = Alignment.End) {
             Text(p.text, Modifier.background(Palette.accent.copy(alpha = 0.15f), RoundedCornerShape(16.dp)).padding(horizontal = 14.dp, vertical = 10.dp))
             Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (p.unconfirmed) {
+                Row {
+                    TextButton(onClick = { clipboard.setPrimaryClip(ClipData.newPlainText("Prompt", p.text)) }) {
+                        Text("Copy")
+                    }
+                    TextButton(onClick = dismiss) { Text("Dismiss") }
+                }
+            }
         }
     }
 }

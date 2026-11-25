@@ -285,18 +285,16 @@ private func event(_ seq: UInt64, _ kind: String) -> String {
 }
 
 @Suite @MainActor struct SendConfirmationTests {
-    @Test func unconfirmedMessagesBecomeRetryableNotLost() {
+    @Test func timeoutTargetsTheOriginalSendAndLateConfirmationClearsIt() {
         let t = SessionTimeline(sessionId: "S")
-        t.addPending("hello")
-        #expect(t.isUnconfirmed("hello"))
-        t.markFailed("hello")
-        #expect(t.pending.first?.failed == true, "kept, marked for retry")
-        #expect(!t.isUnconfirmed("hello"))
-        // A confirmed message is never marked failed by a late timeout.
-        t.addPending("second")
-        t.markQueued("second")
-        t.markFailed("second")
-        #expect(t.pending.last?.failed == false)
-        #expect(!t.isUnconfirmed("second"))
+        let first = t.addPending("hello")
+        let second = t.addPending("hello")
+        t.markUnconfirmed(second)
+        #expect(t.pending.map(\.unconfirmed) == [false, true])
+        t.markQueued("hello")
+        t.markUnconfirmed(first)
+        #expect(t.pending.map(\.unconfirmed) == [false, true])
+        t.markQueued("hello")
+        #expect(t.pending.map(\.unconfirmed) == [false, false])
     }
 }

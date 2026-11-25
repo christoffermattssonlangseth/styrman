@@ -77,27 +77,38 @@ final class SessionTimeline {
         /// The Mac handed it to the agent (typed into its terminal); the agent
         /// submits it when it gets to it.
         var delivered = false
-        /// It didn't leave the phone, or the Mac never confirmed it: offer a retry.
-        var failed = false
+        var unconfirmed = false
     }
 
-    func markFailed(_ text: String) {
-        if let i = pending.firstIndex(where: { $0.text == text && !$0.queued && !$0.delivered }) { pending[i].failed = true }
-    }
-
-    /// Still waiting for the Mac's confirmation (neither queued, delivered nor failed).
-    func isUnconfirmed(_ text: String) -> Bool {
-        pending.contains { $0.text == text && !$0.queued && !$0.delivered && !$0.failed }
+    func markUnconfirmed(_ id: UUID) {
+        if let i = pending.firstIndex(where: { $0.id == id && !$0.queued && !$0.delivered }) {
+            pending[i].unconfirmed = true
+        }
     }
 
     func markDelivered(_ text: String) {
-        if let i = pending.firstIndex(where: { $0.text == text && !$0.delivered }) { pending[i].delivered = true }
+        if let i = pending.firstIndex(where: { $0.text == text && !$0.delivered }) {
+            pending[i].delivered = true
+            pending[i].unconfirmed = false
+        }
     }
 
-    func addPending(_ text: String) { pending.append(PendingPrompt(text: text)) }
+    @discardableResult
+    func addPending(_ text: String) -> UUID {
+        let prompt = PendingPrompt(text: text)
+        pending.append(prompt)
+        return prompt.id
+    }
 
     func markQueued(_ text: String) {
-        if let i = pending.firstIndex(where: { $0.text == text && !$0.queued }) { pending[i].queued = true }
+        if let i = pending.firstIndex(where: { $0.text == text && !$0.queued && !$0.delivered }) {
+            pending[i].queued = true
+            pending[i].unconfirmed = false
+        }
+    }
+
+    func dismissUnconfirmed(_ id: UUID) {
+        pending.removeAll { $0.id == id && $0.unconfirmed }
     }
 
     func dropPending(_ text: String) {

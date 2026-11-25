@@ -55,7 +55,6 @@ class DaemonConnection(context: Context) {
     private var backoffMs = 1000L
     private var wanted = false
     private var startPrompt: String? = null
-    private var lastSent: Triple<String, String, Long>? = null
 
     fun timeline(id: String) = timelines.getOrPut(id) { SessionTimeline(id) }
     fun session(id: String) = sessions.firstOrNull { it.id == id }
@@ -128,9 +127,7 @@ class DaemonConnection(context: Context) {
         main.postDelayed({ if (wanted && state !is State.Connected) connect() }, wait)
     }
 
-    private fun send(o: JsonObject) {
-        ws?.send(o.toString())
-    }
+    private fun send(o: JsonObject): Boolean = ws?.send(o.toString()) == true
 
     // ---- messages ----
 
@@ -157,10 +154,7 @@ class DaemonConnection(context: Context) {
             is ServerMsg.Subscribed -> timelines[msg.session]?.isLive = true
             is ServerMsg.EventMsg -> timelines[msg.event.session]?.apply(listOf(msg.event))
             is ServerMsg.PromptQueued -> timelines[msg.session]?.markQueued(msg.text)
-            is ServerMsg.PromptDelivered -> {
-                timelines[msg.session]?.markDelivered(msg.text)
-                if (lastSent?.second == msg.text) lastSent = null
-            }
+            is ServerMsg.PromptDelivered -> timelines[msg.session]?.markDelivered(msg.text)
             is ServerMsg.Folders -> folders = msg.listing
             is ServerMsg.SessionStarting -> {
                 startPrompt?.let { timeline(msg.session).addPending(it) }
@@ -168,14 +162,7 @@ class DaemonConnection(context: Context) {
                 requestedSession = msg.session
                 send(ClientMsg.listSessions())
             }
-            is ServerMsg.Error -> {
-                lastError = msg.message
-                // A refused prompt shouldn't sit in the timeline as "queued" forever.
-                lastSent?.let { (sid, text, at) ->
-                    if (System.currentTimeMillis() - at < 10_000) timelines[sid]?.dropPending(text)
-                }
-                lastSent = null
-            }
+            is ServerMsg.Error -> lastError = msg.message
             is ServerMsg.Unknown -> {}
         }
     }
@@ -200,16 +187,19 @@ class DaemonConnection(context: Context) {
 
     fun resolvePermission(session: String, request: String, option: String): Boolean {
         if (state != State.Connected) return false
-        send(ClientMsg.resolvePermission(session, request, option))
-        return true
+        return send(ClientMsg.resolvePermission(session, request, option))
     }
 
     fun sendPrompt(session: String, text: String): Boolean {
         val t = text.trim()
         if (state != State.Connected || t.isEmpty()) return false
-        timeline(session).addPending(t)
-        lastSent = Triple(session, t, System.currentTimeMillis())
-        send(ClientMsg.sendPrompt(session, t))
+        if (!send(ClientMsg.sendPrompt(session, t))) {
+            lastError = "The connection closed before the message could be sent."
+            return false
+        }
+        val timeline = timeline(session)
+        val id = timeline.addPending(t)
+        main.postDelayed({ timeline.markUnconfirmed(id) }, 15_000)
         return true
     }
 

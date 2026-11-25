@@ -26,9 +26,7 @@ struct SessionDetailView: View {
                         TimelineRow(item: item, cwd: summary?.cwd, sessionId: sessionId, agent: agent).id(item.id)
                     }
                     ForEach(timeline.pending) { p in
-                        PendingPromptRow(prompt: p, working: summary?.status == .working, agent: summary?.agent.displayName ?? "the agent") {
-                            connection.retry(session: sessionId, text: p.text)
-                        }
+                        PendingPromptRow(prompt: p) { timeline.dismissUnconfirmed(p.id) }
                     }
                     if timeline.isLive && !timeline.hasContent && timeline.pending.isEmpty {
                         VStack(spacing: 6) {
@@ -38,9 +36,6 @@ struct SessionDetailView: View {
                                 .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         }
                         .frame(maxWidth: .infinity).padding(.top, 40)
-                    }
-                    if !timeline.isLive {
-                        HStack { Spacer(); ProgressView(); Spacer() }.padding()
                     }
                     Color.clear.frame(height: 1).id("bottom")
                 }
@@ -99,27 +94,39 @@ struct SessionDetailView: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            if summary == nil, connection.state == .connected {
-                Text("This session is no longer shared.")
-                    .font(.footnote).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity).padding(10).background(.bar)
-            } else if let summary {
-                if summary.acceptsPrompts {
-                    Composer(sessionId: sessionId, status: summary.status, agent: summary.agent.displayName,
-                             agentColor: Theme.color(for: summary.agent))
-                        .onChange(of: speaker.autoRead) { _, on in
-                            // Turning it on reads the latest reply, so you hear where things are.
-                            if on, let r = latestReply(timeline) { speaker.speak(r.text, id: r.id, agent: summary.agent) }
-                        }
-                } else {
-                    Label {
-                        Text("Read-only: this \(summary.agent.displayName) session wasn't started through Styrman. Run `styr setup` on the Mac, then start it again in a new terminal tab to approve and send messages from here.")
-                    } icon: { Image(systemName: "eye") }
-                    .font(.footnote).foregroundStyle(.secondary)
-                    .padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.bar)
+            VStack(spacing: 0) {
+                if !timeline.isLive && (summary != nil || connection.state != .connected) {
+                    Label(connection.state == .connected ? "Catching up…" : "Disconnected from Mac",
+                          systemImage: connection.state == .connected ? "clock" : "wifi.slash")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(8)
+                        .background(.bar)
+                }
+                if summary == nil, connection.state == .connected {
+                    Text("This session is no longer shared.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity).padding(10).background(.bar)
+                } else if let summary {
+                    if summary.acceptsPrompts {
+                        Composer(sessionId: sessionId, status: summary.status, agent: summary.agent.displayName,
+                                 agentColor: Theme.color(for: summary.agent))
+                            .onChange(of: speaker.autoRead) { _, on in
+                                // Turning it on reads the latest reply, so you hear where things are.
+                                if on, let r = latestReply(timeline) { speaker.speak(r.text, id: r.id, agent: summary.agent) }
+                            }
+                    } else {
+                        Label {
+                            Text("Read-only: this \(summary.agent.displayName) session wasn't started through Styrman. Run `styr setup` on the Mac, then start it again in a new terminal tab to approve and send messages from here.")
+                        } icon: { Image(systemName: "eye") }
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.bar)
+                    }
                 }
             }
         }
+
         .onAppear { connection.watch(sessionId) }
         .onChange(of: timeline.isLive, initial: true) { _, live in
             if live, baseline == nil { baseline = .some(latestReply(timeline)?.id) }
@@ -528,16 +535,13 @@ struct Composer: View {
 
 struct PendingPromptRow: View {
     let prompt: SessionTimeline.PendingPrompt
-    let working: Bool
-    let agent: String
-    var retry: () -> Void = {}
+    let dismiss: () -> Void
 
-    private var pendingLabel: String {
-        if prompt.failed { return "Not sent · Tap to retry" }
-        if prompt.delivered {
-            return working ? "Delivered; \(agent) picks it up after the current step" : "Delivered"
-        }
-        return prompt.queued || working ? "Queued, sent when \(agent) finishes" : "Sending…"
+    private var label: String {
+        if prompt.delivered { return "Handed to agent" }
+        if prompt.queued { return "Queued on Mac" }
+        if prompt.unconfirmed { return "Delivery unconfirmed" }
+        return "Sending…"
     }
 
     var body: some View {
@@ -545,13 +549,17 @@ struct PendingPromptRow: View {
             Spacer(minLength: 40)
             VStack(alignment: .trailing, spacing: 4) {
                 Text(prompt.text)
+                    .textSelection(.enabled)
                     .padding(.horizontal, 14).padding(.vertical, 10)
-                    .background(prompt.failed ? Color.red.opacity(0.15) : Theme.accent.opacity(0.15), in: RoundedRectangle(cornerRadius: 16))
-                    .onTapGesture { if prompt.failed { retry() } }
-                Label(pendingLabel, systemImage: prompt.failed ? "exclamationmark.arrow.circlepath"
-                      : prompt.delivered ? "checkmark.circle" : prompt.queued || working ? "clock" : "arrow.up.circle")
-                    .font(.caption2).foregroundStyle(prompt.failed ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
-                    .onTapGesture { if prompt.failed { retry() } }
+                    .background(Theme.accent.opacity(0.15), in: RoundedRectangle(cornerRadius: 16))
+                Text(label).font(.caption2).foregroundStyle(.secondary)
+                if prompt.unconfirmed {
+                    HStack {
+                        Button("Copy") { UIPasteboard.general.string = prompt.text }
+                        Button("Dismiss", action: dismiss)
+                    }
+                    .font(.footnote)
+                }
             }
         }
     }

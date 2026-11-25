@@ -5,7 +5,8 @@ import VisionKit
 struct PairingView: View {
     @State private var scanned: PairingLink?
     @State private var showManual = false
-    @State private var scannerError: String?
+    @State private var scannerFailed = false
+    @State private var scanAttempt = 0
 
     var body: some View {
         NavigationStack {
@@ -19,8 +20,9 @@ struct PairingView: View {
                 }
                 .padding(.top, 24)
 
-                if QRScanner.isAvailable {
-                    QRScanner { link in scanned = link }
+                if QRScanner.isAvailable && !scannerFailed {
+                    QRScanner(onLink: { scanned = $0 }, onFailure: { scannerFailed = true })
+                        .id(scanAttempt)
                         .clipShape(RoundedRectangle(cornerRadius: 20))
                         .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.quaternary))
                         .frame(maxHeight: 360)
@@ -39,7 +41,7 @@ struct PairingView: View {
             .padding(.horizontal, 24)
             .navigationTitle("Styrman")
             .navigationBarTitleDisplayMode(.inline)
-            .sheet(item: $scanned) { link in ConfirmPairingView(link: link) }
+            .sheet(item: $scanned, onDismiss: { scanAttempt += 1 }) { link in ConfirmPairingView(link: link) }
             .sheet(isPresented: $showManual) { ManualPairingView() }
         }
     }
@@ -128,6 +130,7 @@ struct ManualPairingView: View {
 /// VisionKit QR scanner that reports the first valid pairing link.
 struct QRScanner: UIViewControllerRepresentable {
     let onLink: (PairingLink) -> Void
+    let onFailure: () -> Void
 
     @MainActor static var isAvailable: Bool {
         DataScannerViewController.isSupported && DataScannerViewController.isAvailable
@@ -139,7 +142,11 @@ struct QRScanner: UIViewControllerRepresentable {
             qualityLevel: .balanced,
             isHighlightingEnabled: true)
         vc.delegate = context.coordinator
-        try? vc.startScanning()
+        do {
+            try vc.startScanning()
+        } catch {
+            Task { @MainActor in onFailure() }
+        }
         return vc
     }
 

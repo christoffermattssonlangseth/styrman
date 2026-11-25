@@ -37,7 +37,6 @@ final class DaemonConnection {
     }
 
     @ObservationIgnored private var timelines: [String: SessionTimeline] = [:]
-    @ObservationIgnored private var lastSentPrompt: (String, String, Date)?
     @ObservationIgnored private var watched: Set<String> = []
     @ObservationIgnored private var task: URLSessionWebSocketTask?
     @ObservationIgnored private var loop: Task<Void, Never>?
@@ -89,6 +88,7 @@ final class DaemonConnection {
         loop = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
+        timelines.values.forEach { $0.isLive = false }
         if credentials != nil, state != .unauthorized { state = .offline("Disconnected") }
     }
 
@@ -191,7 +191,6 @@ final class DaemonConnection {
             timelines[sid]?.markQueued(text)
         case .promptDelivered(let sid, let text):
             timelines[sid]?.markDelivered(text)
-            if lastSentPrompt?.1 == text { lastSentPrompt = nil }
         case .folders(let listing):
             folders = listing
         case .sessionStarting(let sid):
@@ -201,11 +200,6 @@ final class DaemonConnection {
             send(.listSessions)
         case .error(let message):
             lastError = message
-            // A refused prompt shouldn't sit in the timeline as "queued" forever.
-            if let (sid, text, at) = lastSentPrompt, Date().timeIntervalSince(at) < 10 {
-                timelines[sid]?.dropPending(text)
-                lastSentPrompt = nil
-            }
         case .unknown:
             break
         }
@@ -270,27 +264,15 @@ final class DaemonConnection {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard state == .connected, !text.isEmpty else { return false }
         let tl = timeline(for: session)
-        tl.addPending(text)
-        lastSentPrompt = (session, text, Date())
-        send(.sendPrompt(session: session, text: text)) { [weak self] in
-            tl.markFailed(text)
-            self?.lastError = "Not sent: the connection to \(self?.host ?? "the Mac") dropped. Tap the message to retry."
+        let id = tl.addPending(text)
+        send(.sendPrompt(session: session, text: text)) {
+            tl.markUnconfirmed(id)
         }
-        // The Mac confirms every prompt (queued or delivered). No answer → not sent.
-        Task { @MainActor [weak self] in
+        Task { @MainActor [weak tl] in
             try? await Task.sleep(for: .seconds(15))
-            if tl.isUnconfirmed(text) {
-                tl.markFailed(text)
-                self?.lastError = "The Mac didn't confirm your message. Tap it to retry."
-            }
+            tl?.markUnconfirmed(id)
         }
         return true
-    }
-
-    /// Send a message that failed again.
-    func retry(session: String, text: String) {
-        timeline(for: session).dropPending(text)
-        _ = sendPrompt(session: session, text: text)
     }
 
     /// Answer a permission request. The card closes when the daemon's

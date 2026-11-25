@@ -38,24 +38,49 @@ class SessionTimeline(val sessionId: String) {
     /** Prompts sent from this phone that the agent hasn't picked up yet. */
     val pending = mutableStateListOf<PendingPrompt>()
 
-    data class PendingPrompt(val text: String, val queued: Boolean = false, val delivered: Boolean = false)
+    data class PendingPrompt(
+        val text: String,
+        val id: String = java.util.UUID.randomUUID().toString(),
+        val queued: Boolean = false,
+        val delivered: Boolean = false,
+        val unconfirmed: Boolean = false,
+    )
 
     private val toolIndex = HashMap<String, Int>()
     private val permissionIndex = HashMap<String, Int>()
     private val messageIndex = HashMap<String, Int>()
     private var planIndex: Int? = null
 
-    fun addPending(text: String) = pending.add(PendingPrompt(text))
-    fun markQueued(text: String) = update(text) { it.copy(queued = true) }
-    fun markDelivered(text: String) = update(text) { it.copy(delivered = true) }
+    fun addPending(text: String): String {
+        val prompt = PendingPrompt(text)
+        pending.add(prompt)
+        return prompt.id
+    }
+
+    fun markQueued(text: String) = update({ it.text == text && !it.queued && !it.delivered }) {
+        it.copy(queued = true, unconfirmed = false)
+    }
+
+    fun markDelivered(text: String) = update({ it.text == text && !it.delivered }) {
+        it.copy(delivered = true, unconfirmed = false)
+    }
+
+    fun markUnconfirmed(id: String) = update({ it.id == id && !it.queued && !it.delivered }) {
+        it.copy(unconfirmed = true)
+    }
+
+    fun dismissUnconfirmed(id: String) {
+        pending.removeAll { it.id == id && it.unconfirmed }
+    }
+
     fun dropPending(text: String) {
         val i = pending.indexOfFirst { it.text == text }
         if (i >= 0) pending.removeAt(i)
     }
 
-    private fun update(text: String, f: (PendingPrompt) -> PendingPrompt) {
-        val i = pending.indexOfFirst { it.text == text }
-        if (i >= 0) pending[i] = f(pending[i])
+    private fun update(matches: (PendingPrompt) -> Boolean, change: (PendingPrompt) -> PendingPrompt) {
+        val i = pending.indexOfFirst(matches)
+        if (i >= 0) pending[i] = change(pending[i])
     }
 
     val hasContent get() = items.any { it !is TimelineItem.Divider }
