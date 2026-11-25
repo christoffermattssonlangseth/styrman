@@ -4,7 +4,8 @@ import SwiftUI
 enum Theme {
     static let accent = Color("AccentColor")
     static let attention = Color(UIColor {
-        UIColor(hex: $0.userInterfaceStyle == .dark ? 0xFFCF83 : 0x855008)
+        // Light: a clear amber that still reads as text (4.6:1 on white).
+        UIColor(hex: $0.userInterfaceStyle == .dark ? 0xFFCF83 : 0xA86400)
     })
     static let ink = Color(red: 0.067, green: 0.071, blue: 0.078)
     /// A solid main button: near-black in light mode, near-white in dark.

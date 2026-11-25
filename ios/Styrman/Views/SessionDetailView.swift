@@ -48,9 +48,14 @@ struct SessionDetailView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     let latest = latestReply(timeline)?.id
-                    ForEach(merged(timeline.items)) { item in
-                        TimelineRow(item: item, cwd: summary?.cwd, sessionId: sessionId, agent: agent,
-                                    latestReplyId: latest).id(item.id)
+                    ForEach(DisplayRow.rows(merged(timeline.items))) { row in
+                        switch row {
+                        case .item(let item):
+                            TimelineRow(item: item, cwd: summary?.cwd, sessionId: sessionId, agent: agent,
+                                        latestReplyId: latest).id(item.id)
+                        case .tools(let id, let tools):
+                            ToolRunCard(tools: tools, cwd: summary?.cwd).id(id)
+                        }
                     }
                     ForEach(timeline.pending) { p in
                         PendingPromptRow(prompt: p) { timeline.dismissUnconfirmed(p.id) }
@@ -70,6 +75,7 @@ struct SessionDetailView: View {
                 .padding(.vertical, 12)
             }
             .defaultScrollAnchor(.bottom)
+            .background(SessionBackground(agent: agent))
             // Like the Claude app: drag the conversation down to pull the keyboard away,
             // or tap the conversation to dismiss it.
             .scrollDismissesKeyboard(.interactively)
@@ -250,7 +256,8 @@ struct TimelineRow: View {
                 VStack(alignment: .trailing, spacing: 4) {
                     Text(text).textSelection(.enabled)
                         .padding(.horizontal, 14).padding(.vertical, 10)
-                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
+                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .shadow(color: .black.opacity(0.05), radius: 4, y: 1)
                     if fromPhone {
                         Label("From this phone", systemImage: "iphone").font(.caption2).foregroundStyle(.secondary)
                     }
@@ -370,6 +377,8 @@ struct ActionIcon: View {
 struct ToolCallRow: View {
     let item: ToolItem
     let title: String
+    /// Inside a run's card: no background of its own.
+    var bare = false
     @State private var showDetail = false
 
     var body: some View {
@@ -390,9 +399,10 @@ struct ToolCallRow: View {
                 Spacer(minLength: 4)
                 statusIcon
             }
-            .padding(.horizontal, 10).padding(.vertical, 6)
+            .padding(.horizontal, 10).padding(.vertical, bare ? 7 : 6)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+            .background(bare ? AnyShapeStyle(Color.clear) : AnyShapeStyle(Color(.secondarySystemGroupedBackground)),
+                        in: RoundedRectangle(cornerRadius: 8))
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
@@ -788,3 +798,95 @@ struct AgentMessageRow: View {
     }
 }
 
+
+/// What the conversation shows: timeline items, with runs of tool calls grouped.
+enum DisplayRow: Identifiable {
+    case item(TimelineItem)
+    case tools(id: String, [ToolItem])
+
+    var id: String {
+        switch self {
+        case .item(let i): i.id
+        case .tools(let id, _): id
+        }
+    }
+
+    static func rows(_ items: [TimelineItem]) -> [DisplayRow] {
+        var out: [DisplayRow] = []
+        var run: [(String, ToolItem)] = []
+        func flush() {
+            if run.count >= 2 {
+                out.append(.tools(id: run[0].0, run.map(\.1)))
+            } else if let (id, t) = run.first {
+                out.append(.item(.tool(id: id, t)))
+            }
+            run = []
+        }
+        for item in items {
+            if case .tool(let id, let t) = item {
+                run.append((id, t))
+            } else {
+                flush()
+                out.append(.item(item))
+            }
+        }
+        flush()
+        return out
+    }
+}
+
+/// Several tool calls in a row, as one card: the latest few, the rest a tap away.
+struct ToolRunCard: View {
+    let tools: [ToolItem]
+    let cwd: String?
+    @State private var expanded = false
+    private let visible = 3
+
+    var body: some View {
+        let hidden = expanded ? 0 : max(0, tools.count - visible)
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.snappy) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "square.stack.3d.up").font(.caption2)
+                    Text("\(tools.count) steps").font(.caption.weight(.semibold))
+                    if tools.contains(where: { $0.status == .pending || $0.status == .running }) {
+                        ProgressView().controlSize(.mini)
+                    }
+                    Spacer()
+                    if tools.count > visible {
+                        Text(expanded ? "Show fewer" : "\(hidden) more").font(.caption2)
+                        Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
+                            .rotationEffect(.degrees(expanded ? 180 : 0))
+                    }
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 2)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(tools.count <= visible)
+            ForEach(Array(tools.enumerated().dropFirst(hidden)), id: \.offset) { _, t in
+                ToolCallRow(item: t, title: displayTitle(t.tool, cwd: cwd), bare: true)
+                    .transition(.opacity)
+            }
+        }
+        .padding(.bottom, 3)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.primary.opacity(0.05)))
+    }
+}
+
+/// The grouped background with a faint wash of the agent's colour at the top.
+struct SessionBackground: View {
+    let agent: AgentKind
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color(.systemGroupedBackground)
+            LinearGradient(colors: [Theme.color(for: agent).opacity(0.08), .clear], startPoint: .top, endPoint: .bottom)
+                .frame(height: 280)
+        }
+        .ignoresSafeArea()
+    }
+}
