@@ -73,6 +73,34 @@ fn canon(p: &std::path::Path) -> std::path::PathBuf {
     std::fs::canonicalize(p).unwrap_or_else(|_| p.to_owned())
 }
 
+/// What a menu read off the screen is about, when the agent didn't announce the tool:
+/// the `$ command` line if there is one (Codex), else the first line that isn't
+/// "Environment: …" / "Reason: …".
+pub fn menu_tool(p: &styr_core::ipc::TerminalPrompt) -> ToolInfo {
+    let lines: Vec<&str> = p.detail.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    if let Some(cmd) = lines.iter().find_map(|l| l.strip_prefix("$ ")) {
+        return ToolInfo {
+            name: "command".into(),
+            kind: ToolKind::Execute,
+            title: format!("Run `{cmd}`"),
+            input: serde_json::json!({"command": cmd}),
+            locations: vec![],
+        };
+    }
+    let title = lines
+        .iter()
+        .find(|l| !l.starts_with("Environment:") && !l.starts_with("Reason:"))
+        .or(lines.first())
+        .map_or_else(|| p.title.clone(), |l| (*l).to_owned());
+    ToolInfo {
+        name: "permission".into(),
+        kind: ToolKind::Other,
+        title,
+        input: serde_json::Value::Null,
+        locations: vec![],
+    }
+}
+
 /// Map a menu label onto ACP's option kinds.
 pub fn option_kind(label: &str) -> OptionKind {
     let l = label.to_lowercase();
@@ -331,13 +359,7 @@ impl Daemon {
                     .last_tool
                     .get(&summary.id)
                     .cloned()
-                    .unwrap_or(ToolInfo {
-                        name: "permission".into(),
-                        kind: ToolKind::Other,
-                        title: p.detail.lines().next().unwrap_or("").to_owned(),
-                        input: serde_json::Value::Null,
-                        locations: vec![],
-                    });
+                    .unwrap_or_else(|| menu_tool(&p));
                 let options: Vec<PermissionOption> = p
                     .options
                     .iter()
@@ -502,5 +524,29 @@ mod tests {
             OptionKind::AllowAlways
         );
         assert_eq!(option_kind("No, cancel"), OptionKind::RejectOnce);
+    }
+}
+
+#[cfg(test)]
+mod menu_tool_tests {
+    use super::*;
+
+    #[test]
+    fn a_codex_menu_is_titled_by_its_command() {
+        let p = styr_core::ipc::TerminalPrompt {
+            title: "Would you like to run the following command?".into(),
+            detail: "Environment: local\nReason: Do you want to allow creating x?\n$ touch x.txt".into(),
+            options: vec!["Yes, proceed".into(), "No".into()],
+            selected: 0,
+        };
+        let t = menu_tool(&p);
+        assert_eq!((t.kind, t.title.as_str()), (ToolKind::Execute, "Run `touch x.txt`"));
+        let hooks = styr_core::ipc::TerminalPrompt {
+            title: "Hooks need review".into(),
+            detail: "6 hooks are new or changed.".into(),
+            options: vec![],
+            selected: 0,
+        };
+        assert_eq!(menu_tool(&hooks).title, "6 hooks are new or changed.");
     }
 }

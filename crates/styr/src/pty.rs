@@ -385,18 +385,40 @@ pub fn detect_codex_prompt(screen: &str) -> Option<TerminalPrompt> {
     while end > 0 && lines[end - 1].trim().is_empty() {
         end -= 1;
     }
+    // Options may wrap onto indented continuation lines in a narrow terminal.
+    let continuation = |l: &str| {
+        let t = l.trim_start();
+        !t.is_empty() && l.len() - t.len() >= 4 && numbered(l).is_none()
+    };
     let mut first_option = end;
-    while first_option > 0 && numbered(lines[first_option - 1]).is_some() {
+    while first_option > 0
+        && (numbered(lines[first_option - 1]).is_some() || continuation(lines[first_option - 1]))
+    {
         first_option -= 1;
+    }
+    // The block must start at an option (not at wrapped detail text above it).
+    while first_option < end && numbered(lines[first_option]).is_none() {
+        first_option += 1;
+    }
+    let mut raw: Vec<(bool, String)> = Vec::new();
+    for l in &lines[first_option..end] {
+        match numbered(l) {
+            Some((marked, label)) => raw.push((marked, label.to_owned())),
+            None => {
+                let last = raw.last_mut()?;
+                last.1.push(' ');
+                last.1.push_str(l.trim());
+            }
+        }
     }
     let mut options = Vec::new();
     let mut selected = 0;
-    for l in &lines[first_option..end] {
-        let (marked, label) = numbered(l)?;
-        if marked {
+    for (marked, label) in &raw {
+        if *marked {
             selected = options.len();
         }
         // "Yes, proceed (y)" → "Yes, proceed": the shortcut means nothing on the phone.
+        let label = label.trim();
         let label = match label.rfind(" (") {
             Some(i) if label.ends_with(')') && label.len() - i <= 8 => &label[..i],
             _ => label,
@@ -495,6 +517,9 @@ pub fn run(
         0,
     )));
     let on_screen: Arc<Mutex<Option<TerminalPrompt>>> = Arc::new(Mutex::new(None));
+    // Codex says when it waits for an approval (OSC 7501 state=blocked); used to
+    // notice a menu we failed to read.
+    let blocked = Arc::new(AtomicBool::new(false));
 
     // Keyboard → agent.
     {
@@ -540,6 +565,7 @@ pub fn run(
     let output = {
         let mut r = master_read;
         let screen = screen.clone();
+        let blocked = blocked.clone();
         let emulate = detector.is_some();
         std::thread::spawn(move || {
             let mut out = std::io::stdout();
@@ -549,6 +575,10 @@ pub fn run(
                     break;
                 }
                 let _ = out.flush();
+                let chunk = &buf[..n];
+                if let Some(i) = find(chunk, b"\x1b]7501;state=") {
+                    blocked.store(chunk[i..].starts_with(b"\x1b]7501;state=blocked"), Ordering::Relaxed);
+                }
                 if emulate {
                     screen
                         .lock()
@@ -560,12 +590,15 @@ pub fn run(
     };
     // Permission menus on screen → daemon (agents without a permission hook).
     if let Some(detect) = detector {
-        let (screen, on_screen, done) = (screen.clone(), on_screen.clone(), done.clone());
+        let (screen, on_screen, done, blocked) =
+            (screen.clone(), on_screen.clone(), done.clone(), blocked.clone());
         let launch_id = launch_id.to_owned();
         std::thread::spawn(move || {
             let client =
                 Client::new(Paths::resolve().socket).with_timeout(Some(Duration::from_secs(2)));
             let mut last: Option<TerminalPrompt> = None;
+            let mut blocked_since: Option<std::time::Instant> = None;
+            let mut dumped = false;
             while !done.load(Ordering::Relaxed) {
                 std::thread::sleep(Duration::from_millis(150));
                 let contents = screen
@@ -574,6 +607,18 @@ pub fn run(
                     .screen()
                     .contents();
                 let now = detect(&contents);
+                // Waiting for an approval, but no menu we can read: keep a copy of the
+                // screen (private, local) so the detector can be fixed.
+                if blocked.load(Ordering::Relaxed) && now.is_none() {
+                    let since = *blocked_since.get_or_insert_with(std::time::Instant::now);
+                    if !dumped && since.elapsed() > Duration::from_secs(2) {
+                        dumped = true;
+                        dump_unread_menu(&contents);
+                    }
+                } else {
+                    blocked_since = None;
+                    dumped = false;
+                }
                 *on_screen.lock().unwrap_or_else(|p| p.into_inner()) = now.clone();
                 if now != last {
                     let _ = client.call(&Request::TerminalPrompt {
@@ -634,6 +679,27 @@ pub fn run(
         128 + libc::WTERMSIG(status)
     };
     Ok(code)
+}
+
+fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len()).position(|w| w == needle)
+}
+
+/// `~/.styrman/unread-menu.txt`: the last screen where the agent waited for an
+/// approval that Styrman couldn't read. Readable only by you.
+fn dump_unread_menu(contents: &str) {
+    use std::os::unix::fs::OpenOptionsExt;
+    let Some(home) = std::env::var_os("HOME") else { return };
+    let path = std::path::Path::new(&home).join(".styrman/unread-menu.txt");
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&path)
+    {
+        let _ = f.write_all(contents.as_bytes());
+    }
 }
 
 /// Tell the daemon about a caught `/styr` and confirm with a terminal notification
@@ -878,6 +944,22 @@ mod tests {
         assert_eq!(p.title, "Hooks need review");
         assert_eq!(p.options, vec!["Review hooks", "Trust all and continue", "Continue without trusting (hooks won't run)"]);
         assert!(p.detail.contains("6 hooks are new or changed."));
+    }
+
+    #[test]
+    fn codex_options_wrapped_in_a_narrow_pane() {
+        let s = "• Running curl -sI https://example.com\n\n  Would you like to run the following command?\n\n  Reason: Do you want to allow network access to\n  example.com?\n\n  $ curl -sI https://example.com\n\n› 1. Yes, proceed (y)\n  2. Yes, and don't ask again for commands that\n     start with `curl -sI https://example.com` (p)\n  3. No, and tell Codex what to do differently\n     (esc)\n\n  Press enter to confirm or esc to cancel\n";
+        let p = detect_codex_prompt(s).expect("menu");
+        assert_eq!(p.title, "Would you like to run the following command?");
+        assert_eq!(
+            p.options,
+            vec![
+                "Yes, proceed",
+                "Yes, and don't ask again for commands that start with `curl -sI https://example.com`",
+                "No, and tell Codex what to do differently",
+            ]
+        );
+        assert_eq!(p.selected, 0);
     }
 
     #[test]
