@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Follow Claude Code, Codex and Antigravity from your phone. Approve commands, send the next prompt, listen to replies, and let your agents ask each other. Open source.">
+<meta name="theme-color" content="#eef2ed">
+<title>Styrman — Steer your coding agents from anywhere</title>
+<link rel="canonical" href="https://christoffermattssonlangseth.github.io/styrman/">
+<link rel="icon" href="assets/helm.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="images/apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Styrman">
+<meta property="og:title" content="Styrman — Leave your desk. Stay at the helm.">
+<meta property="og:description" content="Follow Claude Code, Codex and Antigravity from your phone: approve commands, send the next prompt, listen to replies. Open source; runs on your Mac and your tailnet.">
+<meta property="og:url" content="https://christoffermattssonlangseth.github.io/styrman/">
+<meta property="og:image" content="https://christoffermattssonlangseth.github.io/styrman/images/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="style.css">
+<script src="demo.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="shell nav">
+  <a class="brand" href="./"><img src="assets/helm.svg" width="34" height="34" alt="">Styrman</a>
+  <nav aria-label="Main navigation"><a href="#features">Features</a><a href="#privacy">Privacy</a><a class="pill" href="#setup">Get started</a></nav>
+</header>
+<main id="main">
+<section class="hero shell">
+  <div class="intro">
+    <h1>Leave your desk.<br><em>Stay at the helm.</em></h1>
+    <p>Follow your coding agents from your phone. See what needs your attention, approve a command, or send the next prompt while work continues on your Mac.</p>
+    <div class="actions"><a class="button" href="#setup">Set up Styrman</a><a class="button secondary" href="https://github.com/christoffermattssonlangseth/styrman">View on GitHub</a></div>
+    <p class="platform">Runs on your Mac · iPhone app via TestFlight soon (build from source today) · Android from source · Open source</p>
+  </div>
+  <div class="stage">
+    <div class="terminal"><div class="terminal-bar"><span aria-hidden="true">● ● ●</span> <span>~/work/harbor</span></div><div class="terminal-body"><code><span>$</span> codex<br><span>›</span> /styr</code><p>Session shared with Styrman.</p></div></div>
+    <figure class="phone">
+      <div class="phone-head"><span>9:41</span><span aria-hidden="true">•••</span></div>
+      <div class="phone-content">
+        <div class="app-brand"><img src="assets/helm.svg" width="26" height="26" alt=""><strong>Styrman</strong></div>
+        <div class="app-tabs" aria-label="Demo views"><button aria-pressed="true" data-view="sessions">Sessions</button><button aria-pressed="false" data-view="usage">Usage</button></div>
+        <div id="sessions">
+          <div class="row"><span class="avatar codex" aria-hidden="true">&lt;/&gt;</span><div><strong>harbor</strong><small>Codex · Run tests</small></div><span class="status waiting">Needs you</span></div>
+          <div class="row"><span class="avatar claude" aria-hidden="true">✳</span><div><strong>lighthouse</strong><small>Claude Code · Update docs</small></div><span class="status working">Working</span></div>
+          <div class="row"><span class="avatar agy" aria-hidden="true">⚛</span><div><strong>beacon</strong><small>Antigravity · Review layout</small></div><span class="status">Done</span></div>
+          <div class="approval"><strong id="decision" aria-live="polite">Allow this command?</strong><code>cargo test</code><button id="approve">Allow once</button></div>
+        </div>
+        <div id="usage" hidden>
+          <strong>Codex</strong><p class="usage-line"><span>5-hour window</span><b>62%</b></p><progress value="62" max="100">62%</progress><small>Resets in 1h 24m</small>
+          <p class="usage-line"><span>Weekly limit</span><b>38%</b></p><progress value="38" max="100">38%</progress><small>Resets in 3 days</small>
+        </div>
+      </div>
+    </figure>
+    <span class="stage-caption">Interactive demo · sample sessions and usage</span>
+  </div>
+</section>
+<div class="agents shell"><span>Works with</span><strong>Claude Code</strong><strong>Codex CLI</strong><strong>Antigravity CLI</strong></div>
+<section id="features" class="shell features">
+  <h2>Keep work moving.</h2>
+  <div class="feature-grid">
+    <article><h3>See what needs you</h3><p>Read replies, check tool output, and see which sessions are working, waiting, or done.</p></article>
+    <article><h3>Act from your phone</h3><p>Review the command before approving it. Send a follow-up or start another session in a folder on your Mac.</p></article>
+    <article><h3>Talk or listen</h3><p>Dictate a prompt instead of typing it, and have replies read aloud. Each agent has its own voice.</p></article>
+    <article><h3>Let agents consult each other</h3><p>Ask Claude to check with Codex: it sends the question with <code>styr ask</code> and reports the answer. You see both sides on your phone.</p></article>
+    <article><h3>Check your headroom</h3><p>Connect Karv on your Mac to view quota windows, reset times, and activity estimates in the Usage screen.</p></article>
+  </div>
+</section>
+<section id="privacy" class="privacy">
+  <div class="shell two-col"><h2>Your Mac.<br>Your tailnet.</h2><div><p>Your agents run in your terminal. Styrman stores session history on your Mac and connects your paired phone over Tailscale. Share a session when you need it with <code>/styr</code>.</p><p>No Styrman account. Your phone reaches your Mac over your own Tailscale network (that needs a free Tailscale account). Notifications go through Apple's push service and carry only a short alert, like “Codex · harbor needs your approval”: no commands, code or replies. <a href="privacy.html">Privacy details</a></p></div></div>
+</section>
+<section id="setup" class="shell setup two-col">
+  <div><h2>Get started.</h2><p>You’ll need an Apple Silicon Mac and Tailscale on your Mac and phone. The Mac side installs with Homebrew. The iPhone app is coming to TestFlight; until then, and for Android, build it from source.</p><a href="https://github.com/christoffermattssonlangseth/styrman#install">Read the installation guide</a></div>
+  <div class="install"><div class="terminal-bar"><strong>Install on your Mac</strong><button id="copy" hidden>Copy</button></div><pre id="commands">brew tap christoffermattssonlangseth/styrman
+brew trust christoffermattssonlangseth/styrman
+brew install styrman
+styr setup</pre><p>Pair your phone during setup, then type <code>/styr</code> in a session you want to share.</p></div>
+</section>
+</main>
+<footer class="shell footer"><a class="brand" href="./"><img src="assets/helm.svg" width="28" height="28" alt="">Styrman</a><p>Made by Christoffer Mattsson Langseth.</p><nav aria-label="Footer"><a href="privacy.html">Privacy</a><a href="support.html">Support</a><a href="https://github.com/christoffermattssonlangseth/styrman">Source code</a></nav></footer>
+</body>
+</html>

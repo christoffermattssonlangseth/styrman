@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="What Styrman stores, where it goes, and what it never collects.">
+<meta name="theme-color" content="#eef2ed">
+<title>Privacy — Styrman</title>
+<link rel="canonical" href="https://christoffermattssonlangseth.github.io/styrman/privacy.html">
+<link rel="icon" href="assets/helm.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="images/apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="shell nav">
+  <a class="brand" href="./"><img src="assets/helm.svg" width="34" height="34" alt="">Styrman</a>
+  <nav aria-label="Main navigation"><a href="./#features">Features</a><a href="privacy.html">Privacy</a><a class="pill" href="./#setup">Get started</a></nav>
+</header>
+<main id="main" class="shell prose">
+<h1>Privacy</h1>
+<p>Styrman is built so that your code and conversations stay on your own machines. It has no accounts, no analytics and no tracking, in the apps or on this website.</p>
+
+<h2>On your Mac</h2>
+<p>The Styrman service (<code>styrd</code>) keeps session history in a local database in <code>~/Library/Application Support/Styrman</code>. Sessions are invisible until you type <code>/styr</code> in them: for a session you haven't shared, only that it started and ended is recorded, never its content. <code>styr forget</code> deletes sessions and their history.</p>
+
+<h2>Between your phone and your Mac</h2>
+<p>Your phone talks to your Mac directly over your own Tailscale network, which is encrypted end to end (WireGuard). Pairing uses a one-time code; the phone's key is stored in its secure keychain. No Styrman server sits in between.</p>
+
+<h2>Notifications</h2>
+<p>To notify your phone, your Mac sends a short alert through Apple's push service, such as “Codex · harbor needs your approval” or “finished”. By default it contains no commands, code or replies. If you turn on <code>styr push details</code>, it also includes the command or a short excerpt of the reply.</p>
+<p>If you use the optional Styrman push relay instead of your own Apple key, the relay receives your phone's push token and that same short alert, nothing else (details are always off through the relay), and forwards it to Apple. It keeps a random identifier for your Mac and per-hour counters to limit abuse.</p>
+
+<h2>Voice</h2>
+<p>Dictation uses your phone's speech recognition. Styrman asks for on-device recognition, which keeps your speech on the phone when the device supports it. Replies are read aloud by the phone's own voices.</p>
+
+<h2>Usage</h2>
+<p>The Usage screen shows quota figures that Karv exports on your Mac. Styrman only reads that local file; it never sees provider credentials.</p>
+
+<h2>This website</h2>
+<p>This site is static and hosted on GitHub Pages. It sets no cookies and has no analytics. GitHub, as the host, may log requests like any web server.</p>
+
+<h2>Questions</h2>
+<p>Styrman is open source, so you can check all of this in <a href="https://github.com/christoffermattssonlangseth/styrman">its code</a>. Questions: <a href="support.html">Support</a>.</p>
+</main>
+<footer class="shell footer"><a class="brand" href="./"><img src="assets/helm.svg" width="28" height="28" alt="">Styrman</a><p>Made by Christoffer Mattsson Langseth.</p><nav aria-label="Footer"><a href="privacy.html">Privacy</a><a href="support.html">Support</a><a href="https://github.com/christoffermattssonlangseth/styrman">Source code</a></nav></footer>
+</body>
+</html>

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Help with installing, pairing and using Styrman.">
+<meta name="theme-color" content="#eef2ed">
+<title>Support — Styrman</title>
+<link rel="canonical" href="https://christoffermattssonlangseth.github.io/styrman/support.html">
+<link rel="icon" href="assets/helm.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="images/apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="shell nav">
+  <a class="brand" href="./"><img src="assets/helm.svg" width="34" height="34" alt="">Styrman</a>
+  <nav aria-label="Main navigation"><a href="./#features">Features</a><a href="privacy.html">Privacy</a><a class="pill" href="./#setup">Get started</a></nav>
+</header>
+<main id="main" class="shell prose">
+<h1>Support</h1>
+<p>Something not working, or an idea? <a href="https://github.com/christoffermattssonlangseth/styrman/issues">Open an issue on GitHub</a>. Please include what you did, what you expected, and the output of <code>styr doctor</code>.</p>
+
+<h2>First things to try</h2>
+<ul>
+<li><strong><code>styr doctor</code></strong> checks every part (service, agent hooks, routing, Tailscale, pairing, notifications) and says what to fix.</li>
+<li><strong>A session doesn't show up on the phone:</strong> type <code>/styr</code> in it. Agents started before <code>styr setup</code> need a new terminal tab.</li>
+<li><strong>Messages from the phone aren't typed in, or approvals don't appear:</strong> start the agent again in a new tab (so it runs through Styrman), then <code>/styr</code>.</li>
+<li><strong>The phone can't reach the Mac:</strong> make sure Tailscale is on for both. On the iPhone, Tailscale's VPN On Demand keeps it connected.</li>
+<li><strong>Pair again:</strong> run <code>styr pair</code> on the Mac and scan the code with the phone's camera.</li>
+<li><strong>Codex asks to review hooks:</strong> choose “Trust all and continue” once; that lets Styrman follow the session.</li>
+</ul>
+
+<h2>Guides</h2>
+<p>The <a href="https://github.com/christoffermattssonlangseth/styrman#readme">README</a> covers installing, routing your agents through Styrman, pairing, notifications, starting sessions from the phone, and the Android app.</p>
+</main>
+<footer class="shell footer"><a class="brand" href="./"><img src="assets/helm.svg" width="28" height="28" alt="">Styrman</a><p>Made by Christoffer Mattsson Langseth.</p><nav aria-label="Footer"><a href="privacy.html">Privacy</a><a href="support.html">Support</a><a href="https://github.com/christoffermattssonlangseth/styrman">Source code</a></nav></footer>
+</body>
+</html>
