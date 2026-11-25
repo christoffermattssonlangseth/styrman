@@ -76,7 +76,7 @@ struct TimelineRow: View {
                 VStack(alignment: .trailing, spacing: 4) {
                     Text(text).textSelection(.enabled)
                         .padding(.horizontal, 14).padding(.vertical, 10)
-                        .background(Theme.ink.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16))
                     if fromPhone {
                         Label("From this phone", systemImage: "iphone").font(.caption2).foregroundStyle(.secondary)
                     }
@@ -107,41 +107,32 @@ struct TimelineRow: View {
 struct ToolCallRow: View {
     let item: ToolItem
     let title: String
-    @State private var expanded = false
+    @State private var showDetail = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Button {
-                withAnimation(.snappy) { expanded.toggle() }
-            } label: {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Image(systemName: Theme.symbol(for: item.tool.kind))
-                        .foregroundStyle(.secondary).frame(width: 18)
-                    Text(title)
-                        .font(item.tool.kind == .execute ? Theme.mono : .callout)
-                        .lineLimit(expanded ? nil : 2)
-                        .multilineTextAlignment(.leading)
-                    Spacer(minLength: 6)
-                    statusIcon
-                }
+        Button {
+            showDetail = true
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: Theme.symbol(for: item.tool.kind))
+                    .foregroundStyle(.secondary).frame(width: 18)
+                Text(title)
+                    .font(item.tool.kind == .execute ? Theme.mono : .callout)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 6)
+                statusIcon
             }
-            .buttonStyle(.plain)
-            .disabled(item.output == nil)
-
-            if expanded, let output = item.output {
-                ScrollView(.horizontal) {
-                    Text(output.displayText.isEmpty ? "(no output)" : output.displayText)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .padding(10)
-                }
-                .frame(maxHeight: 280)
-                .background(.quinary, in: RoundedRectangle(cornerRadius: 10))
-            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
+            .contentShape(RoundedRectangle(cornerRadius: 12))
         }
-        .padding(10)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
-        .accessibilityElement(children: .combine)
+        .buttonStyle(.plain)
+        .accessibilityHint("Shows the full command and its output")
+        // Output opens in a sheet: expanding rows inline inside a bottom-anchored
+        // LazyVStack made SwiftUI lose its scroll position (blank screen).
+        .sheet(isPresented: $showDetail) { ToolDetailView(item: item, title: title) }
     }
 
     @ViewBuilder private var statusIcon: some View {
@@ -207,5 +198,54 @@ struct PlanCard: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+struct ToolDetailView: View {
+    let item: ToolItem
+    let title: String
+    @Environment(\.dismiss) private var dismiss
+
+    private var outputText: String {
+        guard let output = item.output else {
+            return item.status == .completed || item.status == .failed ? "(no output)" : "Still running…"
+        }
+        let text = output.displayText
+        return text.isEmpty ? "(no output)" : text
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(title)
+                        .font(item.tool.kind == .execute ? Theme.mono : .body)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                    Text("Output").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                    ScrollView(.horizontal) {
+                        Text(outputText)
+                            .font(.system(.footnote, design: .monospaced))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .padding(12)
+                    }
+                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                }
+                .padding(16)
+            }
+            .navigationTitle(item.tool.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { UIPasteboard.general.string = outputText } label: { Image(systemName: "doc.on.doc") }
+                        .accessibilityLabel("Copy output")
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 }
