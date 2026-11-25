@@ -263,17 +263,21 @@ enum VoiceChoice {
         return ordered[index % ordered.count]
     }
 
-    private static func interleavedByGender(_ voices: [AVSpeechSynthesisVoice]) -> [AVSpeechSynthesisVoice] {
-        let female = voices.filter { $0.gender == .female }
-        let male = voices.filter { $0.gender == .male }
-        let other = voices.filter { $0.gender == .unspecified }
+    /// Best quality first; within the same quality, alternate female and male voices so
+    /// the agents sound clearly different (Claude, Codex, agy, …).
+    static func interleavedByGender(_ voices: [AVSpeechSynthesisVoice]) -> [AVSpeechSynthesisVoice] {
+        let tiers = Dictionary(grouping: voices, by: { $0.quality.rawValue })
         var out: [AVSpeechSynthesisVoice] = []
-        // Claude: female, Codex: male, agy: female (a different one), then the rest.
-        var f = female.makeIterator(), m = male.makeIterator()
-        for slot in 0..<max(female.count, male.count) * 2 {
-            if let v = slot % 2 == 0 ? f.next() : m.next() { out.append(v) }
+        for q in tiers.keys.sorted(by: >) {
+            let tier = tiers[q] ?? []
+            let female = tier.filter { $0.gender == .female }
+            let male = tier.filter { $0.gender == .male }
+            var f = female.makeIterator(), m = male.makeIterator()
+            for slot in 0..<max(female.count, male.count) * 2 {
+                if let v = slot % 2 == 0 ? f.next() : m.next() { out.append(v) }
+            }
+            out.append(contentsOf: tier.filter { $0.gender == .unspecified })
         }
-        out.append(contentsOf: other)
         return out.isEmpty ? voices : out
     }
 }

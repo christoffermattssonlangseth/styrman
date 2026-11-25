@@ -49,6 +49,15 @@ import Testing
 
     }
 
+    @Test func premiumVoicesAreUsedBeforeAnyOther() {
+        let all = VoiceChoice.available()
+        let ordered = VoiceChoice.interleavedByGender(all)
+        // Never a lower-quality voice ahead of a better one.
+        let qualities = ordered.map(\.quality.rawValue)
+        #expect(qualities == qualities.sorted(by: >))
+        #expect(Set(ordered.map(\.identifier)) == Set(all.map(\.identifier)))
+    }
+
     @Test func aChosenVoiceWins() throws {
         let voices = VoiceChoice.available()
         try #require(!voices.isEmpty)
