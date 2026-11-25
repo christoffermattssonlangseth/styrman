@@ -50,6 +50,9 @@ pub enum ServerMsg {
         daemon_version: String,
         device_id: String,
         host: String,
+        /// Things the user should know (e.g. an unverified agent version).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        warnings: Vec<String>,
     },
     Sessions {
         sessions: Vec<SessionSummary>,

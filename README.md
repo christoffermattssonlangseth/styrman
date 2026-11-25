@@ -72,25 +72,19 @@ You need macOS (Apple Silicon), a Rust toolchain, Xcode with XcodeGen for the ap
 
 ```sh
 git clone https://github.com/christoffermattssonlangseth/styrman && cd styrman
+cargo install --path crates/styrd && cargo install --path crates/styr   # into ~/.cargo/bin
 
-# 1. The daemon and the CLI
-cargo install --path crates/styrd
-cargo install --path crates/styr        # into ~/.cargo/bin; make sure that's on PATH
-
-# 2. Run styrd as a launchd agent (starts at login, restarted if it ever exits)
-styr service install
-styr service status                     # plist loaded, daemon answering
-
-# 3. The Claude Code plugin (hooks + /styr), from this checkout
-claude plugin marketplace add "$PWD/plugins"
-claude plugin install styrman@styrman
-
-# 4. The iPhone app
-cd ios && xcodegen && open Styrman.xcodeproj
-#    Select your iPhone, set your team in Signing (or DEVELOPMENT_TEAM in project.yml), Run.
+styr setup          # guided and safe to re-run: background service, Claude plugin, shell alias, pairing
+styr doctor         # checks every part; `styr doctor --live` also runs an end-to-end check with Claude Code
 ```
 
-### Shell aliases (recommended)
+`styr setup` installs the Claude Code plugin from a copy built into `styr`, so you don't need to keep the checkout around. It asks before touching your shell config.
+
+The iPhone app, for now: `cd ios && xcodegen && open Styrman.xcodeproj`, set your signing team, then Run on your iPhone. TestFlight is on the roadmap.
+
+**Claude Code updates.** Styrman records the Claude Code version each session runs. If it's a version Styrman hasn't been checked with, `styr status`, `styr doctor` and the phone tell you. `styr doctor --live` then checks it end to end with one small Haiku call, and marks the version verified if everything works.
+
+### Shell aliases (`styr setup` offers to add this)
 
 ```sh
 # ~/.zshrc

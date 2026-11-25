@@ -414,6 +414,12 @@ impl AgentAdapter for ClaudeAdapter {
         }
     }
 
+    fn verified_versions(&self) -> &'static [&'static str] {
+        // Hook payloads, PermissionRequest concurrency, asyncRewake and terminal
+        // typing were checked by hand against these (docs/design.md §8).
+        &["2.1.332"]
+    }
+
     fn render_exit(&self, hook: &RawHook, decision: &HookDecision) -> Option<(i32, String)> {
         match (hook.event.as_str(), decision) {
             (STOP_WAIT, HookDecision::Prompt(text)) => Some((2, frame_phone_prompt(text))),

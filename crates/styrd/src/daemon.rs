@@ -179,6 +179,9 @@ impl Daemon {
             return Ok(HookDecision::PassThrough);
         };
         let view = self.session_view(&native)?;
+        if let Some(v) = &hook.agent_version {
+            self.saw_agent_version(hook.agent, v);
+        }
         let plan = adapter.on_hook(hook, &view)?;
         tracing::debug!(session = %view.id, event = %hook.event, shared = view.shared, n = plan.events.len(), "hook");
         let update = plan
@@ -453,6 +456,83 @@ impl Daemon {
         Ok(n)
     }
 
+    // ---- agent versions ----
+
+    fn saw_agent_version(&self, agent: AgentKind, version: &str) {
+        let key = format!("seen.{agent}");
+        let mut g = self.lock();
+        if g.store.meta(&key).ok().flatten().as_deref() != Some(version) {
+            tracing::info!(%agent, version, "agent version");
+            let _ = g.store.set_meta(&key, version);
+        }
+    }
+
+    fn is_verified(&self, agent: AgentKind, version: &str) -> bool {
+        let built_in = self
+            .adapter(agent)
+            .is_some_and(|a| a.verified_versions().contains(&version));
+        built_in
+            || self
+                .lock()
+                .store
+                .meta(&format!("verified.{agent}"))
+                .ok()
+                .flatten()
+                .is_some_and(|list| list.split(',').any(|v| v == version))
+    }
+
+    pub fn mark_verified(&self, agent: AgentKind, version: &str) -> Result<()> {
+        let key = format!("verified.{agent}");
+        let mut g = self.lock();
+        let mut list: Vec<String> = g
+            .store
+            .meta(&key)?
+            .map(|l| l.split(',').map(str::to_owned).collect())
+            .unwrap_or_default();
+        if !list.iter().any(|v| v == version) {
+            list.push(version.to_owned());
+            g.store.set_meta(&key, &list.join(","))?;
+        }
+        Ok(())
+    }
+
+    pub fn agent_versions(&self) -> Vec<styr_core::ipc::AgentVersionInfo> {
+        AgentKind::ALL
+            .into_iter()
+            .filter_map(|agent| {
+                let version = self
+                    .lock()
+                    .store
+                    .meta(&format!("seen.{agent}"))
+                    .ok()
+                    .flatten()?;
+                let verified = self.is_verified(agent, &version);
+                Some(styr_core::ipc::AgentVersionInfo {
+                    agent,
+                    version,
+                    verified,
+                })
+            })
+            .collect()
+    }
+
+    /// Things worth telling the user about, shown by `styr status`, `styr doctor` and the phone.
+    pub fn warnings(&self) -> Vec<String> {
+        self.agent_versions()
+            .into_iter()
+            .filter(|a| !a.verified)
+            .map(|a| {
+                let name = match a.agent {
+                    AgentKind::Claude => "Claude Code",
+                    AgentKind::Antigravity => "Antigravity",
+                    AgentKind::Codex => "Codex",
+                    AgentKind::Pty => "agent",
+                };
+                format!("{name} {} hasn't been checked with Styrman yet. Run `styr doctor --live` on the Mac.", a.version)
+            })
+            .collect()
+    }
+
     // ---- phones ----
 
     pub fn pusher(&self) -> Option<Arc<crate::push::Pusher>> {
@@ -724,6 +804,18 @@ impl Daemon {
                 Some(text) => Ok(Response::TypePrompt { text }),
                 None => Err(anyhow::anyhow!("detached")),
             },
+            Request::Diagnostics => self.devices().map(|devices| Response::Diagnostics {
+                daemon_version: styr_core::VERSION.to_owned(),
+                pid: std::process::id(),
+                api_urls: self.api_urls(),
+                push_configured: self.pusher().is_some(),
+                devices,
+                agents: self.agent_versions(),
+                warnings: self.warnings(),
+            }),
+            Request::MarkVerified { agent, version } => {
+                self.mark_verified(agent, &version).map(|()| Response::Ok)
+            }
             Request::ForgetSessions { ids } => ids
                 .iter()
                 .try_for_each(|id| self.forget_session(id).map(|_| ()))

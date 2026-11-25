@@ -21,6 +21,8 @@ final class DaemonConnection {
     private(set) var credentials: Credentials?
     private(set) var sessions: [SessionSummary] = []
     private(set) var host: String = ""
+    /// Notes from the Mac (e.g. an agent version Styrman hasn't been checked with).
+    private(set) var warnings: [String] = []
     /// Last error the daemon reported for something this phone asked (shown briefly).
     var lastError: String?
     /// Set when a notification was tapped: the list opens this session.
@@ -132,8 +134,9 @@ final class DaemonConnection {
 
     private func handle(_ msg: ServerMsg) {
         switch msg {
-        case .hello(_, _, _, let host):
+        case .hello(_, _, _, let host, let warnings):
             self.host = host
+            self.warnings = warnings
             state = .connected
             for id in watched { subscribe(id) }
             registerPush()

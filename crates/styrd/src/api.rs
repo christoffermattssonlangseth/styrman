@@ -94,6 +94,53 @@ pub fn tailscale_addrs() -> Vec<IpAddr> {
 /// The phone connects by this name: iOS App Transport Security can exempt `ts.net`
 /// from TLS, but not raw 100.x addresses.
 pub fn tailscale_dns_name() -> Option<String> {
+    // Reverse DNS of our Tailscale IPv4 through the system resolver: works under
+    // launchd, where the Tailscale app's CLI refuses to run.
+    for ip in tailscale_addrs() {
+        if let IpAddr::V4(v4) = ip
+            && let Some(name) = reverse_dns(v4)
+            && name.ends_with(".ts.net")
+        {
+            return Some(name);
+        }
+    }
+    tailscale_dns_name_from_cli()
+}
+
+fn reverse_dns(ip: Ipv4Addr) -> Option<String> {
+    // SAFETY: getnameinfo with a sockaddr_in we build and a buffer we own.
+    unsafe {
+        let mut sa: libc::sockaddr_in = std::mem::zeroed();
+        sa.sin_family = libc::AF_INET as libc::sa_family_t;
+        #[cfg(target_os = "macos")]
+        {
+            sa.sin_len = std::mem::size_of::<libc::sockaddr_in>() as u8;
+        }
+        sa.sin_addr = libc::in_addr {
+            s_addr: u32::from_ne_bytes(ip.octets()),
+        };
+        let mut host = [0 as libc::c_char; 1025];
+        let rc = libc::getnameinfo(
+            &sa as *const libc::sockaddr_in as *const libc::sockaddr,
+            std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+            host.as_mut_ptr(),
+            host.len() as libc::socklen_t,
+            std::ptr::null_mut(),
+            0,
+            libc::NI_NAMEREQD,
+        );
+        if rc != 0 {
+            return None;
+        }
+        let name = std::ffi::CStr::from_ptr(host.as_ptr())
+            .to_string_lossy()
+            .trim_end_matches('.')
+            .to_owned();
+        (!name.is_empty() && !name.contains('/')).then_some(name)
+    }
+}
+
+fn tailscale_dns_name_from_cli() -> Option<String> {
     let candidates = [
         "tailscale",
         "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
@@ -370,6 +417,7 @@ impl Connection {
                 daemon_version: styr_core::VERSION.into(),
                 device_id: self.device.clone(),
                 host: Daemon::host_name(),
+                warnings: self.daemon.warnings(),
             },
         )
         .await?;

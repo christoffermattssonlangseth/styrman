@@ -307,3 +307,5 @@ Each checkpoint ends with something runnable and its tests green.
     - The wrapper waits while the user has a half-typed line.
     - If the wrapper disappears, its queued prompts fall back to the `StopWait` hook route.
   - Verified on interactive Claude Code 2.1.332: the prompt appears as a normal `❯` line about 1 s after sending.
+- **MagicDNS name under launchd.** The Tailscale Mac app's CLI refuses to run in launchd's minimal environment ("The Tailscale GUI failed to start"), which made `styrd` advertise a raw `100.x` URL that iOS rejects. `styrd` now does a reverse DNS lookup (`getnameinfo`, `NI_NAMEREQD`) of its Tailscale IPv4 through the system resolver, with the CLI as a fallback. This was caught by `styr doctor` on its first run.
+- **Agent version tracking.** The hook resolves the agent's real executable from its pid (`CLAUDE_PID` is set for hooks); Claude Code installs to `…/claude/versions/<version>`. `styrd` keeps the last seen version and a verified list: built-in plus `styr doctor --live` passes. It warns about unverified versions in `styr status`, `styr doctor` and the phone's `hello`.

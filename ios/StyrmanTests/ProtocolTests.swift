@@ -60,8 +60,12 @@ private func event(_ seq: UInt64, _ kind: String) -> String {
 
     @Test func serverMessagesDecode() throws {
         let hello = try decode(ServerMsg.self, #"{"type":"hello","protocol":1,"daemon_version":"0.1.0","device_id":"D","host":"mac"}"#)
-        guard case .hello(let p, _, let d, let h) = hello else { Issue.record("not hello"); return }
+        guard case .hello(let p, _, let d, let h, let w) = hello else { Issue.record("not hello"); return }
         #expect((p, d, h) == (1, "D", "mac"))
+        #expect(w.isEmpty, "warnings are optional")
+        let warned = try decode(ServerMsg.self, #"{"type":"hello","protocol":1,"daemon_version":"0.1.0","device_id":"D","host":"mac","warnings":["Claude Code 2.2.0 hasn't been checked"]}"#)
+        guard case .hello(_, _, _, _, let w2) = warned else { Issue.record("not hello"); return }
+        #expect(w2.count == 1)
         let sessions = try decode(ServerMsg.self, #"""
         {"type":"sessions","sessions":[{"id":"01S","agent":"claude","native_id":"abc","cwd":"/Users/dev/work/styrman",
          "title":null,"model":"claude-opus-5-5","shared":true,"status":"needs_approval",

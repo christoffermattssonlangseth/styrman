@@ -307,7 +307,7 @@ struct Event: Decodable, Sendable, Hashable {
 // MARK: - Server → phone
 
 enum ServerMsg: Decodable, Sendable {
-    case hello(protocolVersion: Int, daemonVersion: String, deviceId: String, host: String)
+    case hello(protocolVersion: Int, daemonVersion: String, deviceId: String, host: String, warnings: [String])
     case sessions([SessionSummary])
     case sessionUpdated(SessionSummary)
     case sessionRemoved(id: String)
@@ -319,7 +319,7 @@ enum ServerMsg: Decodable, Sendable {
     case unknown(type: String)
 
     private enum K: String, CodingKey {
-        case type, `protocol`, host, sessions, session, id, events, event, message, text, position
+        case type, `protocol`, host, sessions, session, id, events, event, message, text, position, warnings
         case daemonVersion = "daemon_version", deviceId = "device_id", lastSeq = "last_seq"
     }
 
@@ -332,7 +332,8 @@ enum ServerMsg: Decodable, Sendable {
                 protocolVersion: try c.decode(Int.self, forKey: .protocol),
                 daemonVersion: try c.decode(String.self, forKey: .daemonVersion),
                 deviceId: try c.decode(String.self, forKey: .deviceId),
-                host: try c.decode(String.self, forKey: .host))
+                host: try c.decode(String.self, forKey: .host),
+                warnings: (try? c.decodeIfPresent([String].self, forKey: .warnings)) ?? [])
         case "sessions": self = .sessions(try c.decode([SessionSummary].self, forKey: .sessions))
         case "session_updated": self = .sessionUpdated(try c.decode(SessionSummary.self, forKey: .session))
         case "session_removed": self = .sessionRemoved(id: try c.decode(String.self, forKey: .id))

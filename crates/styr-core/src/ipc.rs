@@ -64,6 +64,13 @@ pub enum Request {
     AttachTerminal {
         launch_id: String,
     },
+    /// Everything `styr doctor` / `styr setup` need to know about the daemon.
+    Diagnostics,
+    /// Record that an agent version passed `styr doctor --live`.
+    MarkVerified {
+        agent: AgentKind,
+        version: String,
+    },
     /// Delete sessions and their history.
     ForgetSessions {
         ids: Vec<SessionId>,
@@ -124,6 +131,15 @@ pub enum Response {
     PushResults {
         /// (device id, outcome)
         results: Vec<(String, String)>,
+    },
+    Diagnostics {
+        daemon_version: String,
+        pid: u32,
+        api_urls: Vec<String>,
+        push_configured: bool,
+        devices: Vec<DeviceInfo>,
+        agents: Vec<AgentVersionInfo>,
+        warnings: Vec<String>,
     },
     TypePrompt {
         text: String,
@@ -186,6 +202,14 @@ pub struct HookExit {
 pub struct HookOutput {
     pub stdout: Option<serde_json::Value>,
     pub exit: Option<HookExit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentVersionInfo {
+    pub agent: AgentKind,
+    /// Most recently seen version.
+    pub version: String,
+    pub verified: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -24,6 +24,7 @@ fn hook(session: &str, event: &str, extra: Value) -> RawHook {
         launched_by_styr: false,
         agent_pid: None,
         launch_id: None,
+        agent_version: None,
     }
 }
 

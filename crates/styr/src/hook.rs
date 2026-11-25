@@ -60,9 +60,18 @@ fn run(args: &[String]) -> Result<HookOutput, String> {
         record(&path, agent, event, &payload);
     }
 
-    // Who is the agent process? Only looked up where it can change (a few ms of `ps`).
-    let agent_pid = matches!(event.as_str(), "SessionStart" | "UserPromptSubmit")
-        .then(find_agent_pid)
+    // Who is the agent process (and which version)? Only looked up where it can change.
+    let lookup = matches!(event.as_str(), "SessionStart" | "UserPromptSubmit");
+    let agent_pid = if lookup {
+        std::env::var("CLAUDE_PID")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .or_else(find_agent_pid)
+    } else {
+        None
+    };
+    let agent_version = (event == "SessionStart")
+        .then(|| agent_pid.and_then(version_of_pid))
         .flatten();
     let hook = RawHook {
         agent,
@@ -73,6 +82,7 @@ fn run(args: &[String]) -> Result<HookOutput, String> {
         launch_id: std::env::var("STYR_LAUNCH_ID")
             .ok()
             .filter(|s| !s.is_empty()),
+        agent_version,
     };
     // No client-side timeout: the agent's own per-hook timeout bounds us, and a
     // permission hook may legitimately wait for the phone.
@@ -114,6 +124,26 @@ fn find_agent_pid() -> Option<u32> {
         return (pid > 1).then_some(pid);
     }
     None
+}
+
+/// The agent's version from its executable's real path: Claude Code installs to
+/// `…/claude/versions/<version>` and `claude` is a symlink to it. No process is run.
+fn version_of_pid(pid: u32) -> Option<String> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "comm=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let exe = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    version_from_path(&std::fs::canonicalize(&exe).ok()?)
+}
+
+pub fn version_from_path(p: &std::path::Path) -> Option<String> {
+    let name = p.file_name()?.to_str()?;
+    let looks_like_version = name.split('.').count() >= 2
+        && name
+            .split('.')
+            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()));
+    looks_like_version.then(|| name.to_owned())
 }
 
 /// Append the raw invocation to a JSONL file (for building fixtures / debugging).

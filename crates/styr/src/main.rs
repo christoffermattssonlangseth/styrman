@@ -1,10 +1,11 @@
 //! `styr`: the Styrman CLI. Agent launcher (`styr claude …`), hook helper
 //! (`styr hook <agent> <event>`) and inspection commands.
 
-mod hook;
-mod launch;
+pub(crate) mod hook;
+pub(crate) mod launch;
 mod pty;
 mod service;
+mod setup;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
@@ -28,6 +29,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Guided install: background service, Claude plugin, shell alias, pairing.
+    Setup {
+        /// Answer yes to every question.
+        #[arg(short, long)]
+        yes: bool,
+    },
+    /// Check every part of the setup; `--live` runs an end-to-end check with Claude Code.
+    Doctor {
+        #[arg(long)]
+        live: bool,
+    },
     /// Check that styrd is running.
     Ping,
     /// List sessions known to styrd.
@@ -204,6 +216,13 @@ fn main() -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&sessions)?);
             } else {
                 print_sessions(&sessions, all);
+                if let Ok(Response::Diagnostics { warnings, .. }) =
+                    client().call(&Request::Diagnostics)
+                {
+                    for w in warnings {
+                        println!("\nnote: {w}");
+                    }
+                }
             }
         }
         Cmd::Events {
@@ -225,6 +244,12 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Pair { url, json } => pair(url, json)?,
+        Cmd::Setup { yes } => setup::setup(yes)?,
+        Cmd::Doctor { live } => {
+            if !setup::doctor(live)? {
+                std::process::exit(1);
+            }
+        }
         Cmd::Forget { ids, ended } => {
             let mut targets = Vec::new();
             for id in &ids {
@@ -420,7 +445,7 @@ fn ago(ms: i64) -> String {
     }
 }
 
-fn pair(url_override: Option<String>, json: bool) -> Result<()> {
+pub(crate) fn pair(url_override: Option<String>, json: bool) -> Result<()> {
     let Response::Pairing {
         code,
         expires_ms,

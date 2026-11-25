@@ -16,6 +16,13 @@ struct SessionListView: View {
                 if connection.state != .connected {
                     Section { ConnectionBanner() }
                 }
+                if !connection.warnings.isEmpty {
+                    Section {
+                        ForEach(connection.warnings, id: \.self) { w in
+                            Label(w, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange)
+                        }
+                    }
+                }
                 section("Needs you", needsYou)
                 section("Working", working)
                 section("Done", showAllDone ? done : Array(done.prefix(5)))

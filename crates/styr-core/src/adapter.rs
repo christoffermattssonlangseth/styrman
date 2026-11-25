@@ -80,6 +80,9 @@ pub struct RawHook {
     /// type phone prompts into it (`STYR_LAUNCH_ID` in the hook's environment).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub launch_id: Option<String>,
+    /// The agent's version (e.g. "2.1.332"), when the hook helper could tell.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_version: Option<String>,
 }
 
 /// What the daemon currently knows about the session a hook belongs to.
@@ -198,6 +201,11 @@ pub trait AgentAdapter: Send + Sync + 'static {
         _sink: std::sync::Arc<dyn EventSink>,
     ) -> BoxFuture<'_, Result<Box<dyn SessionDriver>, AdapterError>> {
         Box::pin(async { Err(AdapterError::Unsupported) })
+    }
+
+    /// Agent versions this build was verified against (`styr doctor --live` adds more).
+    fn verified_versions(&self) -> &'static [&'static str] {
+        &[]
     }
 
     // ---- launcher ----

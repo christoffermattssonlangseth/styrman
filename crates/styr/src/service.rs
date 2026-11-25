@@ -92,7 +92,20 @@ fn find_styrd() -> Result<PathBuf> {
         .context("styrd not found (cargo install --path crates/styrd)")
 }
 
+pub fn is_loaded() -> bool {
+    loaded()
+}
+
+/// Install without printing (for `styr setup`).
+pub fn install_quiet() -> Result<()> {
+    install_inner(false)
+}
+
 pub fn install() -> Result<()> {
+    install_inner(true)
+}
+
+fn install_inner(verbose: bool) -> Result<()> {
     if !cfg!(target_os = "macos") {
         bail!("launchd is macOS only; on Linux run styrd from a systemd user unit");
     }
@@ -112,11 +125,13 @@ pub fn install() -> Result<()> {
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
-    println!(
-        "installed {LABEL}: {} (starts at login, restarted if it exits)",
-        styrd.display()
-    );
-    println!("plist {}\nlog   {}", path.display(), log.display());
+    if verbose {
+        println!(
+            "installed {LABEL}: {} (starts at login, restarted if it exits)",
+            styrd.display()
+        );
+        println!("plist {}\nlog   {}", path.display(), log.display());
+    }
     Ok(())
 }
 

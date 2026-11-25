@@ -124,6 +124,9 @@ impl Store {
                  ALTER TABLE devices ADD COLUMN push_env TEXT;",
             )?;
         }
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )?;
         // v3: the agent's process id, to notice sessions that died without SessionEnd.
         let has_pid: bool = conn
             .prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'agent_pid'")?
@@ -255,6 +258,21 @@ impl Store {
             .session(&SessionId(id))?
             .context("session vanished after upsert")?;
         Ok((rec, created))
+    }
+
+    pub fn meta(&self, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0))
+            .optional()?)
+    }
+
+    pub fn set_meta(&mut self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO meta (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
     }
 
     /// Delete a session and (by cascade) its history. Returns whether it existed.
