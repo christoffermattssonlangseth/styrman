@@ -112,11 +112,29 @@ final class Dictation {
         }
     }
 
-    nonisolated static func authorized() async -> Bool {
-        let speech: Bool = await withCheckedContinuation { c in
-            SFSpeechRecognizer.requestAuthorization { c.resume(returning: $0 == .authorized) }
+    /// How the speech permission is asked for (tests replace it to answer from another thread).
+    typealias AuthRequester = @Sendable (@escaping @Sendable (SFSpeechRecognizerAuthorizationStatus) -> Void) -> Void
+
+    nonisolated static let systemAuth: AuthRequester = { reply in
+        SFSpeechRecognizer.requestAuthorization(reply)
+    }
+
+    /// The handler iOS calls with the answer, on one of its own threads. Built in a
+    /// synchronous nonisolated function so it carries no actor isolation at all.
+    nonisolated static func authReply(_ done: @escaping @Sendable (Bool) -> Void)
+        -> @Sendable (SFSpeechRecognizerAuthorizationStatus) -> Void
+    {
+        { status in done(status == .authorized) }
+    }
+
+    nonisolated static func speechAuthorized(using request: AuthRequester = systemAuth) async -> Bool {
+        await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
+            request(authReply { c.resume(returning: $0) })
         }
-        guard speech else { return false }
+    }
+
+    nonisolated static func authorized() async -> Bool {
+        guard await speechAuthorized() else { return false }
         return await AVAudioApplication.requestRecordPermission()
     }
 }

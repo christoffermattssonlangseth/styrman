@@ -74,3 +74,18 @@ import Testing
         }
     }
 }
+
+/// The permission answer comes back on a TCC thread (that's where the mic crashed).
+@Suite struct DictationPermissionThreadingTests {
+    @Test @MainActor func permissionAnswerFromABackgroundThread() async {
+        // Called from the main actor, like the mic button; iOS answers elsewhere.
+        let granted = await Dictation.speechAuthorized { reply in
+            DispatchQueue.global().async { reply(.authorized) }
+        }
+        #expect(granted)
+        let denied = await Dictation.speechAuthorized { reply in
+            Thread.detachNewThread { reply(.denied) }
+        }
+        #expect(!denied)
+    }
+}
