@@ -38,6 +38,7 @@ struct SessionListView: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .animation(.snappy, value: connection.sessions.map { "\($0.id)\($0.status)" })
             .overlay {
                 if connection.sessions.isEmpty && connection.state == .connected {
                     ContentUnavailableView {
@@ -125,8 +126,8 @@ struct SessionRow: View {
     var body: some View {
         // Three calm lines; nothing important competes for width:
         //   repo                          [status]
-        //   Agent · first message              time
-        //   ~/folder
+        //   what it's doing now (or the first message)
+        //   Agent · ~/folder                    time
         HStack(alignment: .center, spacing: 12) {
             AgentAvatar(agent: session.agent)
             VStack(alignment: .leading, spacing: 3) {
@@ -139,16 +140,24 @@ struct SessionRow: View {
                     StatusChip(status: session.status)
                         .fixedSize()
                 }
+                if let line = headline {
+                    Text(line)
+                        .font(.subheadline)
+                        .foregroundStyle(session.status == .needsApproval ? AnyShapeStyle(Theme.attention) : AnyShapeStyle(.secondary))
+                        .lineLimit(2)
+                        .contentTransition(.opacity)
+                }
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(session.agent.displayName)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Theme.color(for: session.agent))
                         .fixedSize()
-                    if let title = session.title, !title.isEmpty {
-                        Text("· \(title)")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                    if let cwd = session.cwd, !cwd.isEmpty {
+                        Text("· \(shortPath(cwd))")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
                             .lineLimit(1)
+                            .truncationMode(.middle)
                     }
                     Spacer(minLength: 4)
                     Text(session.updated, format: .relative(presentation: .named))
@@ -157,17 +166,30 @@ struct SessionRow: View {
                         .lineLimit(1)
                         .fixedSize()
                 }
-                if let cwd = session.cwd, !cwd.isEmpty {
-                    Text(shortPath(cwd))
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
             }
         }
         .padding(.vertical, 4)
+        .animation(.easeOut(duration: 0.25), value: session.activity)
         .accessibilityElement(children: .combine)
+    }
+
+    /// What it's doing right now; an open approval reads as a question.
+    private var headline: AttributedString? {
+        let raw: String
+        if var a = session.activity, !a.isEmpty, session.status != .done {
+            // Paths inside the session's folder read relative to it; the rest from ~.
+            if let cwd = session.cwd, !cwd.isEmpty {
+                a = a.replacingOccurrences(of: cwd.hasSuffix("/") ? cwd : cwd + "/", with: "")
+            }
+            a = a.replacingOccurrences(of: #"/Users/[^/\s`]+"#, with: "~", options: .regularExpression)
+            raw = session.status == .needsApproval ? "Allow? \(a)" : a
+        } else if let t = session.title, !t.isEmpty {
+            raw = t
+        } else {
+            return nil
+        }
+        return (try? AttributedString(markdown: raw, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(raw)
     }
 }
 

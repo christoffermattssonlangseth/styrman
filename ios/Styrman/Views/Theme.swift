@@ -7,6 +7,9 @@ enum Theme {
         UIColor(hex: $0.userInterfaceStyle == .dark ? 0xFFCF83 : 0x855008)
     })
     static let ink = Color(red: 0.067, green: 0.071, blue: 0.078)
+    /// A solid main button: near-black in light mode, near-white in dark.
+    static let solid = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0xF2F2F4) : UIColor(hex: 0x15181C) })
+    static let onSolid = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x15181C) : .white })
     static let mono = Font.system(.callout, design: .monospaced)
 
     static func color(for status: SessionStatus) -> Color {
@@ -57,12 +60,18 @@ struct StatusChip: View {
         let tint = Theme.color(for: status)
         let highlighted = status == .needsApproval || status == .waiting || status == .error
         HStack(spacing: 5) {
-            Circle().fill(tint).frame(width: 7, height: 7)
+            Image(systemName: "circle.fill")
+                .font(.system(size: 7))
+                .foregroundStyle(status == .working ? Theme.accent : tint)
+                // A working agent's dot breathes.
+                .symbolEffect(.pulse, options: .repeating, isActive: status == .working)
             Text(Theme.label(for: status)).font(.caption.weight(.medium))
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
         .background(highlighted ? tint.opacity(0.12) : Color.clear, in: Capsule())
         .foregroundStyle(highlighted ? .primary : .secondary)
+        .contentTransition(.opacity)
+        .animation(.easeOut(duration: 0.2), value: status)
         .accessibilityElement(children: .combine)
     }
 }

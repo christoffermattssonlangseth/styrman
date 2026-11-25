@@ -99,11 +99,14 @@ struct SessionSummary: Codable, Identifiable, Hashable, Sendable {
     var inTerminalWrapper: Bool = false
     /// Messages from the phone can reach this session.
     var acceptsPrompts: Bool = false
+    /// One line on what it's doing or last said (newer daemons).
+    var activity: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, agent, cwd, title, model, shared, status
         case nativeId = "native_id", createdMs = "created_ms", updatedMs = "updated_ms", lastSeq = "last_seq"
         case inTerminalWrapper = "in_terminal_wrapper", acceptsPrompts = "accepts_prompts"
+        case activity
     }
 
     init(from decoder: Decoder) throws {
@@ -122,6 +125,7 @@ struct SessionSummary: Codable, Identifiable, Hashable, Sendable {
         inTerminalWrapper = (try? c.decodeIfPresent(Bool.self, forKey: .inTerminalWrapper)) ?? false
         // Older daemons don't say; assume yes rather than hide the message box.
         acceptsPrompts = (try? c.decodeIfPresent(Bool.self, forKey: .acceptsPrompts)) ?? true
+        activity = (try? c.decodeIfPresent(String.self, forKey: .activity)) ?? nil
     }
 
     /// Repository / folder name for the list.

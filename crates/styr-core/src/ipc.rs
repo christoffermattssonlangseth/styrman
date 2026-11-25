@@ -274,6 +274,9 @@ pub struct SessionSummary {
     /// Prompts from the phone can reach it (wrapper, or Claude's hook route).
     #[serde(default)]
     pub accepts_prompts: bool,
+    /// One line on what it's doing or last said ("Run `cargo test`", the reply's first line).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity: Option<String>,
 }
 
 /// An exit code plus stderr text for `styr hook` to finish with.

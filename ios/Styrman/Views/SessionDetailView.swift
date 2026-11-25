@@ -7,6 +7,31 @@ struct SessionDetailView: View {
     /// Set once the history has loaded: the newest reply at that point. Only replies
     /// after it are read aloud automatically.
     @State private var baseline: String??
+    @State private var showReadOnlyHelp = false
+    @Environment(\.dismiss) private var dismiss
+
+    /// The approval waiting for an answer, if any: it's pinned above the message box.
+    private func openPermission(_ timeline: SessionTimeline) -> PermissionItem? {
+        for item in timeline.items.reversed() {
+            if case .permission(_, let p) = item, p.isOpen { return p }
+        }
+        return nil
+    }
+
+    /// Back-to-back dividers ("Session started", "Shared with this phone") read as one line.
+    private func merged(_ items: [TimelineItem]) -> [TimelineItem] {
+        var out: [TimelineItem] = []
+        for item in items {
+            if case .divider(_, let text, _) = item, case .divider(let id, let prev, let at)? = out.last {
+                let both = prev == "Session started" && text.hasPrefix("Shared")
+                    ? "Started and shared" : "\(prev) · \(text.prefix(1).lowercased() + text.dropFirst())"
+                out[out.count - 1] = .divider(id: id, text: both, at: at)
+            } else {
+                out.append(item)
+            }
+        }
+        return out
+    }
 
     private func latestReply(_ timeline: SessionTimeline) -> (id: String, text: String)? {
         for item in timeline.items.reversed() {
@@ -22,8 +47,10 @@ struct SessionDetailView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(timeline.items) { item in
-                        TimelineRow(item: item, cwd: summary?.cwd, sessionId: sessionId, agent: agent).id(item.id)
+                    let latest = latestReply(timeline)?.id
+                    ForEach(merged(timeline.items)) { item in
+                        TimelineRow(item: item, cwd: summary?.cwd, sessionId: sessionId, agent: agent,
+                                    latestReplyId: latest).id(item.id)
                     }
                     ForEach(timeline.pending) { p in
                         PendingPromptRow(prompt: p) { timeline.dismissUnconfirmed(p.id) }
@@ -62,22 +89,45 @@ struct SessionDetailView: View {
             if let summary {
                 ToolbarItem(placement: .principal) {
                     HStack(spacing: 8) {
-                        AgentAvatar(agent: summary.agent, size: 26)
-                        Text(summary.repoName).font(.headline).lineLimit(1)
+                        AgentAvatar(agent: summary.agent, size: 28)
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(summary.repoName).font(.headline).lineLimit(1)
+                            HStack(spacing: 4) {
+                                Text(summary.agent.displayName).foregroundStyle(Theme.color(for: summary.agent))
+                                Text("·").foregroundStyle(.tertiary)
+                                Text(Theme.label(for: summary.status))
+                                    .foregroundStyle(summary.status.needsUser ? AnyShapeStyle(Theme.attention) : AnyShapeStyle(.secondary))
+                                    .contentTransition(.opacity)
+                                if summary.status == .working {
+                                    Image(systemName: "circle.fill").font(.system(size: 5)).foregroundStyle(Theme.accent)
+                                        .symbolEffect(.pulse, options: .repeating)
+                                }
+                            }
+                            .font(.caption2.weight(.medium))
+                            .animation(.easeOut(duration: 0.2), value: summary.status)
+                        }
                     }
+                    .accessibilityElement(children: .combine)
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    HStack(spacing: 10) {
-                        Button {
-                            speaker.autoRead.toggle()
-                            if !speaker.autoRead { speaker.stop() }
-                        } label: {
-                            Image(systemName: speaker.autoRead ? "speaker.wave.2.fill" : "speaker.slash")
-                                .foregroundStyle(speaker.autoRead ? Theme.color(for: summary.agent) : .secondary)
+                    Menu {
+                        Toggle(isOn: Binding(get: { speaker.autoRead }, set: { on in
+                            speaker.autoRead = on
+                            if !on { speaker.stop() }
+                        })) {
+                            Label("Read replies aloud", systemImage: "speaker.wave.2")
                         }
-                        .accessibilityLabel(speaker.autoRead ? "Stop reading replies aloud" : "Read replies aloud")
-                        StatusChip(status: summary.status)
+                        Divider()
+                        Button(role: .destructive) {
+                            connection.stopSharing(sessionId)
+                            dismiss()
+                        } label: {
+                            Label(summary.status == .done ? "Remove" : "Stop sharing", systemImage: "eye.slash")
+                        }
+                    } label: {
+                        Image(systemName: speaker.autoRead ? "speaker.wave.2.circle" : "ellipsis.circle")
                     }
+                    .accessibilityLabel("More")
                 }
             }
         }
@@ -109,6 +159,13 @@ struct SessionDetailView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity).padding(10).background(.bar)
                 } else if let summary {
+                    if let p = openPermission(timeline) {
+                        PermissionCard(item: p, title: displayTitle(p.tool, cwd: summary.cwd), sessionId: sessionId, pinned: true)
+                            .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 4)
+                            .frame(maxWidth: .infinity)
+                            .background(.bar)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
                     if summary.acceptsPrompts {
                         Composer(sessionId: sessionId, status: summary.status, agent: summary.agent.displayName)
                             .onChange(of: speaker.autoRead) { _, on in
@@ -116,14 +173,28 @@ struct SessionDetailView: View {
                                 if on, let r = latestReply(timeline) { speaker.speak(r.text, id: r.id, agent: summary.agent) }
                             }
                     } else {
-                        Label {
-                            Text("Read-only: this \(summary.agent.displayName) session wasn't started through Styrman. Run `styr setup` on the Mac, then start it again in a new terminal tab to approve and send messages from here.")
-                        } icon: { Image(systemName: "eye") }
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Label("Read-only", systemImage: "eye")
+                                Spacer()
+                                Button(showReadOnlyHelp ? "Hide" : "How to reply from here") {
+                                    withAnimation(.snappy) { showReadOnlyHelp.toggle() }
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                            if showReadOnlyHelp {
+                                Text("This \(summary.agent.displayName) session wasn't started through Styrman. Run `styr setup` on the Mac, then start it again in a new terminal tab.")
+                                    .foregroundStyle(.secondary)
+                                    .transition(.opacity)
+                            }
+                        }
                         .font(.footnote).foregroundStyle(.secondary)
-                        .padding(12).frame(maxWidth: .infinity, alignment: .leading).background(.bar)
+                        .padding(.horizontal, 14).padding(.vertical, 10)
+                        .frame(maxWidth: .infinity, alignment: .leading).background(.bar)
                     }
                 }
             }
+            .animation(.snappy, value: openPermission(timeline)?.request)
         }
 
         .onAppear { connection.watch(sessionId) }
@@ -159,6 +230,7 @@ struct TimelineRow: View {
     var cwd: String? = nil
     var sessionId: String = ""
     var agent: AgentKind = .unknown
+    var latestReplyId: String? = nil
 
     var body: some View {
         switch item {
@@ -166,10 +238,10 @@ struct TimelineRow: View {
             HStack(spacing: 8) {
                 line
                 Text("\(text) · \(at.formatted(date: .omitted, time: .shortened))")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize()
+                    .font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
                 line
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, 2)
         case .user(_, let text, _, _) where AgentMessage(text) != nil:
             AgentMessageRow(message: AgentMessage(text)!)
         case .user(_, let text, let fromPhone, _):
@@ -185,11 +257,18 @@ struct TimelineRow: View {
                 }
             }
         case .assistant(let id, let text, _):
-            ReplyView(id: id, text: markdown(text), raw: text, agent: agent)
+            ReplyView(id: id, text: markdown(text), raw: text, agent: agent, isLatest: id == latestReplyId)
         case .tool(_, let tool):
             // Runs of tool calls sit close together (the list's spacing is 12).
             ToolCallRow(item: tool, title: displayTitle(tool.tool, cwd: cwd))
                 .padding(.vertical, -4)
+        case .permission(_, let p) where p.isOpen:
+            // The card itself is pinned above the message box.
+            Label("Waiting for your answer below", systemImage: "hand.raised.fill")
+                .font(.footnote.weight(.medium)).foregroundStyle(Theme.attention)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .background(Theme.attention.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
         case .permission(_, let p):
             PermissionCard(item: p, title: displayTitle(p.tool, cwd: cwd), sessionId: sessionId)
         case .plan(_, let entries):
@@ -216,6 +295,7 @@ struct ReplyView: View {
     let text: AttributedString
     let raw: String
     let agent: AgentKind
+    var isLatest = true
     @State private var speaker = Speaker.shared
     @State private var copied = false
 
@@ -224,6 +304,8 @@ struct ReplyView: View {
         let tint = Theme.color(for: agent)
         VStack(alignment: .leading, spacing: 6) {
             Text(text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            // Actions under the latest reply only (and the one being read); long-press any reply for them.
+            if isLatest || playing {
             HStack(spacing: 2) {
                 ActionIcon(
                     symbol: copied ? "checkmark" : "doc.on.doc",
@@ -244,11 +326,18 @@ struct ReplyView: View {
                 }
             }
             .padding(.leading, -8)
+            }
         }
-        .padding(.leading, 12)
-        // A thin edge in the agent's colour on every reply; solid while it's read aloud.
+        .padding(.leading, playing ? 12 : 0)
+        // An edge in the agent's colour while it's read aloud.
         .overlay(alignment: .leading) {
-            Capsule().fill(tint.opacity(playing ? 1 : 0.45)).frame(width: playing ? 4 : 3).padding(.vertical, 2)
+            if playing { Capsule().fill(tint).frame(width: 4).padding(.vertical, 2) }
+        }
+        .contextMenu {
+            Button { UIPasteboard.general.string = raw } label: { Label("Copy", systemImage: "doc.on.doc") }
+            Button { speaker.toggle(raw, id: id, agent: agent) } label: {
+                Label(playing ? "Stop reading" : "Read aloud", systemImage: playing ? "stop.fill" : "speaker.wave.2")
+            }
         }
         .animation(.easeOut(duration: 0.2), value: playing)
         .sensoryFeedback(.selection, trigger: playing)
@@ -327,6 +416,8 @@ struct PermissionCard: View {
     let item: PermissionItem
     let title: String
     let sessionId: String
+    /// Pinned above the message box: tighter, so the conversation stays visible.
+    var pinned = false
     @State private var sent: String?
     @State private var showAll = false
 
@@ -337,17 +428,23 @@ struct PermissionCard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label(item.isOpen ? "Permission needed" : "Permission", systemImage: "hand.raised.fill")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(item.isOpen ? Theme.attention : .secondary)
+        VStack(alignment: .leading, spacing: pinned ? 10 : 12) {
+            HStack {
+                Label(item.isOpen ? "Permission needed" : "Permission", systemImage: "hand.raised.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(item.isOpen ? Theme.attention : .secondary)
+                Spacer()
+                if pinned {
+                    Text("or answer in the terminal").font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
 
             // What it's about, compact: commands in a small monospaced box.
             Group {
                 if item.tool.kind == .execute {
                     Text(title)
                         .font(.system(.footnote, design: .monospaced))
-                        .lineLimit(showAll ? nil : 6)
+                        .lineLimit(showAll ? nil : pinned ? 3 : 6)
                         .padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
@@ -356,7 +453,7 @@ struct PermissionCard: View {
                 }
             }
             .textSelection(.enabled)
-            if !showAll, title.count > 240 || title.split(separator: "\n").count > 6 {
+            if !showAll, title.count > (pinned ? 120 : 240) || title.split(separator: "\n").count > (pinned ? 3 : 6) {
                 Button("Show all") { showAll = true }.font(.caption).buttonStyle(.borderless)
             }
             if let reason { Text(reason).font(.footnote).foregroundStyle(.secondary) }
@@ -365,7 +462,7 @@ struct PermissionCard: View {
                 VStack(spacing: 8) {
                     ForEach(item.options) { opt in option(opt) }
                 }
-                countdown
+                if !pinned { countdown }
             } else if let text = item.resolutionText {
                 Text(text).font(.footnote).foregroundStyle(.secondary)
             }
@@ -375,6 +472,7 @@ struct PermissionCard: View {
         .background(RoundedRectangle(cornerRadius: 14).fill(item.isOpen ? Theme.attention.opacity(0.08) : Color.clear))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(item.isOpen ? Theme.attention.opacity(0.6) : Color.secondary.opacity(0.3)))
         .sensoryFeedback(.success, trigger: item.isOpen) { wasOpen, isOpen in wasOpen && !isOpen && sent != nil }
+        .sensoryFeedback(.impact(weight: .medium), trigger: sent) { _, new in new != nil }
     }
 
     /// One option as a full-width row of the same shape as the others.
@@ -382,7 +480,9 @@ struct PermissionCard: View {
         let (head, code) = OptionLabel.split(opt.label)
         let deny = !opt.kind.isAllow
         let primary = opt.kind == .allowOnce
-        let tint: Color = deny ? .red : primary ? Theme.attention : .secondary
+        // Allow once is the answer most of the time: a solid button. Always-allow is quieter,
+        // and Deny is red but outlined so it doesn't compete.
+        let tint: Color = deny ? .red : .secondary
         return Button {
             if connection.resolvePermission(session: sessionId, request: item.request, option: opt.id,
                                             failed: { sent = nil }) {
@@ -420,9 +520,10 @@ struct PermissionCard: View {
             .multilineTextAlignment(.leading)
             .padding(.horizontal, 12).padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .foregroundStyle(primary ? Color.primary : tint)
-            .background(tint.opacity(primary ? 0.18 : 0.1), in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(primary ? .clear : tint.opacity(0.45)))
+            .foregroundStyle(primary ? Theme.onSolid : deny ? Color.red : Color.primary)
+            .background(primary ? AnyShapeStyle(Theme.solid) : AnyShapeStyle(deny ? Color.clear : Color(.secondarySystemFill)),
+                        in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(deny ? Color.red.opacity(0.55) : .clear))
             .contentShape(RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)

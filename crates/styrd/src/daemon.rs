@@ -425,11 +425,11 @@ impl Daemon {
     }
 
     fn summary_of(inner: &Inner, rec: SessionRecord) -> SessionSummary {
-        let status = inner
-            .trackers
-            .get(&rec.id)
+        let tracker = inner.trackers.get(&rec.id);
+        let status = tracker
             .map(|t| t.status())
             .unwrap_or(styr_core::SessionStatus::Waiting);
+        let activity = tracker.and_then(|t| t.activity());
         SessionSummary {
             id: rec.id,
             agent: rec.native.agent,
@@ -444,6 +444,7 @@ impl Daemon {
             last_seq: rec.last_seq,
             in_terminal_wrapper: false,
             accepts_prompts: false,
+            activity,
         }
     }
 
