@@ -70,6 +70,19 @@ next_after_self() {
   IFS=$old_ifs
   return 1
 }
+# The next `$name` on PATH after the directory of $1 (the binary styr already chose).
+next_after_dir_of() {
+  target_dir=$(cd "$(dirname "$1")" 2>/dev/null && pwd -P) || return 1
+  seen=0
+  old_ifs=$IFS; IFS=:
+  for d in $PATH; do
+    dd=$(cd "$d" 2>/dev/null && pwd -P)
+    if [ "$dd" = "$target_dir" ]; then seen=1; continue; fi
+    if [ "$seen" = 1 ] && [ "$dd" != "$self_dir" ] && [ -x "$d/$name" ]; then IFS=$old_ifs; printf '%s' "$d/$name"; return 0; fi
+  done
+  IFS=$old_ifs
+  return 1
+}
 # Guard against wrapper loops (another tool's shim pointing back at us).
 STYR_SHIM_HOPS=$(( ${STYR_SHIM_HOPS:-0} + 1 )); export STYR_SHIM_HOPS
 if [ "$STYR_SHIM_HOPS" -gt 4 ]; then echo "styr shim: $name keeps resolving to itself; check PATH" >&2; exit 1; fi
@@ -78,7 +91,11 @@ styr_bin=$(command -v styr 2>/dev/null)
 if [ -z "$STYR_WRAPPED" ] && [ -n "$styr_bin" ]; then
   exec "$styr_bin" "$name" "$@"
 fi
-real=$(next_after_self) || { echo "$name: not found on PATH" >&2; exit 127; }
+# Already inside styr. If a wrapper styr ran (e.g. cmux's) called back into us,
+# continue after it rather than from here, or that wrapper would run twice.
+real=""
+[ -n "$STYR_AGENT_BIN" ] && real=$(next_after_dir_of "$STYR_AGENT_BIN")
+[ -n "$real" ] || real=$(next_after_self) || { echo "$name: not found on PATH" >&2; exit 127; }
 exec "$real" "$@"
 "#;
 
@@ -91,6 +108,9 @@ pub fn exec(agent: AgentKind, args: Vec<OsString>) -> Result<std::convert::Infal
     };
     // Interactive Claude: run it in our terminal wrapper so phone prompts can be
     // typed into it. Everything else (pipes, -p, other agents for now): plain exec.
+    // The shim uses this to skip past `bin` if a wrapper we run calls back into it.
+    let mut env = spec.env.clone();
+    env.push(("STYR_AGENT_BIN".into(), bin.to_string_lossy().into_owned()));
     let interactive = !args
         .iter()
         .any(|a| a == "-p" || a == "--print" || a == "--prompt")
@@ -109,12 +129,12 @@ pub fn exec(agent: AgentKind, args: Vec<OsString>) -> Result<std::convert::Infal
         let mut all: Vec<OsString> = spec.extra_args.iter().map(OsString::from).collect();
         all.extend(args);
         let catch_styr = agent == AgentKind::Codex;
-        let code = crate::pty::run(&bin, &all, &spec.env, &launch_id, detector, catch_styr)?;
+        let code = crate::pty::run(&bin, &all, &env, &launch_id, detector, catch_styr)?;
         std::process::exit(code);
     }
     let mut cmd = std::process::Command::new(&bin);
     cmd.args(&spec.extra_args).args(args);
-    for (k, v) in &spec.env {
+    for (k, v) in &env {
         cmd.env(k, v);
     }
     // Only returns on failure.
@@ -235,6 +255,51 @@ mod tests {
         assert_eq!(
             String::from_utf8_lossy(&out.stdout).trim(),
             "REAL x wrapped=1 via=+styr"
+        );
+    }
+
+    #[test]
+    fn cmux_codex_wrapper_runs_once_when_it_calls_back_into_the_shim() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = |n: &str| {
+            let p = d.path().join(n);
+            std::fs::create_dir_all(&p).unwrap();
+            p
+        };
+        let (shims, cmux, real, tools) = (dir("shims"), dir("cmux"), dir("real"), dir("tools"));
+        let write = |p: std::path::PathBuf, body: &str| {
+            std::fs::write(&p, body).unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        // Like cmux's codex wrapper: add a flag, then exec the FIRST other codex on PATH
+        // (which is Styrman's shim, since ~/.styrman/bin comes first).
+        write(
+            cmux.join("codex"),
+            "#!/bin/sh\nself=$(cd \"$(dirname \"$0\")\" && pwd -P); IFS=:\nfor d in $PATH; do if [ \"$(cd \"$d\" && pwd -P)\" = \"$self\" ]; then continue; fi; if [ -x \"$d/codex\" ]; then exec \"$d/codex\" --cmux \"$@\"; fi; done; exit 99\n",
+        );
+        write(shims.join("codex"), SHIM);
+        write(real.join("codex"), "#!/bin/sh\necho \"REAL $*\"\n");
+        // styr: picks cmux's wrapper (first codex that isn't a shim) and says so.
+        write(
+            tools.join("styr"),
+            &format!(
+                "#!/bin/sh\nshift\nSTYR_WRAPPED=1 STYR_AGENT_BIN={0} exec {0} \"$@\"\n",
+                cmux.join("codex").display()
+            ),
+        );
+        let path = std::env::join_paths([&shims, &cmux, &tools, &real, &"/usr/bin".into(), &"/bin".into()]).unwrap();
+        let out = std::process::Command::new(shims.join("codex"))
+            .arg("hi")
+            .env("PATH", &path)
+            .env_remove("STYR_WRAPPED")
+            .env_remove("STYR_AGENT_BIN")
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            "REAL --cmux hi",
+            "cmux's flag once; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
         );
     }
 }
