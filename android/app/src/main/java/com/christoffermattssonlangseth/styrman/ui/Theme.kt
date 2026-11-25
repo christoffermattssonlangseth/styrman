@@ -67,13 +67,7 @@ fun agentColor(agent: AgentKind): Color {
 }
 
 @Composable
-fun statusColor(s: SessionStatus): Color = when (s) {
-    SessionStatus.Working -> Color(0xFF2F7DF6)
-    SessionStatus.NeedsApproval -> Palette.accent
-    SessionStatus.Waiting -> Color(0xFFF29A2E)
-    SessionStatus.Error -> Color(0xFFD93025)
-    else -> MaterialTheme.colorScheme.onSurfaceVariant
-}
+fun attentionColor(): Color = if (isSystemInDarkTheme()) Color(0xFFFFCF83) else Color(0xFF855008)
 
 fun toolIcon(k: ToolKind): ImageVector = when (k) {
     ToolKind.Execute -> Icons.Filled.Terminal
@@ -90,11 +84,12 @@ fun toolIcon(k: ToolKind): ImageVector = when (k) {
 
 val Mono = FontFamily.Monospace
 
-/** A filled circle in the agent's colour with its initial: tells agents apart at a glance. */
+/** A tinted avatar identifies the agent in lists and headers. */
 @Composable
 fun AgentAvatar(agent: AgentKind, size: androidx.compose.ui.unit.Dp = 34.dp) {
+    val tint = agentColor(agent)
     Box(
-        Modifier.size(size).background(agentColor(agent), CircleShape),
+        Modifier.size(size).background(tint.copy(alpha = 0.12f), CircleShape),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -104,7 +99,7 @@ fun AgentAvatar(agent: AgentKind, size: androidx.compose.ui.unit.Dp = 34.dp) {
                 AgentKind.Antigravity -> "⚛"
                 else -> ">_"
             },
-            color = Color.White,
+            color = tint,
             fontWeight = FontWeight.Bold,
             fontSize = (size.value * 0.36f).sp,
         )
@@ -128,15 +123,21 @@ fun AgentBadge(agent: AgentKind) {
 
 @Composable
 fun StatusChip(status: SessionStatus) {
-    val c = statusColor(status)
+    val highlighted = status in setOf(SessionStatus.NeedsApproval, SessionStatus.Waiting, SessionStatus.Error)
+    val c = when (status) {
+        SessionStatus.NeedsApproval, SessionStatus.Waiting -> attentionColor()
+        SessionStatus.Error -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(5.dp),
         modifier = Modifier
-            .background(c.copy(alpha = 0.12f), RoundedCornerShape(50))
+            .background(if (highlighted) c.copy(alpha = 0.12f) else Color.Transparent, RoundedCornerShape(50))
             .padding(horizontal = 8.dp, vertical = 4.dp),
     ) {
         Box(Modifier.size(7.dp).background(c, CircleShape))
-        Text(status.label, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        Text(status.label, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+            color = if (highlighted) MaterialTheme.colorScheme.onSurface else c)
     }
 }

@@ -3,16 +3,17 @@ import SwiftUI
 /// Helm theme: ink wheel, one signal-red accent, quiet greys.
 enum Theme {
     static let accent = Color("AccentColor")
+    static let attention = Color(UIColor {
+        UIColor(hex: $0.userInterfaceStyle == .dark ? 0xFFCF83 : 0x855008)
+    })
     static let ink = Color(red: 0.067, green: 0.071, blue: 0.078)
     static let mono = Font.system(.callout, design: .monospaced)
 
     static func color(for status: SessionStatus) -> Color {
         switch status {
-        case .working: .blue
-        case .needsApproval: accent
-        case .waiting: .orange
+        case .needsApproval, .waiting: attention
         case .error: .red
-        case .done, .unknown: .secondary
+        case .working, .done, .unknown: .secondary
         }
     }
 
@@ -53,13 +54,15 @@ struct WheelMark: View {
 struct StatusChip: View {
     let status: SessionStatus
     var body: some View {
+        let tint = Theme.color(for: status)
+        let highlighted = status == .needsApproval || status == .waiting || status == .error
         HStack(spacing: 5) {
-            Circle().fill(Theme.color(for: status)).frame(width: 7, height: 7)
+            Circle().fill(tint).frame(width: 7, height: 7)
             Text(Theme.label(for: status)).font(.caption.weight(.medium))
         }
         .padding(.horizontal, 8).padding(.vertical, 4)
-        .background(Theme.color(for: status).opacity(0.12), in: Capsule())
-        .foregroundStyle(status == .done ? .secondary : .primary)
+        .background(highlighted ? tint.opacity(0.12) : Color.clear, in: Capsule())
+        .foregroundStyle(highlighted ? .primary : .secondary)
         .accessibilityElement(children: .combine)
     }
 }
@@ -99,7 +102,7 @@ extension Theme {
     }
 }
 
-/// A filled circle in the agent's colour with its glyph: tells agents apart at a glance.
+/// A tinted avatar identifies the agent in lists and headers.
 struct AgentAvatar: View {
     let agent: AgentKind
     var size: CGFloat = 34
@@ -107,23 +110,10 @@ struct AgentAvatar: View {
         let c = Theme.color(for: agent)
         Image(systemName: Theme.symbol(for: agent))
             .font(.system(size: size * 0.42, weight: .bold))
-            .foregroundStyle(.white)
+            .foregroundStyle(c)
             .frame(width: size, height: size)
-            .background(c, in: Circle())
+            .background(c.opacity(0.12), in: Circle())
             .accessibilityLabel(agent.displayName)
-    }
-}
-
-/// A list row background in the agent's colour: a solid bar on the leading edge over a light tint.
-struct AgentRowBackground: View {
-    let agent: AgentKind
-    var body: some View {
-        let c = Theme.color(for: agent)
-        ZStack(alignment: .leading) {
-            Color(.secondarySystemGroupedBackground)
-            c.opacity(0.09)
-            c.frame(width: 5)
-        }
     }
 }
 

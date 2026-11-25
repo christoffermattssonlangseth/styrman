@@ -108,7 +108,6 @@ struct SessionListView: View {
             Section(title) {
                 ForEach(items) { s in
                     NavigationLink(value: s.id) { SessionRow(session: s) }
-                        .listRowBackground(AgentRowBackground(agent: s.agent))
                         .swipeActions(edge: .trailing) {
                             Button(s.status == .done ? "Remove" : "Stop sharing", role: .destructive) {
                                 connection.stopSharing(s.id)
@@ -143,7 +142,7 @@ struct SessionRow: View {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
                     Text(session.agent.displayName)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(Theme.color(for: session.agent))
+                        .foregroundStyle(.secondary)
                         .fixedSize()
                     if let title = session.title, !title.isEmpty {
                         Text("· \(title)")

@@ -2,7 +2,6 @@ package com.christoffermattssonlangseth.styrman.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -117,27 +116,19 @@ private fun SwipeRow(connection: DaemonConnection, s: SessionSummary, onOpen: (S
             }
         },
     ) {
-        val c = agentColor(s.agent)
-        // A bar in the agent's colour on the leading edge over a light tint of it.
         Row(
             Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)
-                .background(c.copy(alpha = 0.09f))
                 .clickable { onOpen(s.id) }
-                .drawBehind { drawRect(c, size = size.copy(width = 5.dp.toPx())) }
                 .padding(start = 18.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             AgentAvatar(s.agent)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(s.agent.displayName, color = c, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.width(6.dp))
-                    Text(s.repoName, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-                s.title?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
+                Text(s.repoName, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val subtitle = listOfNotNull(s.agent.displayName, s.title?.takeIf { it.isNotBlank() }).joinToString(" · ")
+                Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             StatusChip(s.status)
         }

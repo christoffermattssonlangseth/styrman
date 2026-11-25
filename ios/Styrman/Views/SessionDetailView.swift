@@ -56,7 +56,7 @@ struct SessionDetailView: View {
         .navigationTitle(summary?.repoName ?? "Session")
         .navigationBarTitleDisplayMode(.inline)
         // The bar takes the agent's colour, so it's always clear who you're talking to.
-        .toolbarBackground(Theme.color(for: agent).opacity(0.22), for: .navigationBar)
+        .toolbarBackground(Theme.color(for: agent).opacity(0.07), for: .navigationBar)
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             if let summary {
@@ -110,8 +110,7 @@ struct SessionDetailView: View {
                         .frame(maxWidth: .infinity).padding(10).background(.bar)
                 } else if let summary {
                     if summary.acceptsPrompts {
-                        Composer(sessionId: sessionId, status: summary.status, agent: summary.agent.displayName,
-                                 agentColor: Theme.color(for: summary.agent))
+                        Composer(sessionId: sessionId, status: summary.status, agent: summary.agent.displayName)
                             .onChange(of: speaker.autoRead) { _, on in
                                 // Turning it on reads the latest reply, so you hear where things are.
                                 if on, let r = latestReply(timeline) { speaker.speak(r.text, id: r.id, agent: summary.agent) }
@@ -341,7 +340,7 @@ struct PermissionCard: View {
         VStack(alignment: .leading, spacing: 12) {
             Label(item.isOpen ? "Permission needed" : "Permission", systemImage: "hand.raised.fill")
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(item.isOpen ? Theme.accent : .secondary)
+                .foregroundStyle(item.isOpen ? Theme.attention : .secondary)
 
             // What it's about, compact: commands in a small monospaced box.
             Group {
@@ -373,8 +372,8 @@ struct PermissionCard: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 14).fill(item.isOpen ? Theme.accent.opacity(0.08) : Color.clear))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(item.isOpen ? Theme.accent.opacity(0.6) : Color.secondary.opacity(0.3)))
+        .background(RoundedRectangle(cornerRadius: 14).fill(item.isOpen ? Theme.attention.opacity(0.08) : Color.clear))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(item.isOpen ? Theme.attention.opacity(0.6) : Color.secondary.opacity(0.3)))
         .sensoryFeedback(.success, trigger: item.isOpen) { wasOpen, isOpen in wasOpen && !isOpen && sent != nil }
     }
 
@@ -383,7 +382,7 @@ struct PermissionCard: View {
         let (head, code) = OptionLabel.split(opt.label)
         let deny = !opt.kind.isAllow
         let primary = opt.kind == .allowOnce
-        let tint: Color = deny ? .red : Theme.accent
+        let tint: Color = deny ? .red : primary ? Theme.attention : .secondary
         return Button {
             if connection.resolvePermission(session: sessionId, request: item.request, option: opt.id,
                                             failed: { sent = nil }) {
@@ -421,8 +420,8 @@ struct PermissionCard: View {
             .multilineTextAlignment(.leading)
             .padding(.horizontal, 12).padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .foregroundStyle(primary ? Color.white : tint)
-            .background(primary ? tint : tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+            .foregroundStyle(primary ? Color.primary : tint)
+            .background(tint.opacity(primary ? 0.18 : 0.1), in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(primary ? .clear : tint.opacity(0.45)))
             .contentShape(RoundedRectangle(cornerRadius: 12))
         }
@@ -547,7 +546,6 @@ struct Composer: View {
     let sessionId: String
     let status: SessionStatus
     let agent: String
-    let agentColor: Color
     @State private var text = ""
     @FocusState private var focused: Bool
     @State private var dictation = Dictation()
@@ -585,7 +583,7 @@ struct Composer: View {
                         .font(.system(size: 34))
                         .symbolEffect(.pulse, isActive: dictation.isListening)
                 }
-                .tint(dictation.isListening ? agentColor : .secondary)
+                .tint(dictation.isListening ? Theme.accent : .secondary)
                 .disabled(status == .done)
                 .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Dictate")
                 Button {
@@ -594,7 +592,7 @@ struct Composer: View {
                 } label: {
                     Image(systemName: "arrow.up.circle.fill").font(.system(size: 34))
                 }
-                .tint(agentColor)
+                .tint(Theme.accent)
                 .disabled(!canSend)
                 .accessibilityLabel("Send")
             }

@@ -132,7 +132,7 @@ fun SessionScreen(connection: DaemonConnection, speaker: Speaker, sessionId: Str
             TopAppBar(
                 // The bar takes the agent's colour, so it's always clear who you're talking to.
                 colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
-                    containerColor = agentColor(agent).copy(alpha = 0.22f)
+                    containerColor = agentColor(agent).copy(alpha = 0.07f)
                         .compositeOver(MaterialTheme.colorScheme.surface),
                 ),
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
@@ -326,18 +326,18 @@ private fun ToolRow(item: TimelineItem.Tool, title: String) {
 @Composable
 private fun PermissionCard(item: TimelineItem.Permission, title: String, answer: (String, String) -> Boolean) {
     var sent by remember(item.request) { mutableStateOf<String?>(null) }
-    val accent = Palette.accent
+    val attention = attentionColor()
     Column(
         Modifier.fillMaxWidth()
-            .background(if (item.isOpen) accent.copy(alpha = 0.08f) else Color.Transparent, RoundedCornerShape(14.dp))
-            .border(1.dp, if (item.isOpen) accent.copy(alpha = 0.6f) else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
+            .background(if (item.isOpen) attention.copy(alpha = 0.08f) else Color.Transparent, RoundedCornerShape(14.dp))
+            .border(1.dp, if (item.isOpen) attention.copy(alpha = 0.6f) else MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(14.dp))
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Icon(Icons.Filled.PanTool, null, tint = if (item.isOpen) accent else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+            Icon(Icons.Filled.PanTool, null, tint = if (item.isOpen) attention else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
             Text(if (item.isOpen) "Permission needed" else "Permission", fontWeight = FontWeight.SemiBold,
-                color = if (item.isOpen) accent else MaterialTheme.colorScheme.onSurfaceVariant)
+                color = if (item.isOpen) attention else MaterialTheme.colorScheme.onSurfaceVariant)
         }
         SelectionContainer { Text(title, fontFamily = if (item.tool.kind == ToolKind.Execute) Mono else null) }
         item.reason?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -348,11 +348,15 @@ private fun PermissionCard(item: TimelineItem.Permission, title: String, answer:
                         onClick = { if (answer(item.request, opt.id)) sent = opt.id },
                         enabled = sent == null,
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (opt.kind.isAllow) (if (opt.kind.name == "AllowOnce") Palette.ink else Color.Gray) else accent,
-                            contentColor = Color.White,
+                            containerColor = when {
+                                !opt.kind.isAllow -> MaterialTheme.colorScheme.errorContainer
+                                opt.kind.name == "AllowOnce" -> attention.copy(alpha = 0.18f)
+                                else -> MaterialTheme.colorScheme.surfaceVariant
+                            },
+                            contentColor = if (opt.kind.isAllow) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onErrorContainer,
                         ),
                     ) {
-                        if (sent == opt.id) { CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp, color = Color.White); Spacer(Modifier.width(6.dp)) }
+                        if (sent == opt.id) { CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onSurfaceVariant); Spacer(Modifier.width(6.dp)) }
                         Text(opt.label)
                     }
                 }
@@ -390,7 +394,7 @@ private fun PendingRow(p: SessionTimeline.PendingPrompt, dismiss: () -> Unit) {
     }
 }
 
-/** Message box with dictation and send, tinted in the agent's colour. */
+/** Message box with dictation and send. */
 @Composable
 private fun Composer(connection: DaemonConnection, sessionId: String, status: SessionStatus, agent: AgentKind) {
     val context = LocalContext.current
@@ -402,7 +406,7 @@ private fun Composer(connection: DaemonConnection, sessionId: String, status: Se
         if (granted) { before = if (text.isEmpty() || text.endsWith(" ")) text else "$text "; dictation.start() }
         else connection.lastError = "Allow the microphone for Styrman to dictate."
     }
-    val tint = agentColor(agent)
+    val tint = Palette.accent
     val canSend = connection.state == DaemonConnection.State.Connected && status != SessionStatus.Done && text.isNotBlank()
 
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
