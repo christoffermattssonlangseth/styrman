@@ -3,24 +3,33 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="description" content="What Styrman stores, where it goes, and what it never collects.">
-<meta name="theme-color" content="#eef2ed">
 <title>Privacy — Styrman</title>
-<link rel="canonical" href="https://christoffermattssonlangseth.github.io/styrman/privacy.html">
+<meta name="description" content="What Styrman stores, where it goes, and what it never collects.">
+<meta name="theme-color" content="#0c1a22">
+<link rel="canonical" href="https://styrman.app/privacy.html">
 <link rel="icon" href="assets/helm.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="images/apple-touch-icon.png">
 <link rel="stylesheet" href="style.css">
+<script src="js/site.js" defer></script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
-<header class="shell nav">
-  <a class="brand" href="./"><img src="assets/helm.svg" width="34" height="34" alt="">Styrman</a>
-  <nav aria-label="Main navigation"><a href="./#features">Features</a><a href="privacy.html">Privacy</a><a class="pill" href="./#setup">Get started</a></nav>
+<header class="site-header">
+  <div class="wrap nav">
+    <a class="brand" href="./"><img src="assets/helm-light.svg" width="30" height="30" alt="">Styrman</a>
+    <nav aria-label="Main">
+      <a class="wide" href="./#features">Features</a>
+      <a class="wide" href="./#how">How it works</a>
+      <a class="wide" href="privacy.html">Privacy</a>
+      <a class="wide" href="https://github.com/christoffermattssonlangseth/styrman">GitHub</a>
+      <a class="btn btn-small" href="./#start">Get started</a>
+    </nav>
+  </div>
 </header>
-<main id="main" class="shell prose">
-<h1>Privacy</h1>
-<p>Styrman is built so that your code and conversations stay on your own machines. It has no accounts, no analytics and no tracking, in the apps or on this website.</p>
-
+<section class="band page-head">
+  <div class="wrap"><p class="kicker light">Styrman</p><h1>Privacy</h1><p class="lead page-lead">Styrman is built so your code and conversations stay on your own machines. No accounts, no analytics, no tracking: in the apps or on this website.</p></div>
+</section>
+<main id="main" class="wrap prose">
 <h2>On your Mac</h2>
 <p>The Styrman service (<code>styrd</code>) keeps session history in a local database in <code>~/Library/Application Support/Styrman</code>. Sessions are invisible until you type <code>/styr</code> in them: for a session you haven't shared, only that it started and ended is recorded, never its content. <code>styr forget</code> deletes sessions and their history.</p>
 
@@ -43,6 +52,12 @@
 <h2>Questions</h2>
 <p>Styrman is open source, so you can check all of this in <a href="https://github.com/christoffermattssonlangseth/styrman">its code</a>. Questions: <a href="support.html">Support</a>.</p>
 </main>
-<footer class="shell footer"><a class="brand" href="./"><img src="assets/helm.svg" width="28" height="28" alt="">Styrman</a><p>Made by Christoffer Mattsson Langseth.</p><nav aria-label="Footer"><a href="privacy.html">Privacy</a><a href="support.html">Support</a><a href="https://github.com/christoffermattssonlangseth/styrman">Source code</a></nav></footer>
+<footer class="footer">
+  <div class="wrap footer-row">
+    <a class="brand" href="./"><img src="assets/helm.svg" width="26" height="26" alt="">Styrman</a>
+    <p>Made by Christoffer Mattsson Langseth. Not affiliated with Anthropic, OpenAI or Google.</p>
+    <nav aria-label="Footer"><a href="privacy.html">Privacy</a><a href="support.html">Support</a><a href="https://github.com/christoffermattssonlangseth/styrman">Source</a></nav>
+  </div>
+</footer>
 </body>
 </html>
