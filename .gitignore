@@ -1,0 +1,10 @@
+/target
+**/*.rs.bk
+.DS_Store
+*.sqlite
+*.sqlite-*
+*.p8
+.env
+xcuserdata/
+DerivedData/
+*.xcuserstate
