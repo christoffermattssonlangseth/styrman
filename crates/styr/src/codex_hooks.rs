@@ -25,6 +25,12 @@ pub const EVENTS: &[&str] = &[
 const TIMEOUT_SECS: u64 = 30;
 
 const SHIM: &str = include_str!("../../../plugins/agy/styrman/bin/styr-hook");
+/// How to talk to other shared agents (`styr ask`), as a Codex skill.
+const PEERS_SKILL: &str = include_str!("../../../plugins/codex/styrman-peers.SKILL.md");
+
+fn peers_skill_path() -> Option<PathBuf> {
+    Some(codex_home()?.join("skills/styrman-peers/SKILL.md"))
+}
 const MARKER: &str = "/.styrman/codex/styr-hook";
 
 pub fn codex_home() -> Option<PathBuf> {
@@ -87,7 +93,9 @@ pub fn installed() -> bool {
     let Ok(doc) = serde_json::from_str::<Value>(&text) else {
         return false;
     };
-    shim_ok && merged(Some(doc.clone()), &shim.to_string_lossy()) == doc
+    let skill_ok = peers_skill_path()
+        .is_some_and(|p| std::fs::read_to_string(p).is_ok_and(|s| s == PEERS_SKILL));
+    shim_ok && skill_ok && merged(Some(doc.clone()), &shim.to_string_lossy()) == doc
 }
 
 /// Whether Codex has recorded trust for our hooks (any trust state for hooks.json
@@ -147,6 +155,10 @@ pub fn install() -> Result<bool> {
     let tmp = path.with_extension("json.styrman-tmp");
     std::fs::write(&tmp, serde_json::to_string_pretty(&doc)? + "\n")?;
     std::fs::rename(&tmp, &path)?;
+    if let Some(skill) = peers_skill_path() {
+        std::fs::create_dir_all(skill.parent().expect("parent"))?;
+        std::fs::write(&skill, PEERS_SKILL)?;
+    }
     Ok(true)
 }
 

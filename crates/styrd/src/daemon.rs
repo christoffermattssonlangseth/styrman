@@ -40,6 +40,7 @@ pub struct Daemon {
     pub(crate) terminals: crate::terminals::Terminals,
     /// `/styr` typed in a `styr <agent>` terminal before its session's first hook.
     pending_shares: Mutex<HashMap<String, bool>>,
+    pub(crate) peer_state: crate::peers::Peers,
     pusher: std::sync::RwLock<Option<Arc<crate::push::Pusher>>>,
     data_dir: Mutex<Option<std::path::PathBuf>>,
     /// Device id → open WebSocket count (a connected app is in the foreground).
@@ -124,6 +125,7 @@ impl Daemon {
             prompts: Default::default(),
             terminals: Default::default(),
             pending_shares: Mutex::new(HashMap::new()),
+            peer_state: Default::default(),
             pusher: Default::default(),
             data_dir: Mutex::new(None),
             live: Mutex::new(HashMap::new()),
@@ -1023,6 +1025,38 @@ impl Daemon {
                 }),
             Request::PushReload => self.reload_push(None).map(|_| self.push_status()),
             Request::PushStatus => Ok(self.push_status()),
+            Request::Peers { launch_id } => {
+                let me = launch_id.as_deref().and_then(|l| self.session_of_launch(l));
+                self.peers(me.as_ref().map(|s| &s.id))
+                    .map(|sessions| Response::Peers {
+                        me: me.map(|s| s.id),
+                        sessions,
+                    })
+            }
+            Request::Ask {
+                launch_id,
+                to,
+                text,
+                wait_secs,
+            } => {
+                let wait = wait_secs.map(std::time::Duration::from_secs);
+                self.ask(launch_id.as_deref(), &to, &text, wait)
+                    .await
+                    .map(|o| match o {
+                        crate::peers::AskOutcome::Reply(r) => Response::AskReply {
+                            reply: Some(r),
+                            timed_out: false,
+                        },
+                        crate::peers::AskOutcome::Sent => Response::AskReply {
+                            reply: None,
+                            timed_out: false,
+                        },
+                        crate::peers::AskOutcome::TimedOut => Response::AskReply {
+                            reply: None,
+                            timed_out: true,
+                        },
+                    })
+            }
             Request::PushRelay { url } => match self.data_dir() {
                 Some(dir) => match crate::push::register_relay(&dir, &url).await {
                     Ok(()) => self.reload_push(None).map(|_| self.push_status()),

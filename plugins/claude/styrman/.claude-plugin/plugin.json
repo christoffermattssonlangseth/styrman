@@ -1,6 +1,6 @@
 {
   "name": "styrman",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Mirror this Claude Code session to the Styrman iPhone app with /styr: follow along, approve tools, send prompts.",
   "author": { "name": "Christoffer Mattsson Langseth" },
   "homepage": "https://github.com/christoffermattssonlangseth/styrman",

@@ -217,7 +217,7 @@ private fun TimelineRow(
             item.text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.Center,
         )
-        is TimelineItem.User -> Row(Modifier.fillMaxWidth()) {
+        is TimelineItem.User -> agentMessage(item.text)?.let { m -> AgentMessageRow(m) } ?: Row(Modifier.fillMaxWidth()) {
             Spacer(Modifier.weight(1f).width(40.dp))
             Column(horizontalAlignment = Alignment.End) {
                 SelectionContainer {
@@ -441,3 +441,44 @@ private fun Composer(connection: DaemonConnection, sessionId: String, status: Se
         }
     }
 }
+
+/** A message another agent sent through Styrman (`styr ask`), as the receiving agent read it. */
+data class AgentMessage(val sender: String, val agent: AgentKind, val body: String)
+
+fun agentMessage(text: String): AgentMessage? {
+    val prefix = "Message from "
+    if (!text.startsWith(prefix)) return null
+    val head = text.indexOf(", sent through Styrman:").takeIf { it > 0 } ?: return null
+    val sender = text.substring(prefix.length, head)
+    var rest = text.substring(head + ", sent through Styrman:".length).trim()
+    val tail = rest.lastIndexOf("\n\n(Reply as you normally would")
+    if (tail >= 0) rest = rest.substring(0, tail).trim()
+    val lower = sender.lowercase()
+    val agent = when {
+        lower.startsWith("claude") -> AgentKind.Claude
+        lower.startsWith("codex") -> AgentKind.Codex
+        lower.startsWith("agy") -> AgentKind.Antigravity
+        else -> AgentKind.Unknown
+    }
+    return AgentMessage(sender, agent, rest)
+}
+
+@Composable
+private fun AgentMessageRow(m: AgentMessage) {
+    val c = agentColor(m.agent)
+    Column(
+        Modifier.fillMaxWidth()
+            .background(c.copy(alpha = 0.10f), RoundedCornerShape(14.dp))
+            .border(1.dp, c.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            AgentAvatar(m.agent, 18.dp)
+            Spacer(Modifier.width(6.dp))
+            Text("From ${m.sender} →", color = c, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelMedium)
+        }
+        SelectionContainer { Text(m.body) }
+    }
+}
+

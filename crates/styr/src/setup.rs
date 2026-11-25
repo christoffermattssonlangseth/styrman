@@ -38,6 +38,11 @@ const PLUGIN_FILES: &[(&str, &str, bool)] = &[
         include_str!("../../../plugins/claude/styrman/bin/styr-hook"),
         true,
     ),
+    (
+        "claude/styrman/skills/peers/SKILL.md",
+        include_str!("../../../plugins/claude/styrman/skills/peers/SKILL.md"),
+        false,
+    ),
 ];
 const ALIAS_LINE: &str = "alias claude='styr claude'";
 
@@ -62,6 +67,11 @@ const AGY_PLUGIN_FILES: &[(&str, &str, bool)] = &[
         "bin/styr-hook",
         include_str!("../../../plugins/agy/styrman/bin/styr-hook"),
         true,
+    ),
+    (
+        "skills/peers/SKILL.md",
+        include_str!("../../../plugins/agy/styrman/skills/peers/SKILL.md"),
+        false,
     ),
     (
         "assets/logo.svg",
@@ -155,7 +165,10 @@ fn plugin_state() -> PluginState {
     let current = path
         .as_ref()
         .and_then(|p| std::fs::read_to_string(p.join("hooks/hooks.json")).ok())
-        .is_some_and(|h| h.contains("StopWait"));
+        .is_some_and(|h| h.contains("StopWait"))
+        && path
+            .as_ref()
+            .is_some_and(|p| p.join("skills/peers/SKILL.md").exists());
     PluginState {
         installed: true,
         enabled: block.contains("enabled"),
@@ -230,6 +243,7 @@ fn agy_plugin_current() -> bool {
         .unwrap_or_default();
     std::fs::read_to_string(dir.join("hooks.json")).is_ok_and(|h| h == embedded)
         && dir.join("skills/styr/SKILL.md").exists()
+        && dir.join("skills/peers/SKILL.md").exists()
         && global_agy_skill().is_some_and(|p| p.exists())
 }
 

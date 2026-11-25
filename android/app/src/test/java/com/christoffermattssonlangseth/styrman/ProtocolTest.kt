@@ -84,4 +84,15 @@ class ProtocolTest {
         assertEquals("Open a link now", SpeechText.clean("Open https://github.com/a/b now"))
         assertEquals(listOf("First.", "second"), SpeechText.paragraphs("First.\n\n second "))
     }
+
+    @Test
+    fun agentMessagesAreRecognised() {
+        val m = com.christoffermattssonlangseth.styrman.ui.agentMessage(
+            "Message from Codex (app), sent through Styrman:\n\nreview this\n\n(Reply as you normally would; your reply goes back to Codex.)",
+        )!!
+        assertEquals("Codex (app)", m.sender)
+        assertEquals(AgentKind.Codex, m.agent)
+        assertEquals("review this", m.body)
+        assertNull(com.christoffermattssonlangseth.styrman.ui.agentMessage("hello"))
+    }
 }

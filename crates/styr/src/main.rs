@@ -94,6 +94,26 @@ enum Cmd {
         /// An optional first message, typed in once the agent is ready.
         prompt: Vec<String>,
     },
+    /// List the other shared sessions an agent can talk to.
+    Peers {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Send a message to another shared agent session and print its reply.
+    /// Meant for agents, when the user asks them to consult another agent.
+    Ask {
+        /// The session: an id from `styr peers` (or a unique part of it), or an agent
+        /// name (claude, codex, agy) when only one such session is shared.
+        to: String,
+        /// The message.
+        text: Vec<String>,
+        /// Don't wait for the reply.
+        #[arg(long)]
+        no_wait: bool,
+        /// How long to wait for the reply, in seconds.
+        #[arg(long, default_value_t = 600)]
+        timeout: u64,
+    },
     /// Give Styrman the password of cmux's socket (if you set password mode yourself),
     /// so sessions started from the phone can open cmux tabs.
     CmuxPassword { password: String },
@@ -313,6 +333,75 @@ fn main() -> Result<()> {
             }
             ServiceCmd::Restart => service::restart()?,
         },
+        Cmd::Peers { json } => {
+            let launch_id = std::env::var("STYR_LAUNCH_ID")
+                .ok()
+                .filter(|s| !s.is_empty());
+            let Response::Peers { sessions, .. } = call(Request::Peers { launch_id })? else {
+                bail!("unexpected response");
+            };
+            if json {
+                println!("{}", serde_json::to_string_pretty(&sessions)?);
+            } else if sessions.is_empty() {
+                println!("no other shared sessions (type /styr in an agent to share it)");
+            } else {
+                println!(
+                    "{:<8}  {:<7}  {:<14}  {:<16}  FIRST MESSAGE",
+                    "ID", "AGENT", "STATUS", "FOLDER"
+                );
+                for s in sessions {
+                    let id = s.id.as_str();
+                    let folder = s
+                        .cwd
+                        .as_ref()
+                        .and_then(|p| p.file_name())
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    println!(
+                        "{:<8}  {:<7}  {:<14}  {:<16}  {}",
+                        &id[id.len().saturating_sub(8)..],
+                        s.agent.to_string(),
+                        format!("{:?}", s.status).to_lowercase(),
+                        folder,
+                        s.title.unwrap_or_default()
+                    );
+                }
+            }
+        }
+        Cmd::Ask {
+            to,
+            text,
+            no_wait,
+            timeout,
+        } => {
+            let text = text.join(" ");
+            let launch_id = std::env::var("STYR_LAUNCH_ID")
+                .ok()
+                .filter(|s| !s.is_empty());
+            let wait_secs = (!no_wait).then_some(timeout);
+            let r = styr_core::ipc::Client::new(styr_core::paths::Paths::resolve().socket)
+                .with_timeout(None)
+                .call(&Request::Ask {
+                    launch_id,
+                    to,
+                    text,
+                    wait_secs,
+                })?;
+            match r {
+                Response::AskReply {
+                    reply: Some(reply), ..
+                } => println!("{reply}"),
+                Response::AskReply {
+                    timed_out: true, ..
+                } => {
+                    bail!(
+                        "no reply within {timeout} s (the message was delivered; the reply will show in that session)"
+                    )
+                }
+                Response::AskReply { .. } => println!("sent"),
+                other => bail!("unexpected response: {other:?}"),
+            }
+        }
         Cmd::CmuxPassword { password } => {
             cmux_access::store_password(&password)?;
             println!("saved; sessions started from your phone can now open cmux tabs");

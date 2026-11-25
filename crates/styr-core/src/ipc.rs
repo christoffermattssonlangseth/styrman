@@ -93,6 +93,22 @@ pub enum Request {
         session: SessionId,
         text: String,
     },
+    /// Shared sessions an agent can talk to (`styr peers`). `launch_id`: the asking
+    /// terminal, left out of the list.
+    Peers {
+        #[serde(default)]
+        launch_id: Option<String>,
+    },
+    /// Send a message to another shared session (`styr ask`); with `wait_secs`, wait
+    /// that long for its reply.
+    Ask {
+        #[serde(default)]
+        launch_id: Option<String>,
+        to: String,
+        text: String,
+        #[serde(default)]
+        wait_secs: Option<u64>,
+    },
     /// Register with a push relay (`styr push relay <url>`).
     PushRelay {
         url: String,
@@ -196,6 +212,15 @@ pub enum Response {
     Ok,
     SessionStarting {
         session: SessionId,
+    },
+    Peers {
+        /// The asking terminal's own session, if any.
+        me: Option<SessionId>,
+        sessions: Vec<SessionSummary>,
+    },
+    AskReply {
+        reply: Option<String>,
+        timed_out: bool,
     },
     /// How many sessions changed; 0 means it applies to the terminal's first session.
     LaunchShared {

@@ -331,3 +331,14 @@ private func event(_ seq: UInt64, _ kind: String) -> String {
         #expect(o.files.isEmpty && o.gitBranch == nil)
     }
 }
+
+@Suite struct AgentMessageTests {
+    @Test func agentMessagesAreRecognised() {
+        let text = "Message from Claude (styrman), sent through Styrman:\n\nwhat does the parser do with tabs?\n\n(Reply as you normally would; your reply goes back to Claude.)"
+        let m = AgentMessage(text)
+        #expect(m?.sender == "Claude (styrman)")
+        #expect(m?.agent == .claude)
+        #expect(m?.body == "what does the parser do with tabs?")
+        #expect(AgentMessage("just a normal prompt") == nil)
+    }
+}

@@ -171,6 +171,8 @@ struct TimelineRow: View {
                 line
             }
             .padding(.vertical, 4)
+        case .user(_, let text, _, _) where AgentMessage(text) != nil:
+            AgentMessageRow(message: AgentMessage(text)!)
         case .user(_, let text, let fromPhone, _):
             HStack {
                 Spacer(minLength: 40)
@@ -644,3 +646,46 @@ struct PendingPromptRow: View {
         }
     }
 }
+
+/// A message another agent sent through Styrman (`styr ask`), as the receiving agent
+/// read it: "Message from Claude (repo), sent through Styrman:\n\n<body>\n\n(Reply …)".
+struct AgentMessage: Equatable {
+    let sender: String   // "Claude (styrman)"
+    let agent: AgentKind
+    let body: String
+
+    init?(_ text: String) {
+        let prefix = "Message from "
+        guard text.hasPrefix(prefix), let head = text.range(of: ", sent through Styrman:") else { return nil }
+        sender = String(text[text.index(text.startIndex, offsetBy: prefix.count)..<head.lowerBound])
+        var rest = String(text[head.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if let tail = rest.range(of: "\n\n(Reply as you normally would", options: .backwards) {
+            rest = String(rest[..<tail.lowerBound])
+        }
+        body = rest.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = sender.lowercased()
+        agent = lower.hasPrefix("claude") ? .claude : lower.hasPrefix("codex") ? .codex
+            : lower.hasPrefix("agy") ? .antigravity : .unknown
+    }
+}
+
+/// Shown on the left like a reply would be, with the sending agent's colour.
+struct AgentMessageRow: View {
+    let message: AgentMessage
+    var body: some View {
+        let c = Theme.color(for: message.agent)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                AgentAvatar(agent: message.agent, size: 18)
+                Text("From \(message.sender)").font(.caption.weight(.semibold)).foregroundStyle(c)
+                Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.secondary)
+            }
+            Text(message.body).textSelection(.enabled)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(c.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(c.opacity(0.35)))
+    }
+}
+

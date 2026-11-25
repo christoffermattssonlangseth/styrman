@@ -718,3 +718,170 @@ async fn codex_hooks_with_a_stale_terminal_id_find_their_terminal_by_folder() {
     assert_eq!(r, Response::LaunchShared { sessions: 1 });
     d.stop().await;
 }
+
+/// Agent to agent: a Claude session (terminal "LA") asks another shared session
+/// (terminal "LB"); B's terminal gets the labelled message, B answers, and the reply
+/// comes back to A. B can't ask A back while A waits.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn agents_ask_each_other_and_get_the_reply() {
+    let d = Daemon::start().await;
+    for (s, l) in [("a1", "LA"), ("b1", "LB")] {
+        d.call(Request::Hook {
+            hook: with_launch(hook(s, "SessionStart", json!({"source": "startup"})), l),
+        })
+        .await;
+        d.call(Request::Hook {
+            hook: with_launch(hook(s, "UserPromptSubmit", json!({"prompt": "/styr"})), l),
+        })
+        .await;
+    }
+    // B's terminal wrapper is waiting for something to type.
+    let wrapper_b = attach(&d, "LB");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // A asks B (as `styr ask b1 …` run inside A's terminal would).
+    let c = Client::new(&d.paths.socket).with_timeout(None);
+    let ask = tokio::task::spawn_blocking(move || {
+        c.call(&Request::Ask {
+            launch_id: Some("LA".into()),
+            to: "claude".into(), // the only *other* shared Claude session
+            text: "what does the parser do with tabs?".into(),
+            wait_secs: Some(10),
+        })
+    });
+
+    let typed = tokio::time::timeout(Duration::from_secs(5), wrapper_b)
+        .await
+        .unwrap()
+        .unwrap();
+    let Response::TypePrompt { text } = typed else {
+        panic!("{typed:?}")
+    };
+    assert!(
+        text.starts_with("Message from Claude (repo), sent through Styrman:"),
+        "{text}"
+    );
+    assert!(text.contains("what does the parser do with tabs?"));
+
+    // While A waits, B may not ask A back.
+    let c = Client::new(&d.paths.socket);
+    let back = tokio::task::spawn_blocking(move || {
+        c.call(&Request::Ask {
+            launch_id: Some("LB".into()),
+            to: "claude".into(),
+            text: "and you?".into(),
+            wait_secs: Some(1),
+        })
+    })
+    .await
+    .unwrap();
+    let refusal = format!("{back:?}");
+    assert!(
+        back.is_err() && refusal.contains("waiting for your answer"),
+        "{refusal}"
+    );
+
+    // B gets it as a prompt and answers.
+    d.call(Request::Hook {
+        hook: with_launch(
+            hook("b1", "UserPromptSubmit", json!({"prompt": text})),
+            "LB",
+        ),
+    })
+    .await;
+    d.call(Request::Hook {
+        hook: with_launch(
+            hook(
+                "b1",
+                "Stop",
+                json!({"last_assistant_message": "It expands them to 4 spaces."}),
+            ),
+            "LB",
+        ),
+    })
+    .await;
+    let r = tokio::time::timeout(Duration::from_secs(5), ask)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        r,
+        Response::AskReply {
+            reply: Some("It expands them to 4 spaces.".into()),
+            timed_out: false
+        }
+    );
+
+    // Both timelines show it: B's message came from agent A; A has notes of the exchange.
+    let events = |native: &'static str| {
+        let d = &d;
+        async move {
+            let Response::Sessions { sessions } = d
+                .call(Request::ListSessions {
+                    include_unshared: false,
+                })
+                .await
+            else {
+                panic!()
+            };
+            let id = sessions
+                .into_iter()
+                .find(|s| s.native_id == native)
+                .unwrap()
+                .id;
+            let Response::Events { events } = d
+                .call(Request::Events {
+                    session: id,
+                    since_seq: 0,
+                    limit: 100,
+                })
+                .await
+            else {
+                panic!()
+            };
+            events
+        }
+    };
+    let b = events("b1").await;
+    assert!(b.iter().any(|e| matches!(&e.kind, EventKind::UserMessage { origin: Origin::Remote(dev), .. } if dev.as_str().starts_with("agent:"))));
+    let notes: Vec<String> = events("a1")
+        .await
+        .into_iter()
+        .filter_map(|e| match e.kind {
+            EventKind::Notice { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.starts_with("Asked Claude (repo): what does the parser")),
+        "{notes:?}"
+    );
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("replied: It expands them to 4 spaces.")),
+        "{notes:?}"
+    );
+
+    // Peers: A sees B but not itself.
+    let Response::Peers { me, sessions } = d
+        .call(Request::Peers {
+            launch_id: Some("LA".into()),
+        })
+        .await
+    else {
+        panic!()
+    };
+    assert!(me.is_some());
+    assert_eq!(
+        sessions
+            .iter()
+            .map(|s| s.native_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["b1"]
+    );
+    d.stop().await;
+}
