@@ -1,8 +1,12 @@
-//! `styr`: the Styrman CLI. Checkpoint 1 has the inspection commands; the agent
-//! launcher (`styr claude …`) and hook helper (`styr hook …`) arrive in checkpoint 2.
+//! `styr`: the Styrman CLI. Agent launcher (`styr claude …`), hook helper
+//! (`styr hook <agent> <event>`) and inspection commands.
+
+mod hook;
+mod launch;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
+use std::ffi::OsString;
 use styr_core::SessionStatus;
 use styr_core::event::now_ms;
 use styr_core::ids::{AgentKind, NativeSessionRef, SessionId};
@@ -48,6 +52,15 @@ enum Cmd {
         #[arg(long)]
         off: bool,
     },
+    /// Hook helper called by agent hooks: `styr hook <agent> <event>` (stdin: payload).
+    /// Always exits 0; prints nothing unless the daemon has an answer.
+    Hook {
+        #[arg(num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Launch an agent through Styrman: `styr claude …`, `styr agy …`, `styr codex …`.
+    #[command(external_subcommand)]
+    Launch(Vec<OsString>),
 }
 
 fn client() -> Client {
@@ -65,7 +78,25 @@ fn call(req: Request) -> Result<Response> {
 }
 
 fn main() -> Result<()> {
+    // `styr hook` must never exit non-zero (exit 2 means "block" to Claude Code),
+    // so it is dispatched before clap can reject anything.
+    let argv: Vec<String> = std::env::args().collect();
+    if argv.get(1).map(String::as_str) == Some("hook") {
+        hook::main(&argv[2..]);
+    }
     match Cli::parse().cmd {
+        Cmd::Hook { .. } => unreachable!("handled above"),
+        Cmd::Launch(mut args) => {
+            let name = args.remove(0);
+            let agent: AgentKind = name
+                .to_str()
+                .and_then(|n| n.parse().ok())
+                .filter(|a| *a != AgentKind::Pty)
+                .with_context(|| {
+                    format!("unknown command {name:?} (agents: claude, agy, codex)")
+                })?;
+            launch::exec(agent, args)?;
+        }
         Cmd::Ping => match call(Request::Hello)? {
             Response::Hello {
                 protocol,

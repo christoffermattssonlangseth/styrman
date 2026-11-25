@@ -1,0 +1,15 @@
+#!/bin/sh
+# Styrman hook shim: forwards one Claude Code hook to `styr hook`.
+# Fails open: if styr is not installed or anything goes wrong, print nothing, exit 0.
+STYR="${STYR_BIN:-}"
+if [ -z "$STYR" ]; then
+  STYR=$(command -v styr 2>/dev/null)
+fi
+if [ -z "$STYR" ]; then
+  for c in "$HOME/.cargo/bin/styr" /opt/homebrew/bin/styr /usr/local/bin/styr; do
+    [ -x "$c" ] && STYR="$c" && break
+  done
+fi
+[ -n "$STYR" ] || exit 0
+"$STYR" hook "$@"
+exit 0

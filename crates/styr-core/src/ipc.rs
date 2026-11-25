@@ -43,6 +43,11 @@ pub enum Request {
         #[serde(default = "default_limit")]
         limit: u32,
     },
+    /// One hook invocation forwarded by `styr hook`. Answered with `HookReply`,
+    /// possibly after a long wait (permission from the phone).
+    Hook {
+        hook: crate::adapter::RawHook,
+    },
 }
 
 fn default_limit() -> u32 {
@@ -66,6 +71,10 @@ pub enum Response {
     },
     Events {
         events: Vec<Event>,
+    },
+    /// What `styr hook` prints on stdout (`None`: print nothing, exit 0).
+    HookReply {
+        stdout: Option<serde_json::Value>,
     },
     Ok,
     Error {
@@ -174,3 +183,17 @@ impl Client {
 }
 
 use std::io::Read as _;
+
+/// Forward one hook to the daemon and return what the hook should print.
+///
+/// The caller treats every `Err` as "print nothing, exit 0": that is the fail-open
+/// contract that keeps agents unaffected when styrd is down or misbehaves.
+pub fn forward_hook(
+    client: &Client,
+    hook: crate::adapter::RawHook,
+) -> Result<Option<serde_json::Value>, IpcError> {
+    match client.call(&Request::Hook { hook })? {
+        Response::HookReply { stdout } => Ok(stdout),
+        other => Err(IpcError::Protocol(format!("unexpected reply {other:?}"))),
+    }
+}

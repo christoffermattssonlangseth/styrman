@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/styr-core", "crates/styrd", "crates/styr"]
+members = ["crates/styr-core", "crates/styrd", "crates/styr", "crates/styr-testkit", "crates/adapters/*"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,3 +10,8 @@ repository = "https://github.com/christoffermattssonlangseth/styrman"
 
 [workspace.dependencies]
 styr-core = { path = "crates/styr-core" }
+styrd = { path = "crates/styrd" }
+styr-adapter-claude = { path = "crates/adapters/styr-adapter-claude" }
+styr-adapter-agy = { path = "crates/adapters/styr-adapter-agy" }
+styr-adapter-codex = { path = "crates/adapters/styr-adapter-codex" }
+styr-adapter-pty = { path = "crates/adapters/styr-adapter-pty" }

@@ -1,0 +1,9 @@
+[package]
+name = "styr-adapter-pty"
+description = "Styrman adapter: generic PTY fallback for agents without hooks or a protocol — planned"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+styr-core.workspace = true

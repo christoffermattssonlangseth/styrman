@@ -645,6 +645,40 @@ dependencies = [
  "anyhow",
  "clap",
  "serde_json",
+ "styr-adapter-agy",
+ "styr-adapter-claude",
+ "styr-adapter-codex",
+ "styr-core",
+ "styr-testkit",
+ "tempfile",
+]
+
+[[package]]
+name = "styr-adapter-agy"
+version = "0.1.0"
+dependencies = [
+ "styr-core",
+]
+
+[[package]]
+name = "styr-adapter-claude"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "styr-core",
+]
+
+[[package]]
+name = "styr-adapter-codex"
+version = "0.1.0"
+dependencies = [
+ "styr-core",
+]
+
+[[package]]
+name = "styr-adapter-pty"
+version = "0.1.0"
+dependencies = [
  "styr-core",
 ]
 
@@ -659,6 +693,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "styr-testkit"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "styr-core",
+ "styrd",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "styrd"
 version = "0.1.0"
 dependencies = [
@@ -666,6 +712,10 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "styr-adapter-agy",
+ "styr-adapter-claude",
+ "styr-adapter-codex",
+ "styr-adapter-pty",
  "styr-core",
  "tempfile",
  "tokio",

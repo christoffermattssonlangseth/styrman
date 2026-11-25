@@ -1,0 +1,12 @@
+{
+  "name": "styrman",
+  "owner": { "name": "Christoffer Mattsson Langseth" },
+  "metadata": { "description": "Styrman: steer your coding agents from anywhere" },
+  "plugins": [
+    {
+      "name": "styrman",
+      "source": "./claude/styrman",
+      "description": "Mirror this Claude Code session to the Styrman iPhone app with /styr: follow along, approve tools, send prompts."
+    }
+  ]
+}

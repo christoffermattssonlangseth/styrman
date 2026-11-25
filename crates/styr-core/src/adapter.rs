@@ -80,6 +80,8 @@ pub struct SessionView {
     pub id: SessionId,
     pub native: NativeSessionRef,
     pub shared: bool,
+    /// Permission requests still waiting for an answer (oldest first).
+    pub open_requests: Vec<crate::ids::RequestId>,
 }
 
 /// The adapter's reading of one hook.
@@ -92,6 +94,9 @@ pub struct HookPlan {
     pub wait: Option<WaitFor>,
     /// Sharing toggled from inside the session (`/styr`, `/styr off`).
     pub set_sharing: Option<bool>,
+    /// Answer the hook right away with this, whatever the sharing state
+    /// (e.g. consume a `/styr` prompt so it never reaches the model).
+    pub reply: Option<HookDecision>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

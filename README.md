@@ -57,32 +57,66 @@ Design details and the reasoning behind them are in [`docs/design.md`](docs/desi
 | Checkpoint | State |
 |---|---|
 | 1. Daemon, Unix socket, SQLite, `styr status` | ✅ done |
-| 2. `styr hook` plus the Claude plugin (logging only) and the fake-agent test harness | next |
-| 3. iOS app: pairing and live sessions (read-only) | |
+| 2. `styr hook` plus the Claude plugin (mirroring only) and the fake-agent test harness | ✅ done |
+| 3. iOS app: pairing and live sessions (read-only) | next |
 | 4. Permission round-trip | |
 | 5. Prompts from the phone | |
 | 6. Push notifications | |
 | 7. Pairing and auth hardening, launchd, install docs | |
 
-## Try it (checkpoint 1)
+## Try it (checkpoint 2)
+
+Install the binaries, start the daemon, and add the Claude Code plugin:
 
 ```sh
-cargo build --release
-./target/release/styrd &            # socket + db in ~/Library/Application Support/Styrman/
-./target/release/styr ping
-./target/release/styr status --all  # sessions appear once agents report in (checkpoint 2)
+cargo install --path crates/styrd
+cargo install --path crates/styr          # puts styr on PATH (~/.cargo/bin)
+styrd &                                   # launchd setup comes in checkpoint 7
+
+claude plugin marketplace add "$PWD/plugins"
+claude plugin install styrman@styrman
 ```
 
-Environment overrides: `STYR_HOME` sets the data directory, `STYR_SOCKET` sets the socket path, and `STYR_LOG` sets the log filter (for example `debug`).
+Then, in any Claude Code session:
 
-Install, launchd setup, shell aliases, pairing and "adding a new adapter" will be written up as those pieces land.
+```
+/styr        share this session (handled by a hook: no model call, nothing sent to Claude)
+/styr off    stop sharing
+```
+
+From the terminal:
+
+```sh
+styr status            # shared sessions: working / needs approval / needs you / done
+styr status --all      # include sessions that were never shared
+styr events <ID>       # full mirrored history of one session
+```
+
+Optional: `alias claude='styr claude'` (likewise `agy`, `codex`). This runs the next `claude` on your PATH (wrappers such as cmux's stay in the chain) and tags the session as started through Styrman. The plugin works without the alias.
+
+**Fail-open guarantee.** Every hook goes through `styr hook`. It always exits 0, and prints nothing unless the daemon has an answer. If `styrd` isn't running, or `styr` isn't installed at all, Claude Code behaves exactly as it would without Styrman.
+
+**Privacy.** Until you type `/styr`, Styrman keeps only a session's start and end (for `styr status --all`). Your prompts, Claude's replies and tool calls are not stored, and nothing about the session is visible to the phone.
+
+### Developing
+
+```sh
+cargo test --workspace                          # unit + end-to-end tests (real styr binary, in-process styrd)
+cargo run -p styr-testkit --bin styr-fake-agent  # play a realistic demo session into the running styrd
+STYR_HOOK_RECORD=/tmp/hooks.jsonl claude …       # record raw hook payloads as fixtures
+```
+
+Environment: `STYR_HOME` (data directory), `STYR_SOCKET` (socket path; macOS caps it at 103 bytes), `STYR_BIN` (which `styr` the plugin calls), `STYR_LOG` (daemon log filter, e.g. `debug`), `STYR_DEBUG` (make `styr hook` report errors on stderr).
 
 ## Repository layout
 
 ```
-crates/styr-core   event model, status reducer, adapter trait, IPC types
-crates/styrd       the daemon
-crates/styr        the CLI
-assets/logo        icon and logo concepts
+crates/styr-core          event model, status reducer, adapter trait, IPC types
+crates/styrd              the daemon
+crates/styr               the CLI (launcher, hook helper, status)
+crates/styr-testkit       fake-agent harness + styr-fake-agent
+crates/adapters/*         claude (working); agy, codex, pty (stubs)
+plugins/                  Claude Code plugin + local marketplace
+assets/logo               icon and logo concepts
 docs/design.md     architecture and protocol notes
 ```

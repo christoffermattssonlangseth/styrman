@@ -1,0 +1,9 @@
+[package]
+name = "styr-adapter-agy"
+description = "Styrman adapter: antigravity CLI (agy): hooks, plugin and ACP — planned (phase 2)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+styr-core.workspace = true

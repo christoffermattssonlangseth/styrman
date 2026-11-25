@@ -11,6 +11,10 @@ rusqlite = { version = "0.43.0", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 styr-core.workspace = true
+styr-adapter-claude.workspace = true
+styr-adapter-agy.workspace = true
+styr-adapter-codex.workspace = true
+styr-adapter-pty.workspace = true
 tokio = { version = "1.54.1", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

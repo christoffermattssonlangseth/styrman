@@ -1,0 +1,9 @@
+[package]
+name = "styr-adapter-codex"
+description = "Styrman adapter: Codex CLI via codex app-server — planned (phase 3)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+styr-core.workspace = true

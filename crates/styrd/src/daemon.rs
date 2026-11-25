@@ -10,14 +10,16 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use styr_core::StatusTracker;
+use styr_core::adapter::{AgentAdapter, HookDecision, RawHook, SessionView};
 use styr_core::event::{Event, EventKind, EventSource, PermissionOutcome, Resolver, now_ms};
-use styr_core::ids::{NativeSessionRef, SessionId};
+use styr_core::ids::{AgentKind, NativeSessionRef, SessionId};
 use styr_core::ipc::{Request, Response, SessionSummary, SessionUpdate};
 use tokio::sync::broadcast;
 
 pub struct Daemon {
     inner: Mutex<Inner>,
     bus: broadcast::Sender<Event>,
+    adapters: HashMap<AgentKind, Arc<dyn AgentAdapter>>,
 }
 
 struct Inner {
@@ -37,7 +39,7 @@ fn always_persisted(kind: &EventKind) -> bool {
 impl Daemon {
     /// Load state from the store. Permission requests left open by a previous
     /// daemon are resolved as cancelled: their hook processes saw EOF and failed open.
-    pub fn open(store: Store) -> Result<Arc<Self>> {
+    pub fn open(store: Store, adapters: Vec<Arc<dyn AgentAdapter>>) -> Result<Arc<Self>> {
         let mut inner = Inner {
             store,
             trackers: HashMap::new(),
@@ -64,7 +66,82 @@ impl Daemon {
         Ok(Arc::new(Self {
             inner: Mutex::new(inner),
             bus,
+            adapters: adapters.into_iter().map(|a| (a.kind(), a)).collect(),
         }))
+    }
+
+    pub fn adapter(&self, agent: AgentKind) -> Option<&Arc<dyn AgentAdapter>> {
+        self.adapters.get(&agent)
+    }
+
+    /// Find or create the session record and describe it for an adapter.
+    pub fn session_view(&self, native: &NativeSessionRef) -> Result<SessionView> {
+        let mut g = self.lock();
+        let inner = &mut *g;
+        let rec = match inner.store.session_by_native(native)? {
+            Some(rec) => rec,
+            None => {
+                inner
+                    .store
+                    .upsert_session(&SessionUpdate::for_native(native.clone()), now_ms())?
+                    .0
+            }
+        };
+        let open_requests = inner
+            .trackers
+            .get(&rec.id)
+            .map(|t| t.open_requests().cloned().collect())
+            .unwrap_or_default();
+        Ok(SessionView {
+            id: rec.id,
+            native: rec.native,
+            shared: rec.shared,
+            open_requests,
+        })
+    }
+
+    /// Handle one hook. Never fails: anything unexpected becomes `PassThrough`,
+    /// so the agent behaves exactly as it would without Styrman.
+    pub async fn handle_hook(self: &Arc<Self>, hook: RawHook) -> Option<serde_json::Value> {
+        let adapter = self.adapter(hook.agent).cloned()?;
+        let decision = match self.process_hook(adapter.as_ref(), &hook).await {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::warn!(agent = %hook.agent, event = %hook.event, "hook failed open: {e:#}");
+                HookDecision::PassThrough
+            }
+        };
+        adapter.render_reply(&hook, &decision)
+    }
+
+    async fn process_hook(
+        self: &Arc<Self>,
+        adapter: &dyn AgentAdapter,
+        hook: &RawHook,
+    ) -> Result<HookDecision> {
+        let Some(native) = adapter.native_session(hook) else {
+            return Ok(HookDecision::PassThrough);
+        };
+        let view = self.session_view(&native)?;
+        let plan = adapter.on_hook(hook, &view)?;
+        tracing::debug!(session = %view.id, event = %hook.event, shared = view.shared, n = plan.events.len(), "hook");
+        let update = plan
+            .session
+            .clone()
+            .unwrap_or_else(|| SessionUpdate::for_native(native.clone()));
+        let mut events = plan.events;
+        if let Some(shared) = plan.set_sharing
+            && shared != view.shared
+        {
+            events.insert(0, EventKind::SharingChanged { shared });
+        }
+        self.ingest(&update, EventSource::Hook, events)?;
+        if let Some(reply) = plan.reply {
+            return Ok(reply);
+        }
+        // Waiting for the phone (permissions, prompts) lands in checkpoints 4-5;
+        // until then every hook passes straight through.
+        Ok(HookDecision::PassThrough)
     }
 
     /// Live stream of persisted events of shared sessions (for the phone API).
@@ -199,6 +276,9 @@ impl Daemon {
             Request::SetSharing { native, shared } => {
                 self.set_sharing(&native, shared).map(|_| Response::Ok)
             }
+            Request::Hook { hook } => Ok(Response::HookReply {
+                stdout: self.handle_hook(hook).await,
+            }),
             Request::Events {
                 session,
                 since_seq,

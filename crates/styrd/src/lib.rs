@@ -34,11 +34,21 @@ pub fn lock_instance(paths: &Paths) -> Result<InstanceLock> {
     }
 }
 
+/// Every adapter this build knows about.
+pub fn default_adapters() -> Vec<Arc<dyn styr_core::adapter::AgentAdapter>> {
+    vec![
+        Arc::new(styr_adapter_claude::ClaudeAdapter::default()),
+        Arc::new(styr_adapter_agy::AntigravityAdapter),
+        Arc::new(styr_adapter_codex::CodexAdapter),
+        Arc::new(styr_adapter_pty::PtyAdapter),
+    ]
+}
+
 /// Run the daemon until `shutdown` resolves.
 pub async fn run(paths: Paths, shutdown: impl Future<Output = ()>) -> Result<()> {
     let _lock = lock_instance(&paths)?;
     let store = store::Store::open(&paths.db)?;
-    let daemon: Arc<Daemon> = Daemon::open(store)?;
+    let daemon: Arc<Daemon> = Daemon::open(store, default_adapters())?;
     let listener = ipc::bind(&paths.socket)?;
     tracing::info!(socket = %paths.socket.display(), db = %paths.db.display(), "styrd {} ready", styr_core::VERSION);
     let result = ipc::serve(daemon, listener, shutdown).await;

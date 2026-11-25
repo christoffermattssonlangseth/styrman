@@ -10,3 +10,11 @@ anyhow = "1.0.105"
 clap = { version = "4.6.10", features = ["derive"] }
 serde_json = "1.0.154"
 styr-core.workspace = true
+styr-adapter-claude.workspace = true
+styr-adapter-agy.workspace = true
+styr-adapter-codex.workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"
+styr-testkit = { path = "../styr-testkit" }
+serde_json = "1.0.154"

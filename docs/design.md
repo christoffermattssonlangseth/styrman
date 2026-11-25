@@ -1,6 +1,6 @@
 # Styrman design (phase 1 proposal)
 
-Status: **proposal, awaiting review.** Nothing below is built yet.
+Status: **approved; checkpoints 1–2 built.** Verified findings are recorded in §8.
 
 ## 1. What the three agents actually offer
 
@@ -254,3 +254,10 @@ Each checkpoint ends with something runnable and its tests green.
 - **Channels** is a research preview behind `--dangerously-load-development-channels`. It may change, so `asyncRewake` is the fallback.
 - **iOS App Transport Security and plain `ws://` over Tailscale.** Needs an ATS exception, or HTTPS via `tailscale cert`. To be decided in checkpoint 7.
 - **agy** has no "would-prompt" signal. Its tool-approval UX on the phone is weaker until a better interface exists.
+
+## 8. Verified during the build
+
+- **Claude Code 2.1.332, `/styr`.** `UserPromptSubmit` receives the raw `/styr` before the slash command expands, and `{"decision":"block","reason":…}` stops it with no model call. The terminal shows "UserPromptSubmit operation blocked by hook:" followed by our message. If `styrd` doesn't answer, the plugin's `/styr` command expands instead, and the model tells you to start the daemon.
+- **Claude Code 2.1.332, payloads.** `PermissionRequest` has no `tool_use_id`, but it carries `permission_suggestions`, which the phone's "Always" button sends back as `updatedPermissions`. `PostToolUse.tool_response` is an object for Bash. Recorded fixtures are in `crates/adapters/styr-adapter-claude/tests/fixtures/`.
+- **Closing permission cards.** Until the phone can answer (checkpoint 4), an open request is resolved as `Cancelled{by: Terminal}` once Claude moves on: `PostToolUse`, `PostToolUseFailure`, `PermissionDenied`, `Stop`, or the next prompt.
+- **Exit codes.** `styr hook` is dispatched before argument parsing. Exit code 2 means "block" to Claude Code, so the helper must never use it.

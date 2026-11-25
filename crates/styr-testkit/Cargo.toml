@@ -1,0 +1,15 @@
+[package]
+name = "styr-testkit"
+description = "Fake-agent harness"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+styr-core.workspace = true
+styrd.workspace = true
+serde_json = "1.0.154"
+tempfile = "3.27.0"
+anyhow = "1.0.105"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "sync", "macros", "time", "net", "signal", "io-util"] }
