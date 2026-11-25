@@ -2279,6 +2279,7 @@ dependencies = [
 name = "styr-adapter-codex"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "styr-core",
 ]
 
