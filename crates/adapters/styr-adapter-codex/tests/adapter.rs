@@ -1,108 +1,85 @@
-//! Codex mapping against traffic captured from Codex CLI 0.172.0.
+//! Codex hook mapping against payloads captured from Codex CLI 0.172.0.
 
 use serde_json::{Value, json};
-use std::collections::HashMap;
-use styr_adapter_codex::*;
+use styr_adapter_codex::CodexAdapter;
+use styr_core::adapter::*;
 use styr_core::event::*;
+use styr_core::ids::*;
 
-fn lines(name: &str) -> Vec<String> {
-    std::fs::read_to_string(format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR")))
-        .unwrap()
-        .lines()
-        .map(str::to_owned)
-        .collect()
+fn hooks() -> Vec<Value> {
+    std::fs::read_to_string(format!(
+        "{}/tests/fixtures/hooks_approval_turn.jsonl",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap()
+    .lines()
+    .map(|l| serde_json::from_str(l).unwrap())
+    .collect()
 }
 
-#[test]
-fn live_notifications_map_to_events() {
-    let mut names = Vec::new();
-    let mut user = Vec::new();
-    let mut finals = Vec::new();
-    for l in lines("app_server_events.jsonl") {
-        let m: Value = serde_json::from_str(&l).unwrap();
-        let Some(method) = m["method"].as_str() else { continue };
-        if m.get("id").is_some() {
-            continue; // server requests are handled separately
-        }
-        if let Some((thread, evs)) = map_notification(method, &m["params"]) {
-            assert!(!thread.is_empty());
-            for e in evs {
-                match &e {
-                    EventKind::UserMessage { text, .. } => user.push(text.clone()),
-                    EventKind::AssistantMessage { text, mode: TextMode::Final, .. } => finals.push(text.clone()),
-                    _ => {}
-                }
-                names.push(e.name());
-            }
-        }
-    }
-    assert!(user.iter().any(|t| t.contains("touch approved.txt")));
-    assert!(user.iter().any(|t| t == "Reply with exactly the word FROMPHONE"), "prompt sent by the second client: {user:?}");
-    assert!(finals.iter().any(|t| t == "FROMPHONE"));
-    for n in ["turn_started", "turn_ended", "assistant_message", "user_message"] {
-        assert!(names.contains(&n), "missing {n}: {names:?}");
+fn raw(payload: Value) -> RawHook {
+    RawHook {
+        agent: AgentKind::Codex,
+        event: payload["hook_event_name"].as_str().unwrap().to_owned(),
+        payload,
+        launched_by_styr: true,
+        agent_pid: None,
+        launch_id: Some("L1".into()),
+        agent_version: None,
     }
 }
 
+fn view(native: NativeSessionRef) -> SessionView {
+    SessionView { id: "S".into(), native, shared: true, open_requests: vec![] }
+}
+
 #[test]
-fn approval_requests_become_permission_cards() {
-    let req = lines("app_server_events.jsonl")
-        .into_iter()
-        .map(|l| serde_json::from_str::<Value>(&l).unwrap())
-        .find(|m| m["method"] == "item/commandExecution/requestApproval")
-        .expect("captured approval request");
-    let a = map_server_request(req["method"].as_str().unwrap(), &req["params"]).unwrap();
-    assert_eq!(a.tool.title, "Run `touch approved.txt`", "bash -lc wrapper stripped");
-    assert_eq!(a.tool.kind, ToolKind::Execute);
-    assert!(a.reason.as_deref().unwrap().contains("approved.txt"));
-    let labels: Vec<_> = a.options.iter().map(|o| (o.kind, o.label.as_str())).collect();
+fn a_real_turn_maps_to_events() {
+    let a = CodexAdapter;
+    let mut all = Vec::new();
+    for p in hooks() {
+        let h = raw(p);
+        let native = a.native_session(&h).expect("session_id");
+        let plan = a.on_hook(&h, &view(native)).unwrap();
+        assert_eq!(plan.session.as_ref().unwrap().launch_id.as_deref(), Some("L1"));
+        assert_eq!(a.render_reply(&h, &HookDecision::PassThrough), None, "{}: never blocks", h.event);
+        all.extend(plan.events);
+    }
+    let names: Vec<_> = all.iter().map(|e| e.name()).collect();
     assert_eq!(
-        labels,
-        vec![
-            (OptionKind::AllowOnce, "Allow once"),
-            (OptionKind::AllowAlways, "Always allow `touch approved.txt`"),
-            (OptionKind::RejectOnce, "Deny and stop"),
-        ],
-        "options are exactly what Codex offered"
+        names,
+        vec!["session_started", "turn_started", "user_message", "tool_call", "tool_call", "assistant_message", "turn_ended"]
     );
-    // The answer echoes Codex's own decision value, including the object form.
-    assert_eq!(approval_result(&a, "d0").unwrap(), json!({"decision": "accept"}));
-    assert_eq!(
-        approval_result(&a, "d1").unwrap(),
-        json!({"decision": {"acceptWithExecpolicyAmendment": {"execpolicy_amendment": ["touch", "approved.txt"]}}})
-    );
-    assert_eq!(approval_result(&a, "nope"), None);
-    // Without availableDecisions: the documented defaults.
-    let plain = map_server_request("item/commandExecution/requestApproval", &json!({"threadId": "t", "command": "rm -rf x"})).unwrap();
-    assert_eq!(plain.options.iter().map(|o| o.label.as_str()).collect::<Vec<_>>(), vec!["Allow once", "Allow for this session", "Deny"]);
-    assert!(map_server_request("item/tool/call", &json!({"threadId": "t"})).is_none());
+    let EventKind::ToolCall { tool, status: ToolStatus::Pending, call, .. } = &all[3] else { panic!() };
+    assert_eq!(tool.title, "Run `touch approved.txt`");
+    assert!(call.0.starts_with("exec-"));
+    let EventKind::ToolCall { status, call: done, .. } = &all[4] else { panic!() };
+    assert_eq!(*status, ToolStatus::Completed);
+    assert_eq!(done, call, "the same call id before and after");
+    let EventKind::AssistantMessage { text, mode: TextMode::Final, .. } = &all[5] else { panic!() };
+    assert_eq!(text, "Created `approved.txt` successfully.");
 }
 
 #[test]
-fn code_mode_tool_calls_come_from_the_rollout() {
-    let mut known = HashMap::new();
-    let mut events = Vec::new();
-    for l in lines("rollout_sample.jsonl") {
-        if let Some(t) = parse_rollout_line(&l) {
-            events.extend(rollout_events(t, &mut known));
-        }
-    }
-    let calls: Vec<_> = events
-        .iter()
-        .filter_map(|e| match e {
-            EventKind::ToolCall { tool, status, output, .. } => Some((tool.title.clone(), *status, output.clone())),
-            _ => None,
-        })
-        .collect();
-    assert!(calls.iter().any(|(t, s, _)| t == "Run `touch approved.txt`" && *s == ToolStatus::Running));
-    let done: Vec<_> = calls.iter().filter(|(_, s, _)| *s != ToolStatus::Running).collect();
-    assert!(!done.is_empty());
-    assert!(done.iter().any(|(_, s, o)| *s == ToolStatus::Failed
-        && matches!(o, Some(ToolOutput::Text { text, .. }) if text.contains("Operation not permitted"))));
+fn styr_via_prompt_is_consumed() {
+    let a = CodexAdapter;
+    let h = raw(json!({"hook_event_name": "UserPromptSubmit", "session_id": "x", "prompt": "/styr off", "turn_id": "t"}));
+    let plan = a.on_hook(&h, &view(NativeSessionRef::new(AgentKind::Codex, "x"))).unwrap();
+    assert_eq!(plan.set_sharing, Some(false));
+    assert!(plan.events.is_empty());
+    let reply = a.render_reply(&h, plan.reply.as_ref().unwrap()).unwrap();
+    assert_eq!(reply["decision"], "block");
 }
 
 #[test]
-fn commands_are_shown_without_the_shell_wrapper() {
-    assert_eq!(display_command("/bin/zsh -lc 'touch approved.txt'"), "touch approved.txt");
-    assert_eq!(display_command("cargo test"), "cargo test");
+fn apply_patch_is_an_edit() {
+    let a = CodexAdapter;
+    let h = raw(json!({
+        "hook_event_name": "PreToolUse", "session_id": "x", "turn_id": "t", "tool_use_id": "c1",
+        "tool_name": "apply_patch",
+        "tool_input": {"patch": "*** Begin Patch\n*** Update File: src/main.rs\n@@\n-a\n+b\n*** End Patch"}
+    }));
+    let plan = a.on_hook(&h, &view(NativeSessionRef::new(AgentKind::Codex, "x"))).unwrap();
+    let EventKind::ToolCall { tool, .. } = &plan.events[0] else { panic!() };
+    assert_eq!((tool.kind, tool.title.as_str()), (ToolKind::Edit, "Edit src/main.rs"));
 }

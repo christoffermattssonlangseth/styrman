@@ -486,3 +486,51 @@ async fn agy_permission_menus_are_answered_from_the_phone_or_the_terminal() {
     }
     d.stop().await;
 }
+
+fn codex_hook(session: &str, event: &str, extra: Value, launch: &str) -> RawHook {
+    let mut payload = json!({"session_id": session, "cwd": "/work/repo", "hook_event_name": event,
+        "model": "gpt-5.6-luna", "permission_mode": "default", "transcript_path": null});
+    payload
+        .as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    RawHook {
+        agent: AgentKind::Codex,
+        event: event.into(),
+        payload,
+        launched_by_styr: true,
+        agent_pid: None,
+        launch_id: Some(launch.into()),
+        agent_version: None,
+    }
+}
+
+async fn shared_codex(d: &Daemon) -> Vec<bool> {
+    let Response::Sessions { sessions } = d.call(Request::ListSessions { include_unshared: true }).await else {
+        panic!()
+    };
+    sessions.into_iter().filter(|s| s.agent == AgentKind::Codex).map(|s| s.shared).collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn codex_styr_caught_by_the_terminal_shares_its_session() {
+    let d = Daemon::start().await;
+    let l = "codex-launch";
+    // Codex fires SessionStart only with the first prompt: `/styr` comes first.
+    let r = d.call(Request::ShareLaunch { launch_id: l.into(), shared: true }).await;
+    assert_eq!(r, Response::LaunchShared { sessions: 0 }, "deferred");
+    assert!(shared_codex(&d).await.is_empty());
+    for (event, extra) in [
+        ("SessionStart", json!({"source": "startup"})),
+        ("UserPromptSubmit", json!({"prompt": "fix the build", "turn_id": "t1"})),
+    ] {
+        let r = d.call(Request::Hook { hook: codex_hook("s1", event, extra, l) }).await;
+        assert_eq!(r, Response::HookReply { stdout: None, exit: None }, "Codex hooks print nothing");
+    }
+    assert_eq!(shared_codex(&d).await, vec![true], "applied on the first hook");
+    // Later `/styr off` in the same terminal applies right away.
+    let r = d.call(Request::ShareLaunch { launch_id: l.into(), shared: false }).await;
+    assert_eq!(r, Response::LaunchShared { sessions: 1 });
+    assert_eq!(shared_codex(&d).await, vec![false]);
+    d.stop().await;
+}

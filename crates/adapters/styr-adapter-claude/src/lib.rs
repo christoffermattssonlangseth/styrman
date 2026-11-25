@@ -9,7 +9,7 @@
 //!   `tool_use_id` but does carry `permission_suggestions` (the "don't ask again" rules).
 //! - `PostToolUse.tool_response` is an object for Bash (`stdout`, `stderr`, …).
 
-mod tools;
+pub mod tools;
 
 use serde_json::{Value, json};
 use std::time::Duration;

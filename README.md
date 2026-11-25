@@ -46,7 +46,7 @@ Styrman (Swedish/Norwegian *styrmann*, "helmsman") is one helm for all of them. 
 - **Adapters** turn each agent's own signals into one common event model:
   - **Claude Code** (first): hooks and a `styrman` plugin
   - **Antigravity `agy`** (second): hooks, a plugin and ACP
-  - **Codex** (third): attaches to `codex app-server` as a second client
+  - **Codex** (third): hooks in `~/.codex/hooks.json` and the `styr codex` terminal wrapper
   - **PTY**: a generic fallback for agents with no hooks or protocol
 - **The iOS app** is SwiftUI. It pairs by scanning a QR code from `styr pair`, and gets "needs approval" and "done" notifications via APNs.
 
@@ -54,7 +54,7 @@ Design details and the reasoning behind them are in [`docs/design.md`](docs/desi
 
 ## Status
 
-Phase 1 (Claude Code + iPhone app) and phase 2 (Antigravity `agy`) are complete. Codex is next.
+Phase 1 (Claude Code + iPhone app), phase 2 (Antigravity `agy`) and phase 3 (Codex CLI) are complete.
 
 | Checkpoint | |
 |---|---|
@@ -118,6 +118,17 @@ Scan it with the iPhone Camera and tap **Pair**. `styr devices` lists paired pho
 
 Without the alias, agy sessions are mirrored read-only. In agy's `auto` mode, agy approves most actions itself, so cards only appear for the ones it would ask about.
 
+## Codex
+
+When Codex is installed, `styr setup` adds Styrman's hooks to `~/.codex/hooks.json`. Your own hooks and other tools' hooks in that file are kept. The next time Codex starts, it asks you to review the new hooks: choose **Trust all and continue**. Styrman never trusts hooks on your behalf. (Inside cmux, cmux's wrapper skips that question.)
+
+- **Sharing:** type `/styr` in Codex. Codex rejects slash commands it doesn't know, so `styr codex` catches the line as you type it. Codex never sees it, and you get a terminal notification instead. `/styr off` stops sharing.
+- **Mirroring:** your prompts, Codex's replies and its tool calls, with output.
+- **Approvals:** Codex shows its own menu only after its permission hook returns, so the hook never waits. Instead, the wrapper reads Codex's "Would you like to run the following command?" menu off the screen. The phone gets the same options, and the first answer wins: a tap on the phone, or a key in the terminal.
+- **Prompts from the phone** are typed into Codex's prompt box.
+
+Codex sessions started without the wrapper are mirrored read-only. Styrman doesn't use `codex app-server`: cmux starts Codex with per-launch hook options, and in that mode Codex runs in-process, where no second client can attach.
+
 ## Using it
 
 In any Claude Code session:
@@ -168,7 +179,7 @@ Sessions that are never shared stay invisible: only their start and end are reco
 
 ## Adding an adapter
 
-Each agent is a crate under `crates/adapters/` implementing `styr_core::adapter::AgentAdapter`. Antigravity, Codex and PTY already exist as stubs.
+Each agent is a crate under `crates/adapters/` implementing `styr_core::adapter::AgentAdapter`. PTY still exists only as a stub.
 
 1. **Pick the integration style** and declare it in `capabilities()`:
    - **Hook path** (Claude, agy, Codex hooks). The agent's hooks run `styr hook <agent> <event>` with the payload on stdin. Implement:
@@ -216,7 +227,7 @@ crates/styr-core          event model, status reducer, adapter trait, IPC + phon
 crates/styrd              the daemon: sessions, SQLite, permission broker, prompt queue, phone API, APNs
 crates/styr               the CLI: launcher, hook helper, status, pairing, service, push
 crates/styr-testkit       in-process daemon, hook runner, fake agent, fake phone
-crates/adapters/*         claude (complete); agy, codex, pty (stubs)
+crates/adapters/*         claude, agy, codex (complete); pty (stub)
 plugins/                  Claude Code plugin + local marketplace
 ios/                      SwiftUI app (XcodeGen project.yml)
 packaging/launchd/        example launchd plist (`styr service install` writes the real one)

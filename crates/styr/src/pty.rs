@@ -18,6 +18,65 @@ use std::time::Duration;
 use styr_core::ipc::{Client, IpcError, Request, Response, TerminalPrompt};
 use styr_core::paths::Paths;
 
+/// Catches `/styr` typed into an agent that has no hook for it (Codex rejects unknown
+/// slash commands): the Enter is swallowed, the line erased, and the command returned.
+/// Only lines typed plainly qualify (no arrow keys, pastes or other escapes), so what
+/// we erase is exactly what was typed.
+#[derive(Debug)]
+pub struct StyrCatcher {
+    typed: Vec<u8>,
+    clean: bool,
+}
+
+impl Default for StyrCatcher {
+    fn default() -> Self {
+        Self { typed: Vec::new(), clean: true }
+    }
+}
+
+impl StyrCatcher {
+    /// Returns the bytes to pass on and the command, if one was caught.
+    pub fn feed(&mut self, input: &[u8]) -> (Vec<u8>, Option<styr_core::adapter::StyrCommand>) {
+        let mut out = Vec::with_capacity(input.len());
+        let mut caught = None;
+        for &b in input {
+            match b {
+                b'\r' | b'\n' => {
+                    let line = String::from_utf8_lossy(&self.typed).into_owned();
+                    let cmd = self.clean.then(|| styr_core::adapter::parse_styr_command(&line)).flatten();
+                    if let Some(cmd) = cmd.filter(|_| caught.is_none()) {
+                        out.extend(std::iter::repeat_n(0x7f, line.chars().count()));
+                        caught = Some(cmd);
+                    } else {
+                        out.push(b);
+                    }
+                    self.reset();
+                    continue;
+                }
+                0x03 | 0x15 => self.reset(),
+                0x7f | 0x08 => {
+                    // Drop one whole UTF-8 character.
+                    while let Some(last) = self.typed.pop() {
+                        if last & 0xC0 != 0x80 {
+                            break;
+                        }
+                    }
+                }
+                0x1b => self.clean = false,
+                0x20..=0x7e | 0x80..=0xff => self.typed.push(b),
+                _ => self.clean = false,
+            }
+            out.push(b);
+        }
+        (out, caught)
+    }
+
+    fn reset(&mut self) {
+        self.typed.clear();
+        self.clean = true;
+    }
+}
+
 /// Tracks whether the user has a partly typed line (so we don't type over it).
 #[derive(Debug, Default, Clone)]
 pub struct LineState {
@@ -169,12 +228,91 @@ pub fn detect_agy_prompt(screen: &str) -> Option<TerminalPrompt> {
     })
 }
 
+/// Codex's approval menu (0.172.0), as `styr codex` sees it on screen:
+/// ```text
+///   Would you like to run the following command?
+///   Environment: local
+///   Reason: Do you want to allow creating menu.txt in the current workspace?
+///   $ touch menu.txt
+/// › 1. Yes, proceed (y)
+///   2. Yes, and don't ask again for commands that start with `touch menu.txt` (p)
+///   3. No, and tell Codex what to do differently (esc)
+///   Press enter to confirm or esc to cancel
+/// ```
+/// Only an open menu counts: the footer must follow the options.
+pub fn detect_codex_prompt(screen: &str) -> Option<TerminalPrompt> {
+    let lines: Vec<&str> = screen.lines().collect();
+    let footer = lines
+        .iter()
+        .rposition(|l| l.trim_start().starts_with("Press enter to confirm"))?;
+    // The options sit directly above the footer (blank lines aside).
+    let mut end = footer;
+    while end > 0 && lines[end - 1].trim().is_empty() {
+        end -= 1;
+    }
+    let mut first_option = end;
+    while first_option > 0 && numbered(lines[first_option - 1]).is_some() {
+        first_option -= 1;
+    }
+    let mut options = Vec::new();
+    let mut selected = 0;
+    for l in &lines[first_option..end] {
+        let (marked, label) = numbered(l)?;
+        if marked {
+            selected = options.len();
+        }
+        // "Yes, proceed (y)" → "Yes, proceed": the shortcut means nothing on the phone.
+        let label = match label.rfind(" (") {
+            Some(i) if label.ends_with(')') && label.len() - i <= 8 => &label[..i],
+            _ => label,
+        };
+        options.push(label.trim().to_owned());
+    }
+    // The question: the topmost line ending in '?' in the menu's block, which starts
+    // after the transcript's last `•`/`›` line ("Reason: …?" lines are detail).
+    let block_start = (0..first_option)
+        .rev()
+        .take(30)
+        .find(|&i| {
+            let l = lines[i].trim_start();
+            l.starts_with('•') || l.starts_with('›')
+        })
+        .map_or(first_option.saturating_sub(30), |i| i + 1);
+    let title_at = (block_start..first_option).find(|&i| lines[i].trim().ends_with('?'))?;
+    let detail: Vec<String> = lines[title_at + 1..first_option]
+        .iter()
+        .map(|l| l.trim().to_owned())
+        .filter(|l| !l.is_empty())
+        .collect();
+    (options.len() >= 2).then(|| TerminalPrompt {
+        title: lines[title_at].trim().to_owned(),
+        detail: detail.join("\n"),
+        options,
+        selected,
+    })
+}
+
+/// `› 2. Label` / `  1. Label` → (selected, label).
+fn numbered(line: &str) -> Option<(bool, &str)> {
+    let t = line.trim_start();
+    let (marked, rest) = match t.strip_prefix('›').or_else(|| t.strip_prefix('>')) {
+        Some(r) => (true, r.trim_start()),
+        None => (false, t),
+    };
+    let digits = rest.chars().take_while(char::is_ascii_digit).count();
+    if digits == 0 {
+        return None;
+    }
+    rest[digits..].strip_prefix(". ").map(|l| (marked, l.trim_end()))
+}
+
 pub fn run(
     bin: &Path,
     args: &[OsString],
     env: &[(String, String)],
     launch_id: &str,
     detector: Option<PromptDetector>,
+    catch_styr: bool,
 ) -> Result<i32> {
     // Environment for the child (and, through it, the agent's hooks).
     for (k, v) in env {
@@ -224,22 +362,32 @@ pub fn run(
     // Keyboard → agent.
     {
         let (w, line) = (master_write.clone(), line.clone());
+        let launch_id = launch_id.to_owned();
         std::thread::spawn(move || {
             let mut stdin = std::io::stdin().lock();
             let mut buf = [0u8; 4096];
+            let mut catcher = catch_styr.then(StyrCatcher::default);
             while let Ok(n) = stdin.read(&mut buf) {
                 if n == 0 {
                     break;
                 }
+                let (bytes, caught) = match catcher.as_mut() {
+                    Some(c) => c.feed(&buf[..n]),
+                    None => (buf[..n].to_vec(), None),
+                };
                 line.lock()
                     .unwrap_or_else(|p| p.into_inner())
-                    .feed(&buf[..n]);
+                    .feed(&bytes);
                 if w.lock()
                     .unwrap_or_else(|p| p.into_inner())
-                    .write_all(&buf[..n])
+                    .write_all(&bytes)
                     .is_err()
                 {
                     break;
+                }
+                if let Some(cmd) = caught {
+                    let launch_id = launch_id.clone();
+                    std::thread::spawn(move || share_from_terminal(cmd, &launch_id));
                 }
             }
         });
@@ -341,6 +489,24 @@ pub fn run(
         128 + libc::WTERMSIG(status)
     };
     Ok(code)
+}
+
+/// Tell the daemon about a caught `/styr` and confirm with a terminal notification
+/// (OSC 9), which leaves the agent's screen alone.
+fn share_from_terminal(cmd: styr_core::adapter::StyrCommand, launch_id: &str) {
+    let shared = cmd == styr_core::adapter::StyrCommand::On;
+    let client = Client::new(Paths::resolve().socket).with_timeout(Some(Duration::from_secs(5)));
+    let msg = match client.call(&Request::ShareLaunch {
+        launch_id: launch_id.to_owned(),
+        shared,
+    }) {
+        Ok(Response::LaunchShared { .. }) if shared => "Styrman: this session is now on your phone",
+        Ok(Response::LaunchShared { .. }) => "Styrman: stopped sharing this session",
+        _ => "Styrman: styrd isn't running (styr service start)",
+    };
+    let mut out = std::io::stdout();
+    let _ = write!(out, "\x1b]9;{msg}\x07");
+    let _ = out.flush();
 }
 
 fn inject_loop(
@@ -472,5 +638,62 @@ mod tests {
         assert_eq!(menu_keys(0, 3).len(), 4);
         assert_eq!(menu_keys(0, 3)[0], b"\x1b[B".to_vec());
         assert_eq!(menu_keys(2, 0)[0], b"\x1b[A".to_vec());
+    }
+
+    #[test]
+    fn styr_is_caught_and_erased_in_codex() {
+        use styr_core::adapter::StyrCommand;
+        let mut c = StyrCatcher::default();
+        let (out, cmd) = c.feed(b"/styr\r");
+        assert_eq!(cmd, Some(StyrCommand::On));
+        assert_eq!(out, [b"/styr".as_slice(), &[0x7f; 5]].concat(), "typed, then erased; no Enter");
+        // Typed in pieces, with a correction.
+        let mut c = StyrCatcher::default();
+        assert_eq!(c.feed(b"/styr ofx").1, None);
+        let (out, cmd) = c.feed(&[0x7f, b'f', b'\r']);
+        assert_eq!(cmd, Some(StyrCommand::Off));
+        assert_eq!(out, [&[0x7f, b'f'][..], &[0x7f; 9]].concat());
+        // Everything else passes through untouched.
+        let mut c = StyrCatcher::default();
+        assert_eq!(c.feed(b"fix /styr please\r"), (b"fix /styr please\r".to_vec(), None));
+        // A line edited with arrow keys isn't caught (we can't know what's in the box).
+        let mut c = StyrCatcher::default();
+        assert_eq!(c.feed(b"/sty\x1b[Dr\r").1, None);
+        assert_eq!(c.feed(b"/styr\r").1, Some(StyrCommand::On), "the next line is clean again");
+    }
+
+    fn codex_screen(file: &str) -> String {
+        let b = std::fs::read(format!("{}/tests/fixtures/{file}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let mut p = vt100::Parser::new(nz(40), nz(120), 0);
+        p.process(&b);
+        p.screen().contents()
+    }
+
+    #[test]
+    fn codex_approval_menu_is_read_off_the_screen() {
+        let p = detect_codex_prompt(&codex_screen("codex_approval.bin")).expect("menu");
+        assert_eq!(p.title, "Would you like to run the following command?");
+        assert!(p.detail.contains("$ touch menu.txt"), "{}", p.detail);
+        assert!(p.detail.contains("Reason: Do you want to allow creating menu.txt"));
+        assert_eq!(
+            p.options,
+            vec![
+                "Yes, proceed",
+                "Yes, and don't ask again for commands that start with `touch menu.txt`",
+                "No, and tell Codex what to do differently",
+            ]
+        );
+        assert_eq!(p.selected, 0);
+        let moved = detect_codex_prompt(&codex_screen("codex_approval.down.bin")).unwrap();
+        assert_eq!(moved.selected, 1, "the › marker follows the arrow keys");
+        // The user's own prompt line (also starting with ›) isn't an option or a title.
+        assert!(!p.title.contains("Run the shell command"));
+    }
+
+    #[test]
+    fn no_codex_menu_without_the_footer() {
+        let s = "  Would you like to run the following command?\n› 1. Yes, proceed (y)\n  2. No (esc)\n";
+        assert_eq!(detect_codex_prompt(s), None);
+        assert_eq!(detect_codex_prompt("› Ask Codex to do anything"), None);
     }
 }

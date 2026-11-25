@@ -93,17 +93,23 @@ pub fn exec(agent: AgentKind, args: Vec<OsString>) -> Result<std::convert::Infal
     // typed into it. Everything else (pipes, -p, other agents for now): plain exec.
     let interactive = !args
         .iter()
-        .any(|a| a == "-p" || a == "--print" || a == "--prompt");
+        .any(|a| a == "-p" || a == "--print" || a == "--prompt")
+        && !(agent == AgentKind::Codex && codex_is_batch(&args));
     let detector: Option<crate::pty::PromptDetector> = match agent {
         AgentKind::Antigravity => Some(crate::pty::detect_agy_prompt),
+        AgentKind::Codex => Some(crate::pty::detect_codex_prompt),
         _ => None,
     };
-    let wrappable = matches!(agent, AgentKind::Claude | AgentKind::Antigravity);
+    let wrappable = matches!(
+        agent,
+        AgentKind::Claude | AgentKind::Antigravity | AgentKind::Codex
+    );
     if wrappable && interactive && crate::pty::can_wrap() {
         let launch_id = format!("{:016x}", rand_u64());
         let mut all: Vec<OsString> = spec.extra_args.iter().map(OsString::from).collect();
         all.extend(args);
-        let code = crate::pty::run(&bin, &all, &spec.env, &launch_id, detector)?;
+        let catch_styr = agent == AgentKind::Codex;
+        let code = crate::pty::run(&bin, &all, &spec.env, &launch_id, detector, catch_styr)?;
         std::process::exit(code);
     }
     let mut cmd = std::process::Command::new(&bin);
@@ -114,6 +120,18 @@ pub fn exec(agent: AgentKind, args: Vec<OsString>) -> Result<std::convert::Infal
     // Only returns on failure.
     let err = cmd.exec();
     Err(err).with_context(|| format!("exec {}", bin.display()))
+}
+
+/// `codex exec …`, `codex login`, `codex --version`, …: not the interactive TUI.
+fn codex_is_batch(args: &[OsString]) -> bool {
+    const BATCH: &[&str] = &[
+        "exec", "e", "review", "login", "logout", "mcp", "mcp-server", "app-server",
+        "completion", "sandbox", "debug", "apply", "a", "cloud", "features", "queue",
+        "help", "-h", "--help", "-V", "--version",
+    ];
+    args.first()
+        .and_then(|a| a.to_str())
+        .is_some_and(|a| BATCH.contains(&a))
 }
 
 fn rand_u64() -> u64 {

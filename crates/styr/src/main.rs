@@ -3,6 +3,7 @@
 
 pub(crate) mod hook;
 pub(crate) mod launch;
+mod codex_hooks;
 mod pty;
 mod service;
 mod setup;

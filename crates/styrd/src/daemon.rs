@@ -38,6 +38,8 @@ pub struct Daemon {
     pub(crate) broker: crate::permissions::Broker,
     pub(crate) prompts: crate::prompts::Prompts,
     pub(crate) terminals: crate::terminals::Terminals,
+    /// `/styr` typed in a `styr <agent>` terminal before its session's first hook.
+    pending_shares: Mutex<HashMap<String, bool>>,
     pusher: std::sync::RwLock<Option<Arc<crate::push::Pusher>>>,
     data_dir: Mutex<Option<std::path::PathBuf>>,
     /// Device id → open WebSocket count (a connected app is in the foreground).
@@ -116,6 +118,7 @@ impl Daemon {
             broker: Default::default(),
             prompts: Default::default(),
             terminals: Default::default(),
+            pending_shares: Mutex::new(HashMap::new()),
             pusher: Default::default(),
             data_dir: Mutex::new(None),
             live: Mutex::new(HashMap::new()),
@@ -199,7 +202,14 @@ impl Daemon {
             .clone()
             .unwrap_or_else(|| SessionUpdate::for_native(native.clone()));
         let mut events = plan.events;
-        if let Some(shared) = plan.set_sharing
+        // A `/styr` caught by the terminal wrapper before this session existed.
+        let pending = hook.launch_id.as_ref().and_then(|l| {
+            self.pending_shares
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(l)
+        });
+        if let Some(shared) = plan.set_sharing.or(pending)
             && shared != view.shared
         {
             events.insert(0, EventKind::SharingChanged { shared });
@@ -687,6 +697,30 @@ impl Daemon {
         Ok(delivery)
     }
 
+    /// `/styr` (or `/styr off`) caught by a `styr <agent>` terminal wrapper, for an
+    /// agent that rejects unknown slash commands itself (Codex). Applies to the
+    /// sessions running in that terminal, or to its first one once its hooks arrive.
+    /// Returns how many sessions changed now (0: deferred).
+    pub fn share_launch(&self, launch_id: &str, shared: bool) -> Result<usize> {
+        let mut n = 0;
+        for id in self.terminals.sessions_of(launch_id) {
+            let Some(rec) = self.lock().store.session(&id)? else {
+                continue;
+            };
+            if self.summary(&id)?.is_some_and(|s| s.status != styr_core::SessionStatus::Done) {
+                self.set_sharing(&rec.native, shared)?;
+                n += 1;
+            }
+        }
+        if n == 0 {
+            self.pending_shares
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(launch_id.to_owned(), shared);
+        }
+        Ok(n)
+    }
+
     pub fn set_api_urls(&self, urls: Vec<String>) {
         *self.api_urls.lock().unwrap_or_else(|p| p.into_inner()) = urls;
     }
@@ -814,6 +848,9 @@ impl Daemon {
                     host: Self::host_name(),
                 })
             }
+            Request::ShareLaunch { launch_id, shared } => self
+                .share_launch(&launch_id, shared)
+                .map(|n| Response::LaunchShared { sessions: n }),
             Request::SendPrompt { session, text } => self
                 .send_prompt(&session, &text, "cli".into())
                 .map(|d| Response::PromptAccepted {

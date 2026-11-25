@@ -176,6 +176,18 @@ fn write_embedded_plugin(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+fn codex_bin() -> Option<PathBuf> {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let exe = std::env::current_exe().ok();
+    crate::launch::find_on_path("codex", &path, exe.as_deref())
+}
+
+/// `codex-cli 0.172.0` → `0.172.0`.
+fn codex_version(bin: &Path) -> Option<String> {
+    let out = Command::new(bin).arg("--version").stderr(Stdio::null()).output().ok()?;
+    String::from_utf8_lossy(&out.stdout).split_whitespace().last().map(str::to_owned)
+}
+
 fn agy_bin() -> Option<PathBuf> {
     let path = std::env::var_os("PATH").unwrap_or_default();
     crate::launch::find_on_path("agy", &path, std::env::current_exe().ok().as_deref()).or_else(
@@ -274,6 +286,14 @@ fn shim_path_line(rc: &Path) -> &'static str {
     } else {
         "export PATH=\"$HOME/.styrman/bin:$PATH\""
     }
+}
+
+/// The agents routed through `styr` (Claude always; agy and Codex when installed).
+fn routed_agents() -> Vec<&'static str> {
+    std::iter::once("claude")
+        .chain(agy_bin().map(|_| "agy"))
+        .chain(codex_bin().map(|_| "codex"))
+        .collect()
 }
 
 fn install_shims(agents: &[&str]) -> Result<()> {
@@ -456,11 +476,26 @@ pub fn setup(yes: bool) -> Result<()> {
         }
     }
 
-    // 3. Route `claude`/`agy` through Styrman with PATH shims (aliases don't
+    // 2c. Codex, if installed: hooks in ~/.codex/hooks.json.
+    if let Some(codex) = codex_bin() {
+        let v = codex_version(&codex).map(|v| format!("version {v}, ")).unwrap_or_default();
+        match crate::codex_hooks::install() {
+            Ok(false) if crate::codex_hooks::trusted() => {
+                line(Mark::Ok, "Codex hooks", format!("{v}installed and trusted"))
+            }
+            Ok(_) if !crate::codex_hooks::trusted() => line(
+                Mark::Warn,
+                "Codex hooks",
+                format!("{v}installed; the next time Codex starts, choose \"Trust all and continue\""),
+            ),
+            Ok(_) => line(Mark::Ok, "Codex hooks", format!("{v}installed")),
+            Err(e) => line(Mark::Fail, "Codex hooks", format!("couldn't install: {e:#}")),
+        }
+    }
+
+    // 3. Route `claude`/`agy`/`codex` through Styrman with PATH shims (aliases don't
     //    survive cmux's shell integration, which unaliases them).
-    let agents: Vec<&str> = std::iter::once("claude")
-        .chain(agy_bin().map(|_| "agy"))
-        .collect();
+    let agents = routed_agents();
     match routing_state(&agents) {
         Routing::Active => line(
             Mark::Ok,
@@ -662,9 +697,22 @@ pub fn doctor(live: bool) -> Result<bool> {
             )
         }
     }
-    let agents: Vec<&str> = std::iter::once("claude")
-        .chain(agy_bin().map(|_| "agy"))
-        .collect();
+    if let Some(codex) = codex_bin() {
+        let v = codex_version(&codex).unwrap_or_else(|| "?".into());
+        match (crate::codex_hooks::installed(), crate::codex_hooks::trusted()) {
+            (true, true) => line(Mark::Ok, "Codex", format!("version {v}, hooks installed and trusted")),
+            (true, false) => line(
+                Mark::Warn,
+                "Codex",
+                format!("version {v}: start Codex and choose \"Trust all and continue\" for Styrman's hooks"),
+            ),
+            (false, _) => {
+                healthy = false;
+                line(Mark::Warn, "Codex", format!("version {v}: hooks missing or outdated, run `styr setup`"))
+            }
+        }
+    }
+    let agents = routed_agents();
     match routing_state(&agents) {
         Routing::Active => line(Mark::Ok, "routing", format!("{} → styr", agents.join(", "))),
         Routing::NotInPath => line(

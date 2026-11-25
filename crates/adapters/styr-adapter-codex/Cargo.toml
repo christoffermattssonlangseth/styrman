@@ -1,6 +1,6 @@
 [package]
 name = "styr-adapter-codex"
-description = "Styrman adapter: Codex CLI via codex app-server — planned (phase 3)"
+description = "Styrman adapter: Codex CLI (hooks + the styr codex terminal wrapper)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 serde_json = "1.0.154"
 styr-core.workspace = true
+styr-adapter-claude.workspace = true
 
 [dev-dependencies]
 serde_json = "1.0.154"

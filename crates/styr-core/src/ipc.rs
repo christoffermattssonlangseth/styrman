@@ -86,6 +86,12 @@ pub enum Request {
         session: SessionId,
         text: String,
     },
+    /// `/styr` caught by a `styr <agent>` terminal wrapper (Codex rejects unknown
+    /// slash commands before any hook sees them).
+    ShareLaunch {
+        launch_id: String,
+        shared: bool,
+    },
 }
 
 fn default_limit() -> u32 {
@@ -159,6 +165,10 @@ pub enum Response {
         delivered: bool,
     },
     Ok,
+    /// How many sessions changed; 0 means it applies to the terminal's first session.
+    LaunchShared {
+        sessions: usize,
+    },
     Error {
         message: String,
     },

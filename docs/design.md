@@ -1,6 +1,6 @@
 # Styrman design (phase 1 proposal)
 
-Status: **phases 1 and 2 complete** (Claude Code, Antigravity). Next: Codex. Verified findings are recorded in §8.
+Status: **phases 1–3 complete** (Claude Code, Antigravity, Codex). Verified findings are recorded in §8.
 
 ## 1. What the three agents actually offer
 
@@ -336,3 +336,12 @@ Each checkpoint ends with something runnable and its tests green.
     - `styr`'s own lookup skips the shim directory, and a hop counter guards against loops.
   - Verified in a zsh started with cmux's `ZDOTDIR` integration: `agy` is a cmux function, yet `styr agy` → the real agy.
 - **Undeliverable prompts are refused.** Sessions report `in_terminal_wrapper` / `accepts_prompts`. Phone prompts for an unwrapped agy session are refused with a reason instead of being queued forever, and the app shows a read-only notice in place of the message box.
+
+### Codex CLI 0.172.0 (measured 2026-11-25)
+
+- **The app-server path doesn't work under cmux.** Codex's TUI normally runs through a shared app-server daemon, and a second client can follow a thread, start turns and answer approvals; that part was verified. But any `-c`/`--enable` option forces embedded mode, and cmux's codex wrapper always passes `-c hooks.…`. In embedded mode the shared server lists no threads. So Styrman uses hooks instead.
+- **Hooks are Claude-shaped:** SessionStart (fires with the first prompt, not at launch), UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse, Stop (`last_assistant_message`) and SessionEnd. Payloads are snake_case, with `tool_name: "Bash"`, `tool_use_id` and `turn_id`. Timeouts are in seconds. Hooks in `hooks.json` run alongside cmux's `-c` hooks.
+- **Trust:** new or changed hooks must be trusted once ("Hooks need review"). Codex stores per-hook hashes under `[hooks.state]` in config.toml. `--dangerously-bypass-hook-trust`, which cmux passes, skips the question.
+- **PermissionRequest is sequential:** Codex shows its own menu only after the hook returns, so a hook waiting for the phone would freeze the terminal. The hook returns at once, and `styr codex` reads the menu off the screen (`detect_codex_prompt`) as it does for agy.
+- **`/styr`:** the TUI rejects unknown slash commands before any hook sees them. `styr codex` catches a plainly typed `/styr` line, erases it and sends `ShareLaunch`. If the session has no hook yet, sharing applies when its first hook arrives.
+
