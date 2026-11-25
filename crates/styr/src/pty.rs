@@ -65,6 +65,10 @@ fn classify(seq: &[u8]) -> Key {
     let params = &body[..body.len() - fin.len_utf8()];
     match fin {
         'I' | 'O' if params.is_empty() => Key::Neutral, // focus in/out
+        // Replies to the agent's own terminal queries (device attributes, kitty
+        // keyboard flags, mode reports, cursor position) arrive as input too.
+        _ if params.starts_with('?') || params.starts_with('>') => Key::Neutral,
+        'R' if params.contains(';') => Key::Neutral,
         'M' | 'm' if params.starts_with('<') => Key::Neutral, // SGR mouse
         'u' => {
             // kitty: code[:alternates];mods[:event];text
@@ -111,8 +115,17 @@ impl StyrCatcher {
             }
             if let Some(seq) = self.esc.as_mut() {
                 seq.push(b);
+                // OSC / DCS / APC / PM strings (e.g. colour query replies) run to
+                // BEL or ESC \\ and are never typing.
+                if seq.len() > 2 && matches!(seq[1], b']' | b'P' | b'_' | b'^') {
+                    let end = b == 0x07 || (b == b'\\' && seq[seq.len() - 2] == 0x1b) || seq.len() > 4096;
+                    if end {
+                        out.extend(self.esc.take().expect("seq"));
+                    }
+                    continue;
+                }
                 let done = match seq.len() {
-                    2 => !matches!(b, b'[' | b'O'),
+                    2 => !matches!(b, b'[' | b'O' | b']' | b'P' | b'_' | b'^'),
                     3 if seq[1] == b'O' => true,
                     3 if seq[1] == b'[' && b == b'M' => {
                         // Legacy mouse report: three raw bytes follow.
@@ -803,6 +816,12 @@ mod tests {
         let mut c = StyrCatcher::default();
         assert_eq!(c.feed(b"/styr\x1b[1").1, None);
         assert_eq!(c.feed(b"3u").1, Some(StyrCommand::On));
+        // Replies to Codex's startup queries come in on stdin before any typing.
+        let mut c = StyrCatcher::default();
+        let replies = b"\x1b[?62;22c\x1b[12;1R\x1b]10;rgb:ffff/ffff/ffff\x1b\\\x1b]11;rgb:0000/0000/0000\x07\x1b[?1u\x1b[?1007;2$y\x1b[>1;10;0c";
+        let (out, cmd) = c.feed(&[replies.as_slice(), b"/styr\r"].concat());
+        assert_eq!(cmd, Some(StyrCommand::On));
+        assert!(out.starts_with(replies), "replies still reach the agent");
         // Shift+Enter (a newline in the box) and arrows still disqualify.
         let mut c = StyrCatcher::default();
         assert_eq!(c.feed(b"/styr\x1b[13;2u").1, None);
