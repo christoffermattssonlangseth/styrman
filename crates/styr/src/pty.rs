@@ -233,14 +233,17 @@ impl StyrCatcher {
 /// skipped whole, or a colour reply like `]11;rgb:…` would look like typing.
 #[derive(Debug, Default, Clone)]
 pub struct LineState {
-    dirty: bool,
+    /// Characters typed on the current line (backspace takes one away). Counting
+    /// rather than a flag: after `/styr` is caught and erased with backspaces the line
+    /// is empty again, and phone messages mustn't wait for an Enter that never comes.
+    chars: usize,
     esc: Option<Vec<u8>>,
     mouse_bytes: u8,
 }
 
 impl LineState {
     pub fn dirty(&self) -> bool {
-        self.dirty
+        self.chars > 0
     }
 
     pub fn feed(&mut self, bytes: &[u8]) {
@@ -271,10 +274,11 @@ impl LineState {
                 if done {
                     let seq = self.esc.take().expect("seq");
                     match classify(&seq) {
-                        Key::Enter => self.dirty = false,
-                        Key::Char(_) => self.dirty = true,
+                        Key::Enter => self.chars = 0,
+                        Key::Char(_) => self.chars += 1,
+                        Key::Backspace => self.chars = self.chars.saturating_sub(1),
                         // Arrows, focus, mouse, replies: not typing.
-                        Key::Backspace | Key::Neutral | Key::Other => {}
+                        Key::Neutral | Key::Other => {}
                     }
                 }
                 continue;
@@ -282,8 +286,11 @@ impl LineState {
             match b {
                 0x1b => self.esc = Some(vec![b]),
                 // Enter submits; Ctrl-C / Ctrl-U clear the line.
-                b'\r' | b'\n' | 0x03 | 0x15 => self.dirty = false,
-                0x20..=0x7e | 0x80..=0xff => self.dirty = true,
+                b'\r' | b'\n' | 0x03 | 0x15 => self.chars = 0,
+                0x7f | 0x08 => self.chars = self.chars.saturating_sub(1),
+                // UTF-8 continuation bytes belong to the character before.
+                0x80..=0xbf => {}
+                0x20..=0x7e | 0xc0..=0xff => self.chars += 1,
                 _ => {}
             }
         }
@@ -916,6 +923,15 @@ mod tests {
             !l.dirty(),
             "colour/DA/cursor/kitty replies, focus and mouse"
         );
+        // Erasing the line with backspaces (what the /styr catcher does) empties it.
+        let mut l = LineState::default();
+        l.feed(b"/styr");
+        assert!(l.dirty());
+        l.feed(&[0x7f; 5]);
+        assert!(!l.dirty(), "backspaced to an empty line");
+        l.feed("é".as_bytes());
+        l.feed(&[0x7f]);
+        assert!(!l.dirty(), "one backspace removes a multi-byte character");
         // kitty-encoded keys still count.
         l.feed(b"\x1b[104u");
         assert!(l.dirty());
