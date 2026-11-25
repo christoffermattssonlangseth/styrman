@@ -20,17 +20,81 @@ use styr_core::paths::Paths;
 
 /// Catches `/styr` typed into an agent that has no hook for it (Codex rejects unknown
 /// slash commands): the Enter is swallowed, the line erased, and the command returned.
-/// Only lines typed plainly qualify (no arrow keys, pastes or other escapes), so what
-/// we erase is exactly what was typed.
+///
+/// Only lines typed plainly qualify, so what we erase is exactly what was typed. The
+/// terminal may also send focus and mouse reports (Codex turns both on) and encode
+/// keys with the kitty keyboard protocol; those are understood. Anything else that
+/// could move the cursor or change the box (arrows, Tab, pastes, …) disqualifies the line.
 #[derive(Debug)]
 pub struct StyrCatcher {
     typed: Vec<u8>,
     clean: bool,
+    /// An escape sequence in progress (it can span reads).
+    esc: Option<Vec<u8>>,
+    /// Raw bytes still owed to a legacy `ESC [ M b x y` mouse report.
+    mouse_bytes: u8,
 }
 
 impl Default for StyrCatcher {
     fn default() -> Self {
-        Self { typed: Vec::new(), clean: true }
+        Self { typed: Vec::new(), clean: true, esc: None, mouse_bytes: 0 }
+    }
+}
+
+/// What a complete escape sequence means for the line being typed.
+#[derive(Debug, PartialEq)]
+enum Key {
+    Enter,
+    Backspace,
+    Char(char),
+    /// Focus or mouse report: not typing.
+    Neutral,
+    /// Anything else: the line may no longer be what we saw typed.
+    Other,
+}
+
+fn classify(seq: &[u8]) -> Key {
+    let s = String::from_utf8_lossy(seq);
+    if s == "\x1bOM" {
+        return Key::Enter; // keypad Enter
+    }
+    let Some(body) = s.strip_prefix("\x1b[") else {
+        return Key::Other;
+    };
+    let fin = body.chars().last().unwrap_or(' ');
+    let params = &body[..body.len() - fin.len_utf8()];
+    match fin {
+        'I' | 'O' if params.is_empty() => Key::Neutral, // focus in/out
+        'M' | 'm' if params.starts_with('<') => Key::Neutral, // SGR mouse
+        'u' => {
+            // kitty: code[:alternates];mods[:event];text
+            let mut fields = params.split(';');
+            let code: u32 = fields
+                .next()
+                .and_then(|c| c.split(':').next())
+                .and_then(|c| c.parse().ok())
+                .unwrap_or(0);
+            let mods_field = fields.next().unwrap_or("1");
+            let mut m = mods_field.split(':');
+            let mods: u32 = m.next().and_then(|v| v.parse().ok()).unwrap_or(1);
+            if m.next().is_some_and(|e| e == "3") {
+                return Key::Neutral; // key release
+            }
+            let text = fields.next().and_then(|t| {
+                t.split(':').filter_map(|c| c.parse::<u32>().ok()).map(char::from_u32).collect::<Option<String>>()
+            });
+            match (code, mods) {
+                (13, 1) => Key::Enter,
+                (127 | 8, 1) => Key::Backspace,
+                (c, 1 | 2) if c >= 32 && c != 127 => text
+                    .and_then(|t| t.chars().next())
+                    .or_else(|| char::from_u32(c))
+                    .map_or(Key::Other, Key::Char),
+                _ => Key::Other,
+            }
+        }
+        '~' if params == "27;1;13" => Key::Enter, // xterm modifyOtherKeys
+        _ => Key::Other,
     }
 }
 
@@ -40,35 +104,90 @@ impl StyrCatcher {
         let mut out = Vec::with_capacity(input.len());
         let mut caught = None;
         for &b in input {
+            if self.mouse_bytes > 0 {
+                self.mouse_bytes -= 1;
+                out.push(b);
+                continue;
+            }
+            if let Some(seq) = self.esc.as_mut() {
+                seq.push(b);
+                let done = match seq.len() {
+                    2 => !matches!(b, b'[' | b'O'),
+                    3 if seq[1] == b'O' => true,
+                    3 if seq[1] == b'[' && b == b'M' => {
+                        // Legacy mouse report: three raw bytes follow.
+                        self.mouse_bytes = 3;
+                        let seq = self.esc.take().expect("seq");
+                        out.extend(seq);
+                        continue;
+                    }
+                    n => n > 2 && seq[1] == b'[' && (0x40..=0x7e).contains(&b) || n > 64,
+                };
+                if done {
+                    let seq = self.esc.take().expect("seq");
+                    match classify(&seq) {
+                        Key::Enter => {
+                            if self.on_enter(&mut out, &mut caught) {
+                                continue; // swallowed
+                            }
+                        }
+                        Key::Backspace => self.backspace(),
+                        Key::Char(c) => {
+                            let mut buf = [0u8; 4];
+                            self.typed.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                        }
+                        Key::Neutral => {}
+                        Key::Other => self.clean = false,
+                    }
+                    out.extend(seq);
+                }
+                continue;
+            }
             match b {
                 b'\r' | b'\n' => {
-                    let line = String::from_utf8_lossy(&self.typed).into_owned();
-                    let cmd = self.clean.then(|| styr_core::adapter::parse_styr_command(&line)).flatten();
-                    if let Some(cmd) = cmd.filter(|_| caught.is_none()) {
-                        out.extend(std::iter::repeat_n(0x7f, line.chars().count()));
-                        caught = Some(cmd);
-                    } else {
-                        out.push(b);
+                    if self.on_enter(&mut out, &mut caught) {
+                        continue;
                     }
-                    self.reset();
+                    out.push(b);
+                    continue;
+                }
+                0x1b => {
+                    self.esc = Some(vec![b]);
                     continue;
                 }
                 0x03 | 0x15 => self.reset(),
-                0x7f | 0x08 => {
-                    // Drop one whole UTF-8 character.
-                    while let Some(last) = self.typed.pop() {
-                        if last & 0xC0 != 0x80 {
-                            break;
-                        }
-                    }
-                }
-                0x1b => self.clean = false,
+                0x7f | 0x08 => self.backspace(),
                 0x20..=0x7e | 0x80..=0xff => self.typed.push(b),
                 _ => self.clean = false,
             }
             out.push(b);
         }
         (out, caught)
+    }
+
+    /// On Enter: if the line is a plainly typed `/styr`, erase it and return true
+    /// (the Enter must not be passed on). Either way a new line starts.
+    fn on_enter(&mut self, out: &mut Vec<u8>, caught: &mut Option<styr_core::adapter::StyrCommand>) -> bool {
+        let line = String::from_utf8_lossy(&self.typed).into_owned();
+        let cmd = self.clean.then(|| styr_core::adapter::parse_styr_command(&line)).flatten();
+        self.reset();
+        match cmd.filter(|_| caught.is_none()) {
+            Some(cmd) => {
+                out.extend(std::iter::repeat_n(0x7f, line.chars().count()));
+                *caught = Some(cmd);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn backspace(&mut self) {
+        // Drop one whole UTF-8 character.
+        while let Some(last) = self.typed.pop() {
+            if last & 0xC0 != 0x80 {
+                break;
+            }
+        }
     }
 
     fn reset(&mut self) {
@@ -367,9 +486,16 @@ pub fn run(
             let mut stdin = std::io::stdin().lock();
             let mut buf = [0u8; 4096];
             let mut catcher = catch_styr.then(StyrCatcher::default);
+            // Diagnostics: STYR_KEYLOG=/path logs what the terminal sends (escaped).
+            let mut keylog = std::env::var_os("STYR_KEYLOG").and_then(|p| {
+                std::fs::OpenOptions::new().create(true).append(true).open(p).ok()
+            });
             while let Ok(n) = stdin.read(&mut buf) {
                 if n == 0 {
                     break;
+                }
+                if let Some(f) = keylog.as_mut() {
+                    let _ = writeln!(f, "{}", buf[..n].escape_ascii());
                 }
                 let (bytes, caught) = match catcher.as_mut() {
                     Some(c) => c.feed(&buf[..n]),
@@ -660,6 +786,28 @@ mod tests {
         let mut c = StyrCatcher::default();
         assert_eq!(c.feed(b"/sty\x1b[Dr\r").1, None);
         assert_eq!(c.feed(b"/styr\r").1, Some(StyrCommand::On), "the next line is clean again");
+        // Focus and mouse reports (Codex turns both on) don't disqualify a line.
+        let mut c = StyrCatcher::default();
+        let (out, cmd) = c.feed(b"\x1b[I\x1b[<35;10;5M/st\x1b[<35;11;5Myr\r");
+        assert_eq!(cmd, Some(StyrCommand::On));
+        assert!(!out.contains(&b'\r'), "Enter swallowed");
+        assert!(out.starts_with(b"\x1b[I"), "reports still reach the agent");
+        // kitty keyboard protocol: Enter as CSI 13 u, letters as CSI u with text.
+        let mut c = StyrCatcher::default();
+        let (out, cmd) = c.feed(b"/styr\x1b[13u");
+        assert_eq!((cmd, out), (Some(StyrCommand::On), [b"/styr".as_slice(), &[0x7f; 5]].concat()));
+        let mut c = StyrCatcher::default();
+        assert_eq!(c.feed(b"\x1b[47u\x1b[115u\x1b[116u\x1b[121u\x1b[114u").1, None);
+        assert_eq!(c.feed(b"\x1b[13;1u").1, Some(StyrCommand::On));
+        // Split across reads.
+        let mut c = StyrCatcher::default();
+        assert_eq!(c.feed(b"/styr\x1b[1").1, None);
+        assert_eq!(c.feed(b"3u").1, Some(StyrCommand::On));
+        // Shift+Enter (a newline in the box) and arrows still disqualify.
+        let mut c = StyrCatcher::default();
+        assert_eq!(c.feed(b"/styr\x1b[13;2u").1, None);
+        let mut c = StyrCatcher::default();
+        assert_eq!(c.feed(b"/sty\x1b[Dr\x1b[13u").1, None);
     }
 
     fn codex_screen(file: &str) -> String {
