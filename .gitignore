@@ -13,3 +13,10 @@ DerivedData/
 ios/build/
 # Per-developer signing (see ios/Signing.xcconfig)
 ios/Signing.local.xcconfig
+
+# Android build output and machine-specific SDK path
+android/.gradle/
+android/.kotlin/
+android/build/
+android/app/build/
+android/local.properties

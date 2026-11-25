@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A ship's wheel with a prompt chevron: the Styrman mark, simplified. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="5" android:fillColor="#00000000"
+        android:pathData="M54,30a24,24 0 1,0 0.01,0z" />
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="4" android:strokeLineCap="round"
+        android:pathData="M54,22L54,30M54,78L54,86M22,54L30,54M78,54L86,54M31.4,31.4L37,37M71,71L76.6,76.6M76.6,31.4L71,37M37,71L31.4,76.6" />
+    <path android:strokeColor="#E8483F" android:strokeWidth="6" android:strokeLineCap="round" android:strokeLineJoin="round"
+        android:fillColor="#00000000" android:pathData="M45,44L56,54L45,64" />
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="5" android:strokeLineCap="round"
+        android:pathData="M58,64L66,64" />
+</vector>

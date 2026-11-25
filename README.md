@@ -67,12 +67,24 @@ Phase 1 (Claude Code + iPhone app), phase 2 (Antigravity `agy`) and phase 3 (Cod
 | 7. launchd, auth hardening, docs | ✅ |
 | Phase 2: Antigravity (`agy`) adapter | ✅ |
 | Phase 3: Codex CLI adapter | ✅ |
+| Voice, new sessions from the phone, Android app, Homebrew, push relay | ✅ |
 
-Next: voice (dictate prompts, hear replies, with a different voice per agent), a push relay and TestFlight, a Homebrew tap with prebuilt binaries, and an Android app.
+Next: deploying the push relay, the first TestFlight build, and notifications on Android.
 
 ## Install
 
-You need macOS (Apple Silicon), a Rust toolchain, Xcode with XcodeGen for the app, Tailscale on the Mac and the iPhone, and a paid Apple Developer account for push notifications.
+You need an Apple Silicon Mac and Tailscale on the Mac and the phone.
+
+With Homebrew:
+
+```sh
+brew tap christoffermattssonlangseth/styrman
+brew trust christoffermattssonlangseth/styrman   # Homebrew asks you to trust third-party taps
+brew install styrman
+styr setup
+```
+
+From source (needs a Rust toolchain; Xcode with XcodeGen for the iPhone app, and a paid Apple Developer account for your own push notifications):
 
 ```sh
 git clone https://github.com/christoffermattssonlangseth/styrman && cd styrman
@@ -120,6 +132,16 @@ Scan it with the iPhone Camera and tap **Pair**. `styr devices` lists paired pho
 - **Prompts from the phone** are typed into agy's prompt box.
 
 Without the alias, agy sessions are mirrored read-only. In agy's `auto` mode, agy approves most actions itself, so cards only appear for the ones it would ask about.
+
+## Android
+
+`android/` is a Kotlin + Jetpack Compose app with the same features as the iPhone app (sessions, approvals, messages, starting sessions, voice both ways with a voice per agent), except notifications: styrd sends those through Apple's push service only, for now.
+
+```sh
+cd android && ./gradlew assembleDebug      # needs a JDK 21 and the Android SDK (compileSdk 37.2)
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+styr pair                                  # scan the QR code with the camera app, or paste the link
+```
 
 ## Codex
 
