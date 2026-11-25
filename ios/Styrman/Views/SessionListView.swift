@@ -195,7 +195,8 @@ struct SettingsView: View {
 struct VoiceSettings: View {
     @State private var speaker = Speaker.shared
     @State private var choices: [AgentKind: String] = [:]
-    private let voices = VoiceChoice.available()
+    @State private var voices = VoiceChoice.available()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         Section {
@@ -204,7 +205,7 @@ struct VoiceSettings: View {
                 HStack {
                     AgentBadge(agent: agent)
                     Picker("Voice", selection: binding(agent)) {
-                        Text("Automatic").tag("")
+                        Text(automaticLabel(agent)).tag("")
                         ForEach(voices, id: \.identifier) { v in
                             Text(label(v)).tag(v.identifier)
                         }
@@ -222,14 +223,33 @@ struct VoiceSettings: View {
                     .accessibilityLabel("Preview \(agent.displayName)'s voice")
                 }
             }
+            if !VoiceChoice.hasPremiumVoice {
+                Label {
+                    Text("For the most natural sound, download a **Premium** voice or two: iOS Settings › Accessibility › Read & Speak › Voices › English. Styrman picks them up automatically.")
+                } icon: {
+                    Image(systemName: "sparkles")
+                }
+                .font(.footnote)
+            }
         } header: {
             Text("Voice")
         } footer: {
-            Text("Each agent reads its replies in its own voice. Dictation and speech happen on this iPhone. For more natural voices, download Enhanced or Premium voices in Settings › Accessibility › Read & Speak › Voices.")
+            Text("Each agent reads its replies in its own voice. Dictation and speech happen on this iPhone.")
         }
-        .onAppear {
-            for a in VoiceChoice.agents { choices[a] = VoiceChoice.chosen(a) ?? "" }
-        }
+        .onAppear { reload() }
+        // Back from iOS Settings after downloading a voice.
+        .onChange(of: scenePhase) { _, phase in if phase == .active { reload() } }
+    }
+
+    private func reload() {
+        voices = VoiceChoice.available()
+        for a in VoiceChoice.agents { choices[a] = VoiceChoice.chosen(a) ?? "" }
+    }
+
+    private func automaticLabel(_ agent: AgentKind) -> String {
+        guard VoiceChoice.chosen(agent) == nil || choices[agent] == "",
+              let v = VoiceChoice.voice(for: agent) else { return "Automatic" }
+        return "Automatic (\(label(v)))"
     }
 
     private func binding(_ agent: AgentKind) -> Binding<String> {

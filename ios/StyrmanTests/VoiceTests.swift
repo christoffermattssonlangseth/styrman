@@ -30,6 +30,12 @@ import Testing
         #expect(spoken.contains("first\nsecond"))
     }
 
+    @Test func pathsAndSymbolsReadNaturally() {
+        #expect(SpeechText.clean("I changed crates/styr/src/pty.rs -> it builds") == "I changed pty.rs to it builds")
+        #expect(SpeechText.clean("Done ✅ e.g. this") == "Done for example this")
+        #expect(SpeechText.paragraphs("First.\n\n- one\n- two") == ["First.", "- one", "- two"])
+    }
+
     @Test func bareLinksAreNotReadOut() {
         #expect(SpeechText.clean("Open https://github.com/a/b/pull/12 now") == "Open a link now")
     }
@@ -40,9 +46,7 @@ import Testing
         if available >= 3 {
             #expect(Set(ids).count == 3, "three distinct voices from \(available)")
         }
-        // Even with one voice, pitch keeps them apart.
-        let pitches = VoiceChoice.agents.map { VoiceChoice.style(for: $0).pitch }
-        #expect(Set(pitches).count == 3)
+
     }
 
     @Test func aChosenVoiceWins() throws {

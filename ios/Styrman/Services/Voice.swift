@@ -163,19 +163,28 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
         if speakingId == id { stop() } else { speak(text, id: id, agent: agent) }
     }
 
+    /// Utterances of the current reply still to finish.
+    private var remaining = 0
+
     func speak(_ text: String, id: String, agent: AgentKind) {
-        let spoken = SpeechText.clean(text)
-        guard !spoken.isEmpty else { return }
+        let parts = SpeechText.paragraphs(SpeechText.clean(text))
+        guard !parts.isEmpty else { return }
         stop()
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio, options: [.duckOthers])
         try? AVAudioSession.sharedInstance().setActive(true)
-        let u = AVSpeechUtterance(string: spoken)
-        let style = VoiceChoice.style(for: agent)
-        u.voice = VoiceChoice.voice(for: agent)
-        u.pitchMultiplier = style.pitch
-        u.rate = style.rate
+        let voice = VoiceChoice.voice(for: agent)
         speakingId = id
-        synth.speak(u)
+        remaining = parts.count
+        // One utterance per paragraph or list item, with a short breath between them:
+        // closer to how a person reads than one long run.
+        for (i, part) in parts.enumerated() {
+            let u = AVSpeechUtterance(string: part)
+            u.voice = voice
+            u.rate = VoiceChoice.rate
+            u.pitchMultiplier = 1.0
+            u.postUtteranceDelay = i == parts.count - 1 ? 0 : 0.3
+            synth.speak(u)
+        }
     }
 
     /// Hear what an agent sounds like (settings).
@@ -184,6 +193,7 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     func stop() {
+        remaining = 0
         if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
         speakingId = nil
     }
@@ -197,7 +207,8 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
     }
 
     private func done() {
-        guard !synth.isSpeaking else { return }
+        remaining = max(0, remaining - 1)
+        guard remaining == 0 else { return }
         speakingId = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
@@ -209,16 +220,13 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
 enum VoiceChoice {
     static let agents: [AgentKind] = [.claude, .codex, .antigravity]
 
-    struct Style { let pitch: Float; let rate: Float }
+    /// A touch calmer than the default rate, at each voice's own pitch: pitch-shifting
+    /// a voice is what makes it sound synthetic.
+    static let rate: Float = AVSpeechUtteranceDefaultSpeechRate * 0.96
 
-    static func style(for agent: AgentKind) -> Style {
-        let base = AVSpeechUtteranceDefaultSpeechRate
-        switch agent {
-        case .claude: return Style(pitch: 1.0, rate: base)
-        case .codex: return Style(pitch: 0.9, rate: base * 1.02)
-        case .antigravity: return Style(pitch: 1.12, rate: base)
-        default: return Style(pitch: 1.0, rate: base)
-        }
+    /// Whether a Premium voice is installed for this language (they sound best).
+    static var hasPremiumVoice: Bool {
+        available().contains { $0.quality == .premium }
     }
 
     /// Voices for the phone's language, best quality first.
@@ -272,6 +280,13 @@ enum VoiceChoice {
 
 /// Turn a Markdown reply into something pleasant to listen to.
 enum SpeechText {
+    /// Paragraphs and list items, read one after another with a short pause.
+    static func paragraphs(_ text: String) -> [String] {
+        text.components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
     static func clean(_ markdown: String) -> String {
         var s = markdown
         // Fenced code blocks: say that there is code rather than reading it.
@@ -289,6 +304,13 @@ enum SpeechText {
         s = s.replacingOccurrences(of: "(?m)^\\s*>\\s?", with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: "(?m)^\\s*\\|?[-:| ]+\\|[-:| ]*$", with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: "|", with: ", ")
+        // Paths: just the file name ("src/views/App.swift" → "App.swift").
+        s = s.replacingOccurrences(of: "(?<![\\w.])(?:~|\\.{1,2})?(?:/?[\\w.-]+/)+([\\w.-]+)", with: "$1", options: .regularExpression)
+        // Symbols people don't say.
+        for (from, to) in [("->", " to "), ("=>", " to "), ("→", " to "), ("e.g.", "for example"), ("i.e.", "that is"),
+                           ("&&", " and "), ("✓", ""), ("✅", ""), ("✗", ""), ("❌", ""), ("…", "...")] {
+            s = s.replacingOccurrences(of: from, with: to)
+        }
         s = s.replacingOccurrences(of: "[ \\t]+", with: " ", options: .regularExpression)
         s = s.replacingOccurrences(of: "\\n{2,}", with: "\n", options: .regularExpression)
         return s.trimmingCharacters(in: .whitespacesAndNewlines)
