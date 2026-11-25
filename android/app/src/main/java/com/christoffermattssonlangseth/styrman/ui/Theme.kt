@@ -90,6 +90,27 @@ fun toolIcon(k: ToolKind): ImageVector = when (k) {
 
 val Mono = FontFamily.Monospace
 
+/** A filled circle in the agent's colour with its initial: tells agents apart at a glance. */
+@Composable
+fun AgentAvatar(agent: AgentKind, size: androidx.compose.ui.unit.Dp = 34.dp) {
+    Box(
+        Modifier.size(size).background(agentColor(agent), CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            when (agent) {
+                AgentKind.Claude -> "✳"
+                AgentKind.Codex -> "</>"
+                AgentKind.Antigravity -> "⚛"
+                else -> ">_"
+            },
+            color = Color.White,
+            fontWeight = FontWeight.Bold,
+            fontSize = (size.value * 0.36f).sp,
+        )
+    }
+}
+
 @Composable
 fun AgentBadge(agent: AgentKind) {
     val c = agentColor(agent)

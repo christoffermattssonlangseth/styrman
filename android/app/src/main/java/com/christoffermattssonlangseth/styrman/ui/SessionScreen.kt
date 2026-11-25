@@ -67,6 +67,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -127,10 +130,15 @@ fun SessionScreen(connection: DaemonConnection, speaker: Speaker, sessionId: Str
     Scaffold(
         topBar = {
             TopAppBar(
+                // The bar takes the agent's colour, so it's always clear who you're talking to.
+                colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
+                    containerColor = agentColor(agent).copy(alpha = 0.22f)
+                        .compositeOver(MaterialTheme.colorScheme.surface),
+                ),
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
                 title = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (summary != null) { AgentBadge(summary.agent); Spacer(Modifier.width(6.dp)) }
+                        if (summary != null) { AgentAvatar(summary.agent, 26.dp); Spacer(Modifier.width(8.dp)) }
                         Text(summary?.repoName ?: "Session", maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 },
@@ -243,9 +251,10 @@ private fun Reply(item: TimelineItem.Assistant, agent: AgentKind, speaker: Speak
     val tint = agentColor(agent)
     var copied by remember { mutableStateOf(false) }
     LaunchedEffect(copied) { if (copied) { delay(1500); copied = false } }
-    Row(Modifier.fillMaxWidth()) {
-        if (playing) Box(Modifier.width(3.dp).heightIn(min = 24.dp).background(tint, RoundedCornerShape(2.dp)))
-        Column(Modifier.padding(start = if (playing) 10.dp else 0.dp)) {
+    // A thin edge in the agent's colour on every reply; solid while it's read aloud.
+    Row(Modifier.fillMaxWidth().height(androidx.compose.foundation.layout.IntrinsicSize.Min)) {
+        Box(Modifier.width(if (playing) 4.dp else 3.dp).fillMaxHeight().background(tint.copy(alpha = if (playing) 1f else 0.45f), RoundedCornerShape(2.dp)))
+        Column(Modifier.padding(start = 12.dp)) {
             SelectionContainer { Text(markdown(item.text, MaterialTheme.colorScheme.surfaceContainerHighest)) }
             Row {
                 IconButton(onClick = {

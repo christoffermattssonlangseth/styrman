@@ -58,11 +58,14 @@ struct SessionDetailView: View {
         }
         .navigationTitle(summary?.repoName ?? "Session")
         .navigationBarTitleDisplayMode(.inline)
+        // The bar takes the agent's colour, so it's always clear who you're talking to.
+        .toolbarBackground(Theme.color(for: agent).opacity(0.22), for: .navigationBar)
+        .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             if let summary {
                 ToolbarItem(placement: .principal) {
-                    HStack(spacing: 6) {
-                        AgentBadge(agent: summary.agent)
+                    HStack(spacing: 8) {
+                        AgentAvatar(agent: summary.agent, size: 26)
                         Text(summary.repoName).font(.headline).lineLimit(1)
                     }
                 }
@@ -232,11 +235,10 @@ struct ReplyView: View {
             }
             .padding(.leading, -8)
         }
-        .padding(.leading, playing ? 10 : 0)
+        .padding(.leading, 12)
+        // A thin edge in the agent's colour on every reply; solid while it's read aloud.
         .overlay(alignment: .leading) {
-            if playing {
-                Capsule().fill(tint).frame(width: 3).padding(.vertical, 2)
-            }
+            Capsule().fill(tint.opacity(playing ? 1 : 0.45)).frame(width: playing ? 4 : 3).padding(.vertical, 2)
         }
         .animation(.easeOut(duration: 0.2), value: playing)
         .sensoryFeedback(.selection, trigger: playing)

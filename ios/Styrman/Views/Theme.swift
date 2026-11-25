@@ -87,6 +87,46 @@ extension UIColor {
     }
 }
 
+extension Theme {
+    /// A glyph per agent, for its avatar.
+    static func symbol(for agent: AgentKind) -> String {
+        switch agent {
+        case .claude: "asterisk"
+        case .codex: "chevron.left.forwardslash.chevron.right"
+        case .antigravity: "atom"
+        case .pty, .unknown: "terminal"
+        }
+    }
+}
+
+/// A filled circle in the agent's colour with its glyph: tells agents apart at a glance.
+struct AgentAvatar: View {
+    let agent: AgentKind
+    var size: CGFloat = 34
+    var body: some View {
+        let c = Theme.color(for: agent)
+        Image(systemName: Theme.symbol(for: agent))
+            .font(.system(size: size * 0.42, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background(c, in: Circle())
+            .accessibilityLabel(agent.displayName)
+    }
+}
+
+/// A list row background in the agent's colour: a solid bar on the leading edge over a light tint.
+struct AgentRowBackground: View {
+    let agent: AgentKind
+    var body: some View {
+        let c = Theme.color(for: agent)
+        ZStack(alignment: .leading) {
+            Color(.secondarySystemGroupedBackground)
+            c.opacity(0.09)
+            c.frame(width: 5)
+        }
+    }
+}
+
 struct AgentBadge: View {
     let agent: AgentKind
     var body: some View {

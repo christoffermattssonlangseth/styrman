@@ -2,6 +2,7 @@ package com.christoffermattssonlangseth.styrman.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,9 +48,10 @@ fun SessionListScreen(
     onNewSession: () -> Unit,
 ) {
     val sessions = connection.sessions.toList()
+    // Busy agents first, then the ones waiting for you.
     val groups = listOf(
-        "Needs you" to sessions.filter { it.status in setOf(SessionStatus.NeedsApproval, SessionStatus.Waiting, SessionStatus.Error) },
         "Working" to sessions.filter { it.status == SessionStatus.Working },
+        "Needs you" to sessions.filter { it.status in setOf(SessionStatus.NeedsApproval, SessionStatus.Waiting, SessionStatus.Error) },
         "Done" to sessions.filter { it.status == SessionStatus.Done || it.status == SessionStatus.Unknown },
     ).filter { it.second.isNotEmpty() }
     val connected = connection.state == DaemonConnection.State.Connected
@@ -112,19 +114,29 @@ private fun SwipeRow(connection: DaemonConnection, s: SessionSummary, onOpen: (S
             }
         },
     ) {
-        Column(
+        val c = agentColor(s.agent)
+        // A bar in the agent's colour on the leading edge over a light tint of it.
+        Row(
             Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)
-                .clickable { onOpen(s.id) }.padding(horizontal = 16.dp, vertical = 12.dp),
+                .background(c.copy(alpha = 0.09f))
+                .clickable { onOpen(s.id) }
+                .drawBehind { drawRect(c, size = size.copy(width = 5.dp.toPx())) }
+                .padding(start = 18.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                AgentBadge(s.agent)
-                Spacer(Modifier.width(8.dp))
-                Text(s.repoName, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                StatusChip(s.status)
+            AgentAvatar(s.agent)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(s.agent.displayName, color = c, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.width(6.dp))
+                    Text(s.repoName, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                s.title?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
-            s.title?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
+            StatusChip(s.status)
         }
         HorizontalDivider()
     }

@@ -25,8 +25,9 @@ struct SessionListView: View {
                         }
                     }
                 }
-                section("Needs you", needsYou)
+                // Busy agents first, then the ones waiting for you.
                 section("Working", working)
+                section("Needs you", needsYou)
                 section("Done", showAllDone ? done : Array(done.prefix(5)))
                 if done.count > 5 {
                     Button(showAllDone ? "Show fewer" : "Show all \(done.count) finished sessions") {
@@ -86,6 +87,7 @@ struct SessionListView: View {
             Section(title) {
                 ForEach(items) { s in
                     NavigationLink(value: s.id) { SessionRow(session: s) }
+                        .listRowBackground(AgentRowBackground(agent: s.agent))
                         .swipeActions(edge: .trailing) {
                             Button(s.status == .done ? "Remove" : "Stop sharing", role: .destructive) {
                                 connection.stopSharing(s.id)
@@ -101,10 +103,13 @@ struct SessionRow: View {
     let session: SessionSummary
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
+        HStack(alignment: .center, spacing: 12) {
+            AgentAvatar(agent: session.agent)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    AgentBadge(agent: session.agent)
+                    Text(session.agent.displayName)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(Theme.color(for: session.agent))
                     Text(session.repoName).font(.headline).lineLimit(1)
                 }
                 if let title = session.title, !title.isEmpty {
