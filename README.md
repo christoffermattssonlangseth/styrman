@@ -59,8 +59,8 @@ Design details and the reasoning behind them are in [`docs/design.md`](docs/desi
 | 1. Daemon, Unix socket, SQLite, `styr status` | ✅ done |
 | 2. `styr hook` plus the Claude plugin (mirroring only) and the fake-agent test harness | ✅ done |
 | 3. iOS app: pairing and live sessions (read-only) | ✅ done |
-| 4. Permission round-trip | next |
-| 5. Prompts from the phone | |
+| 4. Permission round-trip | ✅ done |
+| 5. Prompts from the phone | next |
 | 6. Push notifications | |
 | 7. Pairing and auth hardening, launchd, install docs | |
 
@@ -98,6 +98,14 @@ Optional: `alias claude='styr claude'` (likewise `agy`, `codex`). This runs the 
 
 **Privacy.** Until you type `/styr`, Styrman keeps only a session's start and end (for `styr status --all`). Your prompts, Claude's replies and tool calls are not stored, and nothing about the session is visible to the phone.
 
+### Approving from the phone
+
+When a shared session needs permission, the phone shows a card with **Allow once**, **Always allow** (when Claude offers a "don't ask again" rule), and **Deny**. Claude Code shows its own prompt in the terminal at the same time, and whichever answer comes first wins. Answering at the keyboard closes the card on the phone, and answering on the phone dismisses the terminal prompt. Nothing is ever approved automatically.
+
+The phone can answer for 9 minutes; set `STYR_PERMISSION_TIMEOUT` (seconds) on `styrd` to change that. Unshared sessions never wait.
+
+If your Claude Code runs in `auto` permission mode, it approves routine actions itself, so cards only appear for the actions it would ask you about.
+
 ### The iPhone app
 
 ```sh
@@ -117,7 +125,8 @@ The phone reaches `styrd` over Tailscale only. Have Tailscale running on both th
 
 ```sh
 cargo test --workspace                          # unit + end-to-end tests (real styr binary, in-process styrd)
-cargo run -p styr-testkit --bin styr-fake-agent  # play a realistic demo session into the running styrd
+cargo run -p styr-testkit --bin styr-fake-agent  # demo session; pauses at a permission until you answer on the phone
+cargo run -p styr-testkit --bin styr-fake-phone  # a scripted phone that answers the next permission request
 STYR_HOOK_RECORD=/tmp/hooks.jsonl claude …       # record raw hook payloads as fixtures
 ```
 

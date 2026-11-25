@@ -230,6 +230,14 @@ impl Store {
         Ok((rec, created))
     }
 
+    pub fn set_title_if_empty(&mut self, id: &SessionId, title: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE sessions SET title = ?2 WHERE id = ?1 AND (title IS NULL OR title = '')",
+            params![id.as_str(), title],
+        )?;
+        Ok(())
+    }
+
     pub fn set_shared(&mut self, id: &SessionId, shared: bool, now: TimestampMs) -> Result<()> {
         self.conn.execute(
             "UPDATE sessions SET shared = ?2, updated_ms = ?3 WHERE id = ?1",

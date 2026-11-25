@@ -1838,11 +1838,14 @@ name = "styr-testkit"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "futures-util",
+ "reqwest",
  "serde_json",
  "styr-core",
  "styrd",
  "tempfile",
  "tokio",
+ "tokio-tungstenite 0.30.0",
 ]
 
 [[package]]
@@ -1869,6 +1872,7 @@ dependencies = [
  "styr-core",
  "subtle",
  "tempfile",
+ "thiserror",
  "tokio",
  "tokio-tungstenite 0.30.0",
  "tracing",

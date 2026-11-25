@@ -72,7 +72,21 @@ async fn connection(daemon: Arc<Daemon>, stream: UnixStream) -> Result<()> {
         return Ok(());
     }
     let response = match serde_json::from_str::<Request>(&line) {
-        Ok(req) => daemon.handle(req).await,
+        Ok(req) => {
+            // A hook may wait here for minutes (permission from the phone). If its
+            // process goes away meanwhile (EOF), drop the request: that cancels the
+            // wait and records the request as answered in the terminal.
+            let handle = daemon.handle(req);
+            tokio::pin!(handle);
+            let mut probe = [0u8; 1];
+            tokio::select! {
+                r = &mut handle => r,
+                _ = reader.read(&mut probe) => {
+                    tracing::debug!("ipc client went away before its answer");
+                    return Ok(());
+                }
+            }
+        }
         Err(e) => Response::Error {
             message: format!("bad request: {e}"),
         },

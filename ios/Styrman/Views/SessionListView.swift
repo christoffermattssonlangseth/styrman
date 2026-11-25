@@ -73,8 +73,11 @@ struct SessionRow: View {
                     AgentBadge(agent: session.agent)
                     Text(session.repoName).font(.headline).lineLimit(1)
                 }
+                if let title = session.title, !title.isEmpty {
+                    Text(title).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                }
                 Text(session.cwd.map(shortPath) ?? "")
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    .font(.caption).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 4) {

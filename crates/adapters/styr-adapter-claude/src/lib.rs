@@ -25,15 +25,17 @@ pub const MAX_OUTPUT_CHARS: usize = 8 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct ClaudeConfig {
-    /// How long a `PermissionRequest` hook waits for the phone before falling back to
-    /// Claude's own prompt in the terminal.
+    /// How long the phone can answer a permission request. Claude Code shows its own
+    /// prompt in the terminal at the same time (verified with 2.1.332), and whichever
+    /// answer comes first wins, so this never delays the terminal. Must stay below the
+    /// plugin's 600 s hook timeout.
     pub permission_timeout: Duration,
 }
 
 impl Default for ClaudeConfig {
     fn default() -> Self {
         Self {
-            permission_timeout: Duration::from_secs(60),
+            permission_timeout: Duration::from_secs(540),
         }
     }
 }
@@ -161,7 +163,7 @@ impl AgentAdapter for ClaudeAdapter {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             prompt_delivery: PromptDelivery::WhenIdle,
-            permissions: PermissionMode::HookBlocking,
+            permissions: PermissionMode::Concurrent,
             streaming_text: false,
             interrupt: false,
         }
@@ -285,7 +287,15 @@ impl AgentAdapter for ClaudeAdapter {
                 });
             }
             "Notification" => {
-                if let Some(text) = s(p, "message") {
+                // "Waiting for your input" and "needs your permission" are already
+                // conveyed by the session status and the permission card.
+                let msg = s(p, "message").unwrap_or_default();
+                let redundant = matches!(
+                    p.get("notification_type").and_then(Value::as_str),
+                    Some("idle_prompt" | "permission_prompt")
+                ) || msg.contains("waiting for your input")
+                    || msg.contains("needs your permission");
+                if let (false, Some(text)) = (redundant, s(p, "message")) {
                     ev.push(EventKind::Notice {
                         level: Level::Info,
                         text,

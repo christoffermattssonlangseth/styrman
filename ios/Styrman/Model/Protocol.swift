@@ -350,8 +350,9 @@ enum ClientMsg: Encodable, Sendable {
     case listSessions
     case subscribe(session: String, sinceSeq: UInt64)
     case unsubscribe(session: String)
+    case resolvePermission(session: String, request: String, option: String)
 
-    private enum K: String, CodingKey { case type, session, sinceSeq = "since_seq" }
+    private enum K: String, CodingKey { case type, session, command, request, option, sinceSeq = "since_seq" }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: K.self)
@@ -362,6 +363,12 @@ enum ClientMsg: Encodable, Sendable {
             try c.encode("subscribe", forKey: .type); try c.encode(s, forKey: .session); try c.encode(since, forKey: .sinceSeq)
         case .unsubscribe(let s):
             try c.encode("unsubscribe", forKey: .type); try c.encode(s, forKey: .session)
+        case .resolvePermission(let s, let request, let option):
+            try c.encode("command", forKey: .type); try c.encode(s, forKey: .session)
+            var cmd = c.nestedContainer(keyedBy: K.self, forKey: .command)
+            try cmd.encode("resolve_permission", forKey: .type)
+            try cmd.encode(request, forKey: .request)
+            try cmd.encode(option, forKey: .option)
         }
     }
 }

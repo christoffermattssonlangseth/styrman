@@ -27,6 +27,7 @@ base64 = "0.23.1"
 hex = "0.4.3"
 futures-util = "0.3.34"
 gethostname = "1.1.0"
+thiserror = "2.0.21"
 
 [dev-dependencies]
 reqwest = { version = "0.13.5", features = ["json"] }

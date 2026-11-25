@@ -4,6 +4,7 @@ pub mod api;
 pub mod auth;
 pub mod daemon;
 pub mod ipc;
+pub mod permissions;
 pub mod store;
 
 use anyhow::{Context, Result, bail};
@@ -36,10 +37,25 @@ pub fn lock_instance(paths: &Paths) -> Result<InstanceLock> {
     }
 }
 
+/// How long the phone can answer a permission: `STYR_PERMISSION_TIMEOUT` seconds
+/// (default 540). The terminal prompt is shown in parallel either way.
+pub fn permission_timeout() -> std::time::Duration {
+    let secs = std::env::var("STYR_PERMISSION_TIMEOUT")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .filter(|s| (1..=540).contains(s)) // stays below the plugin's 600 s hook timeout
+        .unwrap_or(540);
+    std::time::Duration::from_secs(secs)
+}
+
 /// Every adapter this build knows about.
 pub fn default_adapters() -> Vec<Arc<dyn styr_core::adapter::AgentAdapter>> {
     vec![
-        Arc::new(styr_adapter_claude::ClaudeAdapter::default()),
+        Arc::new(styr_adapter_claude::ClaudeAdapter {
+            config: styr_adapter_claude::ClaudeConfig {
+                permission_timeout: permission_timeout(),
+            },
+        }),
         Arc::new(styr_adapter_agy::AntigravityAdapter),
         Arc::new(styr_adapter_codex::CodexAdapter),
         Arc::new(styr_adapter_pty::PtyAdapter),

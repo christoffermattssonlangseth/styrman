@@ -11,7 +11,7 @@ struct SessionDetailView: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     ForEach(timeline.items) { item in
-                        TimelineRow(item: item, cwd: summary?.cwd).id(item.id)
+                        TimelineRow(item: item, cwd: summary?.cwd, sessionId: sessionId).id(item.id)
                     }
                     if !timeline.isLive {
                         HStack { Spacer(); ProgressView(); Spacer() }.padding()
@@ -31,6 +31,27 @@ struct SessionDetailView: View {
         .toolbar {
             if let summary {
                 ToolbarItem(placement: .topBarTrailing) { StatusChip(status: summary.status) }
+            }
+        }
+        .overlay {
+            if timeline.isLive && !timeline.hasContent {
+                ContentUnavailableView {
+                    Label("Nothing yet", systemImage: "ellipsis.bubble")
+                } description: {
+                    Text("Prompts, tool calls and replies from the terminal show up here as they happen.")
+                }
+            }
+        }
+        .overlay(alignment: .top) {
+            if let error = connection.lastError {
+                Text(error)
+                    .font(.footnote).padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(.thinMaterial, in: Capsule())
+                    .padding(.top, 8)
+                    .task {
+                        try? await Task.sleep(for: .seconds(3))
+                        connection.lastError = nil
+                    }
             }
         }
         .safeAreaInset(edge: .bottom) {
@@ -59,6 +80,7 @@ func displayTitle(_ tool: ToolInfo, cwd: String?) -> String {
 struct TimelineRow: View {
     let item: TimelineItem
     var cwd: String? = nil
+    var sessionId: String = ""
 
     var body: some View {
         switch item {
@@ -87,7 +109,7 @@ struct TimelineRow: View {
         case .tool(_, let tool):
             ToolCallRow(item: tool, title: displayTitle(tool.tool, cwd: cwd))
         case .permission(_, let p):
-            PermissionCard(item: p, title: displayTitle(p.tool, cwd: cwd))
+            PermissionCard(item: p, title: displayTitle(p.tool, cwd: cwd), sessionId: sessionId)
         case .plan(_, let entries):
             PlanCard(entries: entries)
         case .notice(_, let text, let warning):
@@ -145,38 +167,63 @@ struct ToolCallRow: View {
 }
 
 struct PermissionCard: View {
+    @Environment(DaemonConnection.self) private var connection
     let item: PermissionItem
     let title: String
+    let sessionId: String
+    @State private var sent: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label(item.isOpen ? "Permission needed" : "Permission", systemImage: "hand.raised.fill")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(item.isOpen ? Theme.accent : .secondary)
-            Text(title).font(item.tool.kind == .execute ? Theme.mono : .body)
+            Text(title).font(item.tool.kind == .execute ? Theme.mono : .body).textSelection(.enabled)
             if let reason = item.reason { Text(reason).font(.footnote).foregroundStyle(.secondary) }
             if item.isOpen {
-                HStack(spacing: 8) {
-                    ForEach(item.options) { opt in
-                        Button(opt.label) {}
-                            .buttonStyle(.bordered)
-                            .tint(opt.kind.isAllow ? .primary : Theme.accent)
-                            .disabled(true)
-                    }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { buttons }
+                    VStack(alignment: .leading, spacing: 8) { buttons }
                 }
-                Text("Answer in the terminal for now; approving from the phone is coming next.")
-                    .font(.caption).foregroundStyle(.secondary)
+                countdown
             } else if let text = item.resolutionText {
                 Text(text).font(.footnote).foregroundStyle(.secondary)
             }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 14)
-                .fill(item.isOpen ? Theme.accent.opacity(0.08) : Color.clear)
-        )
+        .background(RoundedRectangle(cornerRadius: 14).fill(item.isOpen ? Theme.accent.opacity(0.08) : Color.clear))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(item.isOpen ? Theme.accent.opacity(0.6) : Color.secondary.opacity(0.3)))
+        .sensoryFeedback(.success, trigger: item.isOpen) { wasOpen, isOpen in wasOpen && !isOpen && sent != nil }
+    }
+
+    @ViewBuilder private var buttons: some View {
+        ForEach(item.options) { opt in
+            Button {
+                if connection.resolvePermission(session: sessionId, request: item.request, option: opt.id) {
+                    sent = opt.id
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    if sent == opt.id { ProgressView().controlSize(.mini) }
+                    Text(opt.label)
+                }
+                .frame(minHeight: 30)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(opt.kind.isAllow ? (opt.kind == .allowOnce ? Theme.ink.opacity(0.85) : .gray) : Theme.accent)
+            .disabled(sent != nil || connection.state != .connected)
+        }
+    }
+
+    @ViewBuilder private var countdown: some View {
+        if let expires = item.expiresAt {
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                let left = Int(expires.timeIntervalSince(ctx.date).rounded(.up))
+                Text(left > 0 ? "Answer here or in the terminal" : "Answer in the terminal")
+                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            }
+        }
     }
 }
 

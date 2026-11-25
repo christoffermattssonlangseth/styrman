@@ -21,6 +21,7 @@ fn main() {
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "/tmp".into());
     let mut replay: Option<PathBuf> = None;
+    let mut wait_for_phone = true;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--styr" => styr = args.next().map(PathBuf::from),
@@ -29,6 +30,7 @@ fn main() {
             "--session" => session = args.next().unwrap_or(session),
             "--cwd" => cwd = args.next().unwrap_or(cwd),
             "--replay" => replay = args.next().map(PathBuf::from),
+            "--no-wait" => wait_for_phone = false,
             "-h" | "--help" => {
                 eprintln!(
                     "usage: styr-fake-agent [--styr PATH] [--delay-ms N] [--no-share] [--session ID] [--cwd DIR] [--replay FILE]"
@@ -57,6 +59,11 @@ fn main() {
         None => demo(&session, &cwd, share),
     };
     for (event, payload) in steps {
+        if event == "PermissionRequest" {
+            permission_step(&runner, &payload, wait_for_phone);
+            std::thread::sleep(Duration::from_millis(delay));
+            continue;
+        }
         let out = runner.run(&event, &payload);
         let reply = out.stdout.trim();
         println!(
@@ -116,4 +123,43 @@ fn demo(session: &str, cwd: &str, share: bool) -> Vec<(String, serde_json::Value
          starving the in-process daemon. I moved the read into spawn_blocking; all 4 tests pass.",
     ));
     steps
+}
+
+/// A permission hook blocks while the session is shared. Either wait for the phone to
+/// answer (up to 2 minutes), or after a moment act like Claude does when the user
+/// answers in the terminal: kill the hook.
+fn permission_step(runner: &HookRunner, payload: &serde_json::Value, wait_for_phone: bool) {
+    use std::io::Read;
+    let mut child = runner.spawn("PermissionRequest", payload);
+    let limit = if wait_for_phone {
+        Duration::from_secs(120)
+    } else {
+        Duration::from_millis(1500)
+    };
+    if wait_for_phone {
+        println!("PermissionRequest  waiting for an answer on the phone (2 min)…");
+    }
+    let start = std::time::Instant::now();
+    while start.elapsed() < limit {
+        if let Ok(Some(_)) = child.try_wait() {
+            let mut out = String::new();
+            if let Some(mut s) = child.stdout.take() {
+                let _ = s.read_to_string(&mut out);
+            }
+            let reply = out.trim();
+            println!(
+                "PermissionRequest  answered: {}",
+                if reply.is_empty() {
+                    "(no answer: terminal prompt)"
+                } else {
+                    reply
+                }
+            );
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    println!("PermissionRequest  answered in the (simulated) terminal");
 }

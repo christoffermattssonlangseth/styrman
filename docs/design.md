@@ -1,6 +1,6 @@
 # Styrman design (phase 1 proposal)
 
-Status: **approved; checkpoints 1–3 built.** Verified findings are recorded in §8.
+Status: **approved; checkpoints 1–4 built.** Verified findings are recorded in §8.
 
 ## 1. What the three agents actually offer
 
@@ -250,7 +250,7 @@ Each checkpoint ends with something runnable and its tests green.
 
 ## 7. Known risks and verification items
 
-- **Claude terminal prompt while the hook waits.** If the terminal prompt only appears after the hook returns, then while a session is shared, prompts wait up to the phone timeout (default 60 s, configurable) before appearing in the terminal. This will be measured in checkpoint 4. If it's bad, mitigations include a shorter timeout or a "phone mode" toggle.
+- ~~**Claude terminal prompt while the hook waits.**~~ This turned out to be a non-issue: Claude Code shows the terminal prompt alongside the hook (§8).
 - **Channels** is a research preview behind `--dangerously-load-development-channels`. It may change, so `asyncRewake` is the fallback.
 - **iOS App Transport Security and plain `ws://` over Tailscale.** Needs an ATS exception, or HTTPS via `tailscale cert`. To be decided in checkpoint 7.
 - **agy** has no "would-prompt" signal. Its tool-approval UX on the phone is weaker until a better interface exists.
@@ -262,3 +262,10 @@ Each checkpoint ends with something runnable and its tests green.
 - **Closing permission cards.** Until the phone can answer (checkpoint 4), an open request is resolved as `Cancelled{by: Terminal}` once Claude moves on: `PostToolUse`, `PostToolUseFailure`, `PermissionDenied`, `Stop`, or the next prompt.
 - **Exit codes.** `styr hook` is dispatched before argument parsing. Exit code 2 means "block" to Claude Code, so the helper must never use it.
 - **iOS App Transport Security and Tailscale.** `NSAllowsLocalNetworking` does not cover Tailscale's `100.64/10` addresses: pairing to `http://100.x` failed with `-1022` in the simulator. The fix is to connect via the MagicDNS name. `styrd` reads it from `tailscale status --json` and advertises `ws://<host>.<tailnet>.ts.net:4719` first, and the app has an ATS exception only for `ts.net`. This was verified in the simulator and installed on a physical iPhone 17e.
+- **Permission round-trip, interactive Claude Code 2.1.332.** This was measured by driving a real TUI session through a pseudo-terminal.
+  - Claude shows its terminal permission prompt about 2 s after the request, *while* our `PermissionRequest` hook is still waiting.
+  - If the user answers in the terminal, the tool runs immediately and Claude cancels the hook process. `styrd` sees the IPC socket close and records `Cancelled{by: Terminal}`.
+  - If the phone answers, the tool runs immediately and the terminal prompt disappears.
+  - If nobody answers, the terminal prompt stays up.
+  - So the Claude adapter is `PermissionMode::Concurrent`. The phone's answer window defaults to 540 s, below the plugin's 600 s hook timeout, and never delays the terminal.
+- **Permission mode `auto`.** In `auto`, Claude's classifier approves routine actions itself, and `PermissionRequest` only fires for the ones it would ask about.

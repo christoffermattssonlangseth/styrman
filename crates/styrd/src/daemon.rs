@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use styr_core::StatusTracker;
-use styr_core::adapter::{AgentAdapter, HookDecision, RawHook, SessionView};
+use styr_core::adapter::{AgentAdapter, HookDecision, RawHook, SessionView, WaitFor};
 use styr_core::event::{Event, EventKind, EventSource, PermissionOutcome, Resolver, now_ms};
 use styr_core::ids::{AgentKind, NativeSessionRef, SessionId};
 use styr_core::ipc::{Request, Response, SessionSummary, SessionUpdate};
@@ -34,11 +34,26 @@ pub struct Daemon {
     /// Device ids revoked while connected; their WebSockets close.
     pub revoked: broadcast::Sender<String>,
     adapters: HashMap<AgentKind, Arc<dyn AgentAdapter>>,
+    pub(crate) broker: crate::permissions::Broker,
 }
 
 struct Inner {
     store: Store,
     trackers: HashMap<SessionId, StatusTracker>,
+}
+
+/// A short session title from the first prompt (one line, ≤ 80 chars).
+fn first_line_title(text: &str) -> String {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    if line.chars().count() <= 80 {
+        line.to_owned()
+    } else {
+        format!("{}…", line.chars().take(79).collect::<String>())
+    }
 }
 
 fn always_persisted(kind: &EventKind) -> bool {
@@ -84,6 +99,7 @@ impl Daemon {
             revoked: broadcast::channel(16).0,
             api_urls: Mutex::new(Vec::new()),
             adapters: adapters.into_iter().map(|a| (a.kind(), a)).collect(),
+            broker: Default::default(),
         }))
     }
 
@@ -152,12 +168,34 @@ impl Daemon {
         {
             events.insert(0, EventKind::SharingChanged { shared });
         }
+        let options_for = |request: &styr_core::ids::RequestId| {
+            events.iter().find_map(|e| match e {
+                EventKind::PermissionRequested {
+                    request: r,
+                    options,
+                    ..
+                } if r == request => Some(options.clone()),
+                _ => None,
+            })
+        };
+        let wait = match &plan.wait {
+            Some(WaitFor::Permission { request, timeout }) => {
+                options_for(request).map(|o| (request.clone(), o, *timeout))
+            }
+            _ => None,
+        };
         self.ingest(&update, EventSource::Hook, events)?;
         if let Some(reply) = plan.reply {
             return Ok(reply);
         }
-        // Waiting for the phone (permissions, prompts) lands in checkpoints 4-5;
-        // until then every hook passes straight through.
+        let shared_now = plan.set_sharing.unwrap_or(view.shared);
+        if let (true, Some((request, options, timeout))) = (shared_now, wait) {
+            // Only shared sessions ever wait for the phone; others pass straight through.
+            let outcome = self
+                .wait_for_permission(view.id.clone(), native, request, options, timeout)
+                .await;
+            return Ok(HookDecision::Permission(outcome));
+        }
         Ok(HookDecision::PassThrough)
     }
 
@@ -187,8 +225,15 @@ impl Daemon {
         let mut published = Vec::new();
         let tracker = inner.trackers.entry(rec.id.clone()).or_default();
         let mut shared = rec.shared;
+        let mut title: Option<String> = None;
         for kind in events {
             tracker.apply(&kind);
+            if let EventKind::UserMessage { text, .. } = &kind
+                && rec.title.is_none()
+                && title.is_none()
+            {
+                title = Some(first_line_title(text));
+            }
             if let EventKind::SharingChanged { shared: s } = kind {
                 inner.store.set_shared(&rec.id, s, now)?;
                 shared = s;
@@ -200,6 +245,9 @@ impl Daemon {
                     published.push(ev);
                 }
             }
+        }
+        if let Some(t) = title {
+            inner.store.set_title_if_empty(&rec.id, &t)?;
         }
         drop(g);
         // No subscribers is fine.

@@ -92,12 +92,44 @@ fn styr_shares_then_mirrors_the_session() {
     let id = s.next_tool_id();
     let input = json!({"command": "rm -rf target", "description": "clean"});
     steps.push(s.pre_tool(&id, "Bash", input.clone()));
-    steps.push(s.permission("Bash", input.clone()));
     for (e, p) in &steps {
         let out = r.run(e, p);
         assert_eq!((out.exit_code, out.stdout.as_str()), (0, ""), "{e}");
     }
-    assert_eq!(d.sessions(false)[0].status, SessionStatus::NeedsApproval);
+    // A shared session's permission hook blocks, waiting for the phone…
+    let (e, p) = s.permission("Bash", input.clone());
+    let mut waiting = r.spawn(&e, &p);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while d.sessions(false)[0].status != SessionStatus::NeedsApproval {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "never reached needs-approval"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        waiting.try_wait().unwrap().is_none(),
+        "hook is still waiting"
+    );
+    // …until Claude cancels it because the user answered in the terminal.
+    waiting.kill().unwrap();
+    waiting.wait().unwrap();
+    while d.sessions(false)[0].status == SessionStatus::NeedsApproval {
+        assert!(std::time::Instant::now() < deadline, "card never closed");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let last = d.events("sess-1").pop().unwrap();
+    assert_eq!(
+        last.kind,
+        styr_core::event::EventKind::PermissionResolved {
+            request: match &d.events("sess-1")[d.events("sess-1").len() - 2].kind {
+                styr_core::event::EventKind::PermissionRequested { request, .. } => request.clone(),
+                other => panic!("{other:?}"),
+            },
+            outcome: styr_core::event::PermissionOutcome::Cancelled,
+            by: styr_core::event::Resolver::Terminal,
+        }
+    );
 
     // Answered in the terminal: the tool runs, the card closes.
     let (e, p) = s.post_tool(&id, "Bash", input, json!({"stdout": "", "stderr": ""}));

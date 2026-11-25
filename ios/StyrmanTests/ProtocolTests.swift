@@ -82,6 +82,20 @@ private func event(_ seq: UInt64, _ kind: String) -> String {
     }
 }
 
+@Suite struct CommandTests {
+    @Test func resolvePermissionMatchesRust() throws {
+        // Rust: ClientMsg::Command { session, command: Command::ResolvePermission { request, option } }
+        let data = try JSONEncoder().encode(ClientMsg.resolvePermission(session: "S", request: "r1", option: "allow"))
+        let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        #expect(obj["type"] as? String == "command")
+        #expect(obj["session"] as? String == "S")
+        let cmd = try #require(obj["command"] as? [String: Any])
+        #expect(cmd["type"] as? String == "resolve_permission")
+        #expect(cmd["request"] as? String == "r1")
+        #expect(cmd["option"] as? String == "allow")
+    }
+}
+
 @Suite struct PairingTests {
     @Test func parsesTheLinkStyrPairPrints() throws {
         // Same string as `link_is_url_safe` in crates/styr-core/src/phone.rs.

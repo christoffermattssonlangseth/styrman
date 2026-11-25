@@ -36,7 +36,7 @@ struct PermissionItem: Hashable, Sendable {
         }
         switch outcome {
         case .selected(_, let kind): return (kind.isAllow ? "Allowed " : "Denied ") + who
-        case .timedOut: return "No answer from the phone; asked in the terminal"
+        case .timedOut: return "Not answered from the phone in time"
         case .cancelled: return "Answered " + who
         }
     }
@@ -74,6 +74,11 @@ final class SessionTimeline {
     @ObservationIgnored private var planIndex: Int?
 
     init(sessionId: String) { self.sessionId = sessionId }
+
+    /// Anything beyond start/share markers.
+    var hasContent: Bool {
+        items.contains { if case .divider = $0 { false } else { true } }
+    }
 
     var openPermissions: [PermissionItem] {
         items.compactMap { if case .permission(_, let p) = $0, p.isOpen { p } else { nil } }

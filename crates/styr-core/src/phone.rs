@@ -132,6 +132,20 @@ mod tests {
                 since_seq: 0
             }
         );
+        let m: ClientMsg = serde_json::from_str(
+            r#"{"type":"command","session":"S","command":{"type":"resolve_permission","request":"r1","option":"allow"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            m,
+            ClientMsg::Command {
+                session: "S".into(),
+                command: Command::ResolvePermission {
+                    request: "r1".into(),
+                    option: "allow".into()
+                }
+            }
+        );
         let m: ClientMsg = serde_json::from_str(r#"{"type":"list_sessions"}"#).unwrap();
         assert_eq!(m, ClientMsg::ListSessions);
         assert_eq!(

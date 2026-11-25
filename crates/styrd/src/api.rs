@@ -437,6 +437,27 @@ impl Connection {
                 self.subs.remove(&session);
                 Ok(())
             }
+            ClientMsg::Command {
+                session,
+                command: styr_core::Command::ResolvePermission { request, option },
+            } => {
+                let visible = self.daemon.summary(&session)?.is_some_and(|s| s.shared);
+                let result = if visible {
+                    self.daemon
+                        .broker
+                        .resolve(&session, &request, &option, self.device.as_str().into())
+                        .map_err(|e| e.to_string())
+                } else {
+                    Err(format!("unknown session {session}"))
+                };
+                match result {
+                    Ok(()) => {
+                        tracing::info!(device = %self.device, %request, %option, "permission answered from the phone");
+                        Ok(())
+                    }
+                    Err(message) => send(tx, &ServerMsg::Error { message }).await,
+                }
+            }
             ClientMsg::Command { .. } => {
                 send(
                     tx,

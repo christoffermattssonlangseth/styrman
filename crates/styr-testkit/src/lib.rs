@@ -187,6 +187,30 @@ impl HookRunner {
         )
     }
 
+    /// Start a hook without waiting for it, e.g. a `PermissionRequest` that blocks
+    /// until the phone answers. Kill the child to mimic Claude cancelling the hook
+    /// (the user answered in the terminal).
+    pub fn spawn(&self, event: &str, payload: &Value) -> std::process::Child {
+        let mut child = Command::new(&self.styr_bin)
+            .arg("hook")
+            .args([self.agent.as_str(), event])
+            .env("STYR_HOME", &self.paths.data_dir)
+            .env("STYR_SOCKET", &self.paths.socket)
+            .env_remove("STYR_HOOK_RECORD")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn styr");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.to_string().as_bytes())
+            .ok();
+        child
+    }
+
     /// Run with arbitrary arguments after `hook` and arbitrary stdin bytes.
     pub fn run_raw(&self, args: &[&str], stdin: &[u8]) -> HookOutcome {
         let mut child = Command::new(&self.styr_bin)

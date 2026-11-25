@@ -21,6 +21,8 @@ final class DaemonConnection {
     private(set) var credentials: Credentials?
     private(set) var sessions: [SessionSummary] = []
     private(set) var host: String = ""
+    /// Last error the daemon reported for something this phone asked (shown briefly).
+    var lastError: String?
 
     @ObservationIgnored private var timelines: [String: SessionTimeline] = [:]
     @ObservationIgnored private var watched: Set<String> = []
@@ -142,7 +144,9 @@ final class DaemonConnection {
             timelines[sid]?.isLive = true
         case .event(let e):
             timelines[e.session]?.apply([e])
-        case .error, .unknown:
+        case .error(let message):
+            lastError = message
+        case .unknown:
             break
         }
     }
@@ -172,4 +176,13 @@ final class DaemonConnection {
     }
 
     func session(_ id: String) -> SessionSummary? { sessions.first { $0.id == id } }
+
+    /// Answer a permission request. The card closes when the daemon's
+    /// `permission_resolved` event arrives; returns false if not connected.
+    @discardableResult
+    func resolvePermission(session: String, request: String, option: String) -> Bool {
+        guard state == .connected else { return false }
+        send(.resolvePermission(session: session, request: request, option: option))
+        return true
+    }
 }
