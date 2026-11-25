@@ -7,7 +7,7 @@ use styr_core::event::{Event, EventKind, EventSource, TimestampMs};
 use styr_core::ids::{AgentKind, NativeSessionRef, SessionId};
 use styr_core::ipc::SessionUpdate;
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS sessions (
@@ -56,6 +56,11 @@ pub struct DeviceRecord {
     pub created_ms: TimestampMs,
     pub last_seen_ms: Option<TimestampMs>,
     pub revoked: bool,
+    #[serde(skip)]
+    pub push_token: Option<String>,
+    /// "sandbox" or "production".
+    #[serde(skip)]
+    pub push_env: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -108,6 +113,16 @@ impl Store {
         }
         conn.execute_batch(SCHEMA)?;
         conn.execute_batch(SCHEMA_V2)?;
+        // v3: APNs device tokens.
+        let has_push: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('devices') WHERE name = 'push_token'")?
+            .exists([])?;
+        if !has_push {
+            conn.execute_batch(
+                "ALTER TABLE devices ADD COLUMN push_token TEXT;
+                 ALTER TABLE devices ADD COLUMN push_env TEXT;",
+            )?;
+        }
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(Self { conn })
     }
@@ -349,6 +364,8 @@ impl Store {
             created_ms: r.get("created_ms")?,
             last_seen_ms: r.get("last_seen_ms")?,
             revoked: r.get::<_, i64>("revoked")? != 0,
+            push_token: r.get("push_token")?,
+            push_env: r.get("push_env")?,
         })
     }
 
@@ -375,6 +392,19 @@ impl Store {
         self.conn.execute(
             "UPDATE devices SET last_seen_ms = ?2 WHERE id = ?1",
             params![id, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_push_token(
+        &mut self,
+        id: &str,
+        token: Option<&str>,
+        env: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE devices SET push_token = ?2, push_env = ?3 WHERE id = ?1",
+            params![id, token, env],
         )?;
         Ok(())
     }

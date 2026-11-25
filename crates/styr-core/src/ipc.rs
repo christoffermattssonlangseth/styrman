@@ -54,6 +54,11 @@ pub enum Request {
     RevokeDevice {
         id: String,
     },
+    /// Reload `apns.json` + key after `styr push setup`.
+    PushReload,
+    PushStatus,
+    /// Send a test notification to every phone with a push token.
+    PushTest,
     /// Queue a prompt for a shared session, as if sent from a phone (CLI, tests).
     SendPrompt {
         session: SessionId,
@@ -100,6 +105,16 @@ pub enum Response {
     },
     Devices {
         devices: Vec<DeviceInfo>,
+    },
+    PushStatus {
+        configured: bool,
+        details: bool,
+        /// Names of paired phones that registered for notifications.
+        devices_with_token: Vec<String>,
+    },
+    PushResults {
+        /// (device id, outcome)
+        results: Vec<(String, String)>,
     },
     PromptAccepted {
         /// False: queued until the agent next stops.

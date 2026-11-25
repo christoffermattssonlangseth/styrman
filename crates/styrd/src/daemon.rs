@@ -36,6 +36,10 @@ pub struct Daemon {
     adapters: HashMap<AgentKind, Arc<dyn AgentAdapter>>,
     pub(crate) broker: crate::permissions::Broker,
     pub(crate) prompts: crate::prompts::Prompts,
+    pusher: std::sync::RwLock<Option<Arc<crate::push::Pusher>>>,
+    data_dir: Mutex<Option<std::path::PathBuf>>,
+    /// Device id → open WebSocket count (a connected app is in the foreground).
+    live: Mutex<HashMap<String, usize>>,
 }
 
 struct Inner {
@@ -102,6 +106,9 @@ impl Daemon {
             adapters: adapters.into_iter().map(|a| (a.kind(), a)).collect(),
             broker: Default::default(),
             prompts: Default::default(),
+            pusher: Default::default(),
+            data_dir: Mutex::new(None),
+            live: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -377,6 +384,65 @@ impl Daemon {
 
     // ---- phones ----
 
+    pub fn pusher(&self) -> Option<Arc<crate::push::Pusher>> {
+        self.pusher
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+
+    /// (Re)load the APNs config from the data dir.
+    pub fn reload_push(&self, dir: Option<&std::path::Path>) -> Result<bool> {
+        if let Some(d) = dir {
+            *self.data_dir.lock().unwrap_or_else(|p| p.into_inner()) = Some(d.to_path_buf());
+        }
+        let Some(dir) = self
+            .data_dir
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+        else {
+            return Ok(false);
+        };
+        let p = crate::push::Pusher::load(&dir)?.map(Arc::new);
+        let on = p.is_some();
+        *self.pusher.write().unwrap_or_else(|p| p.into_inner()) = p;
+        Ok(on)
+    }
+
+    pub(crate) fn lock_store_devices(&self) -> Result<Vec<crate::store::DeviceRecord>> {
+        self.lock().store.devices()
+    }
+
+    pub fn set_push_token(
+        &self,
+        device: &str,
+        token: Option<&str>,
+        env: Option<&str>,
+    ) -> Result<()> {
+        self.lock().store.set_push_token(device, token, env)
+    }
+
+    pub fn device_connected(&self, device: &str, up: bool) {
+        let mut g = self.live.lock().unwrap_or_else(|p| p.into_inner());
+        let n = g.entry(device.to_owned()).or_insert(0);
+        if up {
+            *n += 1;
+        } else {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                g.remove(device);
+            }
+        }
+    }
+
+    pub fn is_device_live(&self, device: &str) -> bool {
+        self.live
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .contains_key(device)
+    }
+
     /// A prompt typed on the phone for a shared session.
     pub fn send_prompt(
         &self,
@@ -468,6 +534,15 @@ impl Daemon {
         Some(dev.id)
     }
 
+    fn devices_with_token(&self) -> Vec<String> {
+        self.lock_store_devices()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|d| !d.revoked && d.push_token.is_some())
+            .map(|d| d.name)
+            .collect()
+    }
+
     pub fn devices(&self) -> Result<Vec<styr_core::ipc::DeviceInfo>> {
         Ok(self
             .lock()
@@ -532,6 +607,32 @@ impl Daemon {
                 .map(|d| Response::PromptAccepted {
                     delivered: d == crate::prompts::Delivery::Delivered,
                 }),
+            Request::PushReload => self.reload_push(None).map(|on| Response::PushStatus {
+                configured: on,
+                details: self.pusher().is_some_and(|p| p.cfg.details),
+                devices_with_token: self.devices_with_token(),
+            }),
+            Request::PushStatus => Ok(Response::PushStatus {
+                configured: self.pusher().is_some(),
+                details: self.pusher().is_some_and(|p| p.cfg.details),
+                devices_with_token: self.devices_with_token(),
+            }),
+            Request::PushTest => {
+                let n = crate::push::Notification {
+                    title: "Styrman".into(),
+                    body: "Push notifications work.".into(),
+                    session: None,
+                    category: None,
+                    collapse_id: Some("styrman-test".into()),
+                };
+                let results = self.push_to_devices(&n, true).await;
+                Ok(Response::PushResults {
+                    results: results
+                        .into_iter()
+                        .map(|(id, r)| (id, format!("{r:?}")))
+                        .collect(),
+                })
+            }
             Request::ListDevices => self.devices().map(|devices| Response::Devices { devices }),
             Request::RevokeDevice { id } => {
                 let revoked = self.lock().store.revoke_device(&id);

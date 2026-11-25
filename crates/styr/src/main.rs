@@ -69,6 +69,11 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Push notifications (APNs): setup, status, test.
+    Push {
+        #[command(subcommand)]
+        action: PushCmd,
+    },
     /// List paired phones, or revoke one.
     Devices {
         #[command(subcommand)]
@@ -83,6 +88,30 @@ enum Cmd {
     /// Launch an agent through Styrman: `styr claude …`, `styr agy …`, `styr codex …`.
     #[command(external_subcommand)]
     Launch(Vec<OsString>),
+}
+
+#[derive(Subcommand)]
+enum PushCmd {
+    /// Install your APNs key (.p8 from developer.apple.com › Keys) and turn push on.
+    Setup {
+        /// Path to AuthKey_XXXXXXXXXX.p8
+        key: std::path::PathBuf,
+        /// Key ID (default: from the file name).
+        #[arg(long)]
+        key_id: Option<String>,
+        /// Apple Developer team id.
+        #[arg(long, default_value = "7R6QL53THM")]
+        team: String,
+        /// App bundle id.
+        #[arg(long, default_value = "com.christoffermattssonlangseth.styrman")]
+        topic: String,
+    },
+    /// Show whether push is on and which phones registered.
+    Status,
+    /// Send a test notification to every registered phone.
+    Test,
+    /// Include command titles and reply excerpts in notifications (`on`/`off`).
+    Details { state: String },
 }
 
 #[derive(Subcommand)]
@@ -173,6 +202,7 @@ fn main() -> Result<()> {
             }
         }
         Cmd::Pair { url, json } => pair(url, json)?,
+        Cmd::Push { action } => push(action)?,
         Cmd::Send { session, text } => {
             let id = resolve_session(&session)?;
             let text = text.join(" ");
@@ -365,6 +395,117 @@ fn pair(url_override: Option<String>, json: bool) -> Result<()> {
         println!(
             "Note: Tailscale was not detected, so this address only works on this Mac (e.g. the iOS Simulator)."
         );
+    }
+    Ok(())
+}
+
+fn push(action: PushCmd) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let paths = Paths::resolve();
+    let cfg_path = paths.data_dir.join("apns.json");
+    let print_status = |r: Response| -> Result<()> {
+        let Response::PushStatus {
+            configured,
+            details,
+            devices_with_token,
+        } = r
+        else {
+            bail!("unexpected response");
+        };
+        println!(
+            "push: {}",
+            if configured {
+                "on"
+            } else {
+                "off (run `styr push setup <key.p8>`)"
+            }
+        );
+        if configured {
+            println!(
+                "details in notifications: {}",
+                if details { "on" } else { "off" }
+            );
+        }
+        if devices_with_token.is_empty() {
+            println!("no phone has registered yet (open the app once after updating it)");
+        } else {
+            println!("registered phones: {}", devices_with_token.join(", "));
+        }
+        Ok(())
+    };
+    match action {
+        PushCmd::Setup {
+            key,
+            key_id,
+            team,
+            topic,
+        } => {
+            let pem = std::fs::read_to_string(&key)
+                .with_context(|| format!("reading {}", key.display()))?;
+            anyhow::ensure!(
+                pem.contains("BEGIN PRIVATE KEY"),
+                "{} is not a .p8 key",
+                key.display()
+            );
+            let key_id = match key_id {
+                Some(k) => k,
+                None => key
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .and_then(|s| s.strip_prefix("AuthKey_"))
+                    .map(str::to_owned)
+                    .context("can't read the key id from the file name; pass --key-id")?,
+            };
+            anyhow::ensure!(
+                key_id.len() == 10 && key_id.chars().all(|c| c.is_ascii_alphanumeric()),
+                "key id should be 10 letters/digits"
+            );
+            std::fs::create_dir_all(&paths.data_dir)?;
+            let dest = paths.data_dir.join("apns-key.p8");
+            std::fs::write(&dest, pem)?;
+            std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o600))?;
+            let details = std::fs::read(&cfg_path)
+                .ok()
+                .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+                .and_then(|v| v["details"].as_bool())
+                .unwrap_or(false);
+            let cfg = serde_json::json!({"key_id": key_id, "team_id": team, "topic": topic, "details": details});
+            std::fs::write(&cfg_path, serde_json::to_vec_pretty(&cfg)?)?;
+            std::fs::set_permissions(&cfg_path, std::fs::Permissions::from_mode(0o600))?;
+            println!(
+                "installed key {key_id} for team {team} ({})",
+                dest.display()
+            );
+            println!(
+                "you can delete {} now if you keep a backup elsewhere",
+                key.display()
+            );
+            print_status(call(Request::PushReload)?)?;
+        }
+        PushCmd::Status => print_status(call(Request::PushStatus)?)?,
+        PushCmd::Test => {
+            let Response::PushResults { results } = call(Request::PushTest)? else {
+                bail!("unexpected response");
+            };
+            if results.is_empty() {
+                println!("nothing sent: push is off or no phone has registered");
+            }
+            for (id, r) in results {
+                println!("{}  {r}", &id[id.len().saturating_sub(8)..]);
+            }
+        }
+        PushCmd::Details { state } => {
+            let on = match state.as_str() {
+                "on" => true,
+                "off" => false,
+                _ => bail!("use `on` or `off`"),
+            };
+            let mut cfg: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&cfg_path).context("push is not set up")?)?;
+            cfg["details"] = on.into();
+            std::fs::write(&cfg_path, serde_json::to_vec_pretty(&cfg)?)?;
+            print_status(call(Request::PushReload)?)?;
+        }
     }
     Ok(())
 }

@@ -304,6 +304,14 @@ impl Connection {
         // Subscribe before reading any state so nothing falls between snapshot and stream.
         let mut bus = self.daemon.subscribe();
         let mut revoked = self.daemon.revoked.subscribe();
+        self.daemon.device_connected(&self.device, true);
+        struct Live(Arc<Daemon>, String);
+        impl Drop for Live {
+            fn drop(&mut self) {
+                self.0.device_connected(&self.1, false);
+            }
+        }
+        let _live = Live(self.daemon.clone(), self.device.clone());
         let (mut tx, mut rx) = socket.split();
         send(
             &mut tx,
@@ -432,6 +440,27 @@ impl Connection {
                 self.backfill(tx, &session).await?;
                 let last_seq = self.subs[&session];
                 send(tx, &ServerMsg::Subscribed { session, last_seq }).await
+            }
+            ClientMsg::RegisterPush { token, env } => {
+                let valid = (32..=200).contains(&token.len())
+                    && token.chars().all(|c| c.is_ascii_hexdigit())
+                    && (env == "sandbox" || env == "production");
+                if !valid {
+                    return send(
+                        tx,
+                        &ServerMsg::Error {
+                            message: "invalid push token".into(),
+                        },
+                    )
+                    .await;
+                }
+                self.daemon.set_push_token(
+                    &self.device,
+                    Some(&token.to_ascii_lowercase()),
+                    Some(&env),
+                )?;
+                tracing::info!(device = %self.device, %env, "push token registered");
+                Ok(())
             }
             ClientMsg::Unsubscribe { session } => {
                 self.subs.remove(&session);

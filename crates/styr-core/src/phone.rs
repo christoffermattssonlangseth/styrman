@@ -35,6 +35,11 @@ pub enum ClientMsg {
         session: SessionId,
         command: Command,
     },
+    /// The app's APNs device token (hex) and environment ("sandbox" | "production").
+    RegisterPush {
+        token: String,
+        env: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

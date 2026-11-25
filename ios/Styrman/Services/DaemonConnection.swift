@@ -23,6 +23,12 @@ final class DaemonConnection {
     private(set) var host: String = ""
     /// Last error the daemon reported for something this phone asked (shown briefly).
     var lastError: String?
+    /// Set when a notification was tapped: the list opens this session.
+    var requestedSession: String?
+    /// APNs device token (hex), sent to the daemon on every connection.
+    @ObservationIgnored var pushToken: String? {
+        didSet { if state == .connected { registerPush() } }
+    }
 
     @ObservationIgnored private var timelines: [String: SessionTimeline] = [:]
     @ObservationIgnored private var watched: Set<String> = []
@@ -130,6 +136,7 @@ final class DaemonConnection {
             self.host = host
             state = .connected
             for id in watched { subscribe(id) }
+            registerPush()
         case .sessions(let list):
             sessions = list.sorted { $0.updatedMs > $1.updatedMs }
         case .sessionUpdated(let s):
@@ -178,6 +185,12 @@ final class DaemonConnection {
     }
 
     func session(_ id: String) -> SessionSummary? { sessions.first { $0.id == id } }
+
+    private func registerPush() {
+        guard let pushToken else { return }
+        let env = Bundle.main.object(forInfoDictionaryKey: "StyrmanAPNsEnvironment") as? String ?? "sandbox"
+        send(.registerPush(token: pushToken, env: env == "production" ? "production" : "sandbox"))
+    }
 
     /// Send a prompt; it shows as pending until the agent picks it up.
     @discardableResult

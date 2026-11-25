@@ -6,6 +6,7 @@ pub mod daemon;
 pub mod ipc;
 pub mod permissions;
 pub mod prompts;
+pub mod push;
 pub mod store;
 
 use anyhow::{Context, Result, bail};
@@ -89,11 +90,18 @@ pub async fn run_with(
     let daemon: Arc<Daemon> = Daemon::open(store, default_adapters())?;
     let listener = ipc::bind(&paths.socket)?;
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    match daemon.reload_push(Some(&paths.data_dir)) {
+        Ok(true) => tracing::info!("push notifications on"),
+        Ok(false) => tracing::info!("push notifications off (run `styr push setup`)"),
+        Err(e) => tracing::warn!("push notifications off: {e:#}"),
+    }
+    let notifier = tokio::spawn(push::run_notifier(daemon.clone(), stop_rx.clone()));
     let api = tokio::spawn(api::run_listeners(daemon.clone(), api_cfg, stop_rx));
     tracing::info!(socket = %paths.socket.display(), db = %paths.db.display(), "styrd {} ready", styr_core::VERSION);
     let result = ipc::serve(daemon, listener, shutdown).await;
     let _ = stop_tx.send(true);
     let _ = api.await;
+    let _ = notifier.await;
     let _ = std::fs::remove_file(&paths.socket);
     tracing::info!("styrd stopped");
     result

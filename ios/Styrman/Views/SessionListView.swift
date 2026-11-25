@@ -40,6 +40,13 @@ struct SessionListView: View {
             .navigationDestination(for: String.self) { id in SessionDetailView(sessionId: id) }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .refreshable { connection.connect() }
+            .onChange(of: connection.requestedSession, initial: true) { _, id in
+                if let id {
+                    path = [id]
+                    connection.requestedSession = nil
+                }
+            }
+            .task { await AppDelegate.enablePush() }
             #if DEBUG
             // UI automation (simulator): STYR_OPEN_FIRST=1 opens the first session once it appears.
             .onChange(of: connection.sessions.first?.id) { _, id in

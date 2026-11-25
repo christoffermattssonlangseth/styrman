@@ -61,7 +61,7 @@ Design details and the reasoning behind them are in [`docs/design.md`](docs/desi
 | 3. iOS app: pairing and live sessions (read-only) | ✅ done |
 | 4. Permission round-trip | ✅ done |
 | 5. Prompts from the phone | ✅ done |
-| 6. Push notifications | next |
+| 6. Push notifications | built; verifying with a real APNs key |
 | 7. Pairing and auth hardening, launchd, install docs | |
 
 ## Try it (checkpoint 2)
@@ -116,6 +116,22 @@ Type in the message box at the bottom of a session.
 - **From the Mac:** `styr send <ID> <text>` does the same, for scripts.
 
 This uses a second, background `Stop` hook in the plugin (`async` + `asyncRewake`). It waits for a phone message and, when one arrives, exits with code 2 to wake Claude. In the terminal, the message appears as "Stop hook feedback".
+
+### Push notifications
+
+`styrd` sends notifications straight to Apple's push service (APNs). Nothing else is involved.
+
+1. Create an APNs key at developer.apple.com › Certificates, IDs & Profiles › Keys. Tick "Apple Push Notifications service" and download `AuthKey_XXXXXXXXXX.p8`.
+2. Run `styr push setup ~/Downloads/AuthKey_XXXXXXXXXX.p8`. This copies the key into Styrman's data folder (mode 0600) and turns push on.
+3. Open the app once and allow notifications. Then run `styr push test`.
+
+When notifications are sent:
+
+- **Needs approval:** when a shared session has a permission waiting 8 s after it was asked. If you answer at the keyboard first, there's no buzz.
+- **Finished:** when a turn that ran 30 s or longer ends.
+- **Never** while the app is open.
+
+By default a notification reads "Claude · repo: Needs your approval / Finished", with no commands, code or replies. `styr push details on` adds the command or the first line of Claude's reply, and that text then passes through Apple. Tapping a notification opens the session.
 
 ### The iPhone app
 

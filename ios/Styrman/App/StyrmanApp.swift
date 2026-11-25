@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct StyrmanApp: App {
+    @UIApplicationDelegateAdaptor private var appDelegate: AppDelegate
     @State private var connection = DaemonConnection()
     @State private var pendingLink: PairingLink?
     @Environment(\.scenePhase) private var scenePhase
@@ -16,7 +17,10 @@ struct StyrmanApp: App {
                 }
                 .onChange(of: scenePhase, initial: true) { _, phase in
                     switch phase {
-                    case .active: connection.connect()
+                    case .active:
+                        appDelegate.connection = connection
+                        connection.connect()
+                        if connection.credentials != nil { Task { await AppDelegate.enablePush() } }
                     case .background: connection.disconnect()
                     default: break
                     }

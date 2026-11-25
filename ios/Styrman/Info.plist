@@ -52,6 +52,8 @@
 	<string>Scan the pairing QR code shown by `styr pair` on your Mac.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Styrman connects to the styrd daemon on your Mac.</string>
+	<key>StyrmanAPNsEnvironment</key>
+	<string>$(STYRMAN_APNS_ENV)</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>
