@@ -217,7 +217,7 @@ How each agent fits:
 - **Sharing**
   - The daemon stores `shared` per native session id.
   - A hook for an unshared session returns `PassThrough` at once, with one fast local round trip and no waiting.
-  - Open question: should unshared sessions still be *listed* (status only, no content)? Proposed default: **no**, nothing leaves the Mac until `/styr`.
+  - **Decided:** unshared sessions are not listed on the phone at all. Nothing about a session leaves the Mac until `/styr`.
 - **Daemon restart**
   - Hooks are short-lived. One that is waiting when the daemon dies sees EOF, and the agent falls back to its own prompt.
   - On restart, sessions reload from SQLite and re-attach on their next hook. Pending permissions in the database are marked `Cancelled{by: Daemon}`.

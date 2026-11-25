@@ -1,0 +1,176 @@
+//! Local IPC between `styr` (CLI and hook helper) and `styrd` over a Unix socket.
+//!
+//! Framing: one request per connection. The client writes one JSON line; the daemon
+//! answers with one JSON line and closes. A blocking hook simply gets its answer late.
+//! The client is synchronous std code so the hook helper stays tiny and every failure
+//! mode (no socket, refused, timeout, EOF) is easy to turn into a fail-open no-op.
+
+use crate::event::{Event, EventKind, EventSource, TimestampMs};
+use crate::ids::{AgentKind, NativeSessionRef, SessionId};
+use crate::status::SessionStatus;
+use serde::{Deserialize, Serialize};
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+pub const PROTOCOL_VERSION: u32 = 1;
+/// Upper bound for one framed message (hook payloads can carry large tool output).
+pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum Request {
+    Hello,
+    ListSessions {
+        #[serde(default)]
+        include_unshared: bool,
+    },
+    /// Append already-normalized events (protocol adapters, tests, the fake agent).
+    Ingest {
+        session: SessionUpdate,
+        source: EventSource,
+        events: Vec<EventKind>,
+    },
+    SetSharing {
+        native: NativeSessionRef,
+        shared: bool,
+    },
+    Events {
+        session: SessionId,
+        #[serde(default)]
+        since_seq: u64,
+        #[serde(default = "default_limit")]
+        limit: u32,
+    },
+}
+
+fn default_limit() -> u32 {
+    500
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "result", rename_all = "snake_case")]
+pub enum Response {
+    Hello {
+        protocol: u32,
+        daemon_version: String,
+        pid: u32,
+    },
+    Sessions {
+        sessions: Vec<SessionSummary>,
+    },
+    Ingested {
+        session: SessionId,
+        seqs: Vec<u64>,
+    },
+    Events {
+        events: Vec<Event>,
+    },
+    Ok,
+    Error {
+        message: String,
+    },
+}
+
+/// Metadata an adapter learned about a session; `None` fields leave stored values alone.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct SessionUpdate {
+    pub native: Option<NativeSessionRef>,
+    pub cwd: Option<PathBuf>,
+    pub transcript_path: Option<PathBuf>,
+    pub model: Option<String>,
+    pub title: Option<String>,
+}
+
+impl SessionUpdate {
+    pub fn for_native(native: NativeSessionRef) -> Self {
+        Self {
+            native: Some(native),
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionSummary {
+    pub id: SessionId,
+    pub agent: AgentKind,
+    pub native_id: String,
+    pub cwd: Option<PathBuf>,
+    pub title: Option<String>,
+    pub model: Option<String>,
+    pub shared: bool,
+    pub status: SessionStatus,
+    pub created_ms: TimestampMs,
+    pub updated_ms: TimestampMs,
+    pub last_seq: u64,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum IpcError {
+    #[error("daemon not running (socket {0})")]
+    NotRunning(PathBuf),
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("protocol: {0}")]
+    Protocol(String),
+    #[error("daemon: {0}")]
+    Remote(String),
+}
+
+impl IpcError {
+    pub fn is_not_running(&self) -> bool {
+        matches!(self, Self::NotRunning(_))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Client {
+    socket: PathBuf,
+    timeout: Option<Duration>,
+}
+
+impl Client {
+    pub fn new(socket: impl Into<PathBuf>) -> Self {
+        Self {
+            socket: socket.into(),
+            timeout: Some(Duration::from_secs(5)),
+        }
+    }
+
+    /// `None` waits forever (used by blocking hooks, which have their own agent-side timeout).
+    pub fn with_timeout(mut self, timeout: Option<Duration>) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
+    pub fn socket(&self) -> &Path {
+        &self.socket
+    }
+
+    pub fn call(&self, req: &Request) -> Result<Response, IpcError> {
+        let stream = UnixStream::connect(&self.socket).map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused => {
+                IpcError::NotRunning(self.socket.clone())
+            }
+            _ => IpcError::Io(e),
+        })?;
+        stream.set_read_timeout(self.timeout)?;
+        stream.set_write_timeout(self.timeout)?;
+        let mut line = serde_json::to_vec(req).map_err(|e| IpcError::Protocol(e.to_string()))?;
+        line.push(b'\n');
+        (&stream).write_all(&line)?;
+        let mut reader = BufReader::new(&stream).take(MAX_FRAME_BYTES as u64);
+        let mut buf = String::new();
+        if reader.read_line(&mut buf)? == 0 {
+            return Err(IpcError::Protocol("daemon closed the connection".into()));
+        }
+        match serde_json::from_str(&buf).map_err(|e| IpcError::Protocol(e.to_string()))? {
+            Response::Error { message } => Err(IpcError::Remote(message)),
+            r => Ok(r),
+        }
+    }
+}
+
+use std::io::Read as _;
