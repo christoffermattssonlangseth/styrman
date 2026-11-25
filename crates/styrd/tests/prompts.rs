@@ -508,10 +508,19 @@ fn codex_hook(session: &str, event: &str, extra: Value, launch: &str) -> RawHook
 }
 
 async fn shared_codex(d: &Daemon) -> Vec<bool> {
-    let Response::Sessions { sessions } = d.call(Request::ListSessions { include_unshared: true }).await else {
+    let Response::Sessions { sessions } = d
+        .call(Request::ListSessions {
+            include_unshared: true,
+        })
+        .await
+    else {
         panic!()
     };
-    sessions.into_iter().filter(|s| s.agent == AgentKind::Codex).map(|s| s.shared).collect()
+    sessions
+        .into_iter()
+        .filter(|s| s.agent == AgentKind::Codex)
+        .map(|s| s.shared)
+        .collect()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -519,19 +528,53 @@ async fn codex_styr_caught_by_the_terminal_shares_its_session() {
     let d = Daemon::start().await;
     let l = "codex-launch";
     // Codex fires SessionStart only with the first prompt: `/styr` comes first.
-    let r = d.call(Request::ShareLaunch { launch_id: l.into(), shared: true, agent: None, cwd: None, agent_pid: None }).await;
+    let r = d
+        .call(Request::ShareLaunch {
+            launch_id: l.into(),
+            shared: true,
+            agent: None,
+            cwd: None,
+            agent_pid: None,
+        })
+        .await;
     assert_eq!(r, Response::LaunchShared { sessions: 0 }, "deferred");
     assert!(shared_codex(&d).await.is_empty());
     for (event, extra) in [
         ("SessionStart", json!({"source": "startup"})),
-        ("UserPromptSubmit", json!({"prompt": "fix the build", "turn_id": "t1"})),
+        (
+            "UserPromptSubmit",
+            json!({"prompt": "fix the build", "turn_id": "t1"}),
+        ),
     ] {
-        let r = d.call(Request::Hook { hook: codex_hook("s1", event, extra, l) }).await;
-        assert_eq!(r, Response::HookReply { stdout: None, exit: None }, "Codex hooks print nothing");
+        let r = d
+            .call(Request::Hook {
+                hook: codex_hook("s1", event, extra, l),
+            })
+            .await;
+        assert_eq!(
+            r,
+            Response::HookReply {
+                stdout: None,
+                exit: None
+            },
+            "Codex hooks print nothing"
+        );
     }
-    assert_eq!(shared_codex(&d).await, vec![true], "applied on the first hook");
+    assert_eq!(
+        shared_codex(&d).await,
+        vec![true],
+        "applied on the first hook"
+    );
     // Later `/styr off` in the same terminal applies right away.
-    let r = d.call(Request::ShareLaunch { launch_id: l.into(), shared: false, agent: None, cwd: None, agent_pid: None }).await;
+    let r = d
+        .call(Request::ShareLaunch {
+            launch_id: l.into(),
+            shared: false,
+            agent: None,
+            cwd: None,
+            agent_pid: None,
+        })
+        .await;
     assert_eq!(r, Response::LaunchShared { sessions: 1 });
     assert_eq!(shared_codex(&d).await, vec![false]);
     d.stop().await;
@@ -550,26 +593,79 @@ async fn codex_placeholder_appears_at_once_and_is_adopted_by_the_real_session() 
             agent_pid: None,
         })
         .await;
-    assert_eq!(r, Response::LaunchShared { sessions: 1 }, "placeholder created now");
-    let Response::Sessions { sessions } = d.call(Request::ListSessions { include_unshared: false }).await else { panic!() };
-    let placeholder: Vec<_> = sessions.iter().filter(|s| s.agent == AgentKind::Codex).collect();
+    assert_eq!(
+        r,
+        Response::LaunchShared { sessions: 1 },
+        "placeholder created now"
+    );
+    let Response::Sessions { sessions } = d
+        .call(Request::ListSessions {
+            include_unshared: false,
+        })
+        .await
+    else {
+        panic!()
+    };
+    let placeholder: Vec<_> = sessions
+        .iter()
+        .filter(|s| s.agent == AgentKind::Codex)
+        .collect();
     assert_eq!(placeholder.len(), 1, "on the phone before any prompt");
     let id = placeholder[0].id.clone();
-    assert_eq!(placeholder[0].cwd.as_deref(), Some(std::path::Path::new("/work/repo")));
+    assert_eq!(
+        placeholder[0].cwd.as_deref(),
+        Some(std::path::Path::new("/work/repo"))
+    );
     // The first prompt makes Codex create its session; its hooks adopt the placeholder.
     for (event, extra) in [
         ("SessionStart", json!({"source": "startup"})),
-        ("UserPromptSubmit", json!({"prompt": "hello from the phone", "turn_id": "t1"})),
+        (
+            "UserPromptSubmit",
+            json!({"prompt": "hello from the phone", "turn_id": "t1"}),
+        ),
     ] {
-        d.call(Request::Hook { hook: codex_hook("real-1", event, extra, l) }).await;
+        d.call(Request::Hook {
+            hook: codex_hook("real-1", event, extra, l),
+        })
+        .await;
     }
-    let Response::Sessions { sessions } = d.call(Request::ListSessions { include_unshared: true }).await else { panic!() };
-    let codex: Vec<_> = sessions.iter().filter(|s| s.agent == AgentKind::Codex).collect();
+    let Response::Sessions { sessions } = d
+        .call(Request::ListSessions {
+            include_unshared: true,
+        })
+        .await
+    else {
+        panic!()
+    };
+    let codex: Vec<_> = sessions
+        .iter()
+        .filter(|s| s.agent == AgentKind::Codex)
+        .collect();
     assert_eq!(codex.len(), 1, "one session, not two");
-    assert_eq!((codex[0].id.clone(), codex[0].native_id.as_str(), codex[0].shared), (id.clone(), "real-1", true));
-    let Response::Events { events } = d.call(Request::Events { session: id, since_seq: 0, limit: 100 }).await else { panic!() };
+    assert_eq!(
+        (
+            codex[0].id.clone(),
+            codex[0].native_id.as_str(),
+            codex[0].shared
+        ),
+        (id.clone(), "real-1", true)
+    );
+    let Response::Events { events } = d
+        .call(Request::Events {
+            session: id,
+            since_seq: 0,
+            limit: 100,
+        })
+        .await
+    else {
+        panic!()
+    };
     let names: Vec<_> = events.iter().map(|e| e.kind.name()).collect();
-    assert_eq!(names.iter().filter(|n| **n == "session_started").count(), 1, "{names:?}");
+    assert_eq!(
+        names.iter().filter(|n| **n == "session_started").count(),
+        1,
+        "{names:?}"
+    );
     assert!(names.contains(&"user_message"));
     d.stop().await;
 }
@@ -591,14 +687,33 @@ async fn codex_hooks_with_a_stale_terminal_id_find_their_terminal_by_folder() {
         ("SessionStart", json!({"source": "startup"})),
         ("UserPromptSubmit", json!({"prompt": "hi", "turn_id": "t1"})),
     ] {
-        d.call(Request::Hook { hook: codex_hook("s9", event, extra, "stale-from-another-terminal") }).await;
+        d.call(Request::Hook {
+            hook: codex_hook("s9", event, extra, "stale-from-another-terminal"),
+        })
+        .await;
     }
-    let Response::Sessions { sessions } = d.call(Request::ListSessions { include_unshared: true }).await else { panic!() };
+    let Response::Sessions { sessions } = d
+        .call(Request::ListSessions {
+            include_unshared: true,
+        })
+        .await
+    else {
+        panic!()
+    };
     let s = sessions.iter().find(|s| s.native_id == "s9").unwrap();
-    assert!(s.in_terminal_wrapper, "linked to the live wrapper in its folder");
+    assert!(
+        s.in_terminal_wrapper,
+        "linked to the live wrapper in its folder"
+    );
     // Sharing from that terminal now reaches the session.
     let r = d
-        .call(Request::ShareLaunch { launch_id: "live".into(), shared: true, agent: None, cwd: None, agent_pid: None })
+        .call(Request::ShareLaunch {
+            launch_id: "live".into(),
+            shared: true,
+            agent: None,
+            cwd: None,
+            agent_pid: None,
+        })
         .await;
     assert_eq!(r, Response::LaunchShared { sessions: 1 });
     d.stop().await;

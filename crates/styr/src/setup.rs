@@ -184,8 +184,15 @@ fn codex_bin() -> Option<PathBuf> {
 
 /// `codex-cli 0.172.0` → `0.172.0`.
 fn codex_version(bin: &Path) -> Option<String> {
-    let out = Command::new(bin).arg("--version").stderr(Stdio::null()).output().ok()?;
-    String::from_utf8_lossy(&out.stdout).split_whitespace().last().map(str::to_owned)
+    let out = Command::new(bin)
+        .arg("--version")
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .split_whitespace()
+        .last()
+        .map(str::to_owned)
 }
 
 fn agy_bin() -> Option<PathBuf> {
@@ -478,7 +485,9 @@ pub fn setup(yes: bool) -> Result<()> {
 
     // 2c. Codex, if installed: hooks in ~/.codex/hooks.json.
     if let Some(codex) = codex_bin() {
-        let v = codex_version(&codex).map(|v| format!("version {v}, ")).unwrap_or_default();
+        let v = codex_version(&codex)
+            .map(|v| format!("version {v}, "))
+            .unwrap_or_default();
         match crate::codex_hooks::install() {
             Ok(false) if crate::codex_hooks::trusted() => {
                 line(Mark::Ok, "Codex hooks", format!("{v}installed and trusted"))
@@ -486,11 +495,55 @@ pub fn setup(yes: bool) -> Result<()> {
             Ok(_) if !crate::codex_hooks::trusted() => line(
                 Mark::Warn,
                 "Codex hooks",
-                format!("{v}installed; the next time Codex starts, choose \"Trust all and continue\""),
+                format!(
+                    "{v}installed; the next time Codex starts, choose \"Trust all and continue\""
+                ),
             ),
             Ok(_) => line(Mark::Ok, "Codex hooks", format!("{v}installed")),
-            Err(e) => line(Mark::Fail, "Codex hooks", format!("couldn't install: {e:#}")),
+            Err(e) => line(
+                Mark::Fail,
+                "Codex hooks",
+                format!("couldn't install: {e:#}"),
+            ),
         }
+    }
+
+    // 2d. cmux: let sessions started from the phone open cmux tabs.
+    match crate::cmux_access::state() {
+        crate::cmux_access::State::NoCmux => {}
+        crate::cmux_access::State::Ready => line(
+            Mark::Ok,
+            "cmux",
+            "Styrman can open tabs (New session on the phone)",
+        ),
+        crate::cmux_access::State::Locked => {
+            if ask(
+                "Let Styrman open cmux tabs for sessions you start from your phone? This switches cmux's socket access to password mode with a random password only Styrman (and cmux) know; cmux.json is backed up first.",
+                yes,
+            ) {
+                match crate::cmux_access::enable() {
+                    Ok(()) => line(Mark::Ok, "cmux", "password mode on; Styrman can open tabs"),
+                    Err(e) => line(
+                        Mark::Warn,
+                        "cmux",
+                        format!("couldn't change cmux's settings: {e:#}"),
+                    ),
+                }
+            } else {
+                line(
+                    Mark::Warn,
+                    "cmux",
+                    "New session on the phone can't open cmux tabs (cmux only lets its own processes in)",
+                );
+            }
+        }
+        crate::cmux_access::State::Other(why) => line(
+            Mark::Warn,
+            "cmux",
+            format!(
+                "{why}: to start sessions from the phone, use password mode and run `styr cmux-password <password>`"
+            ),
+        ),
     }
 
     // 3. Route `claude`/`agy`/`codex` through Styrman with PATH shims (aliases don't
@@ -699,18 +752,41 @@ pub fn doctor(live: bool) -> Result<bool> {
     }
     if let Some(codex) = codex_bin() {
         let v = codex_version(&codex).unwrap_or_else(|| "?".into());
-        match (crate::codex_hooks::installed(), crate::codex_hooks::trusted()) {
-            (true, true) => line(Mark::Ok, "Codex", format!("version {v}, hooks installed and trusted")),
+        match (
+            crate::codex_hooks::installed(),
+            crate::codex_hooks::trusted(),
+        ) {
+            (true, true) => line(
+                Mark::Ok,
+                "Codex",
+                format!("version {v}, hooks installed and trusted"),
+            ),
             (true, false) => line(
                 Mark::Warn,
                 "Codex",
-                format!("version {v}: start Codex and choose \"Trust all and continue\" for Styrman's hooks"),
+                format!(
+                    "version {v}: start Codex and choose \"Trust all and continue\" for Styrman's hooks"
+                ),
             ),
             (false, _) => {
                 healthy = false;
-                line(Mark::Warn, "Codex", format!("version {v}: hooks missing or outdated, run `styr setup`"))
+                line(
+                    Mark::Warn,
+                    "Codex",
+                    format!("version {v}: hooks missing or outdated, run `styr setup`"),
+                )
             }
         }
+    }
+    match crate::cmux_access::state() {
+        crate::cmux_access::State::NoCmux => {}
+        crate::cmux_access::State::Ready => line(Mark::Ok, "cmux", "Styrman can open tabs"),
+        crate::cmux_access::State::Locked => line(
+            Mark::Warn,
+            "cmux",
+            "New session on the phone can't open tabs: run `styr setup` to allow it",
+        ),
+        crate::cmux_access::State::Other(why) => line(Mark::Warn, "cmux", why),
     }
     let agents = routed_agents();
     match routing_state(&agents) {

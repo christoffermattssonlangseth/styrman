@@ -158,12 +158,19 @@ On the phone:
   - Notifications say only "Claude · repo" (or agy, Codex) unless you run `styr push details on`.
 - **Agent colours:** Claude is orange, agy blue and Codex green, on the badge, the send button and the composer.
 
+**Starting a session from the phone:** tap **+** in the session list, pick an agent (Claude, Codex or agy) and any folder in your home directory (recent ones are listed first), and optionally a first message. Styrman opens a new cmux tab on the Mac running that agent there, already shared with the phone; the first message is typed in once the agent is ready (never into a question like "trust this folder?"). `styr new codex -C ~/work/app "fix the tests"` does the same from the Mac.
+
+cmux normally only lets programs started inside cmux open tabs. `styr setup` asks to switch cmux's socket access to password mode with a random password that only cmux and Styrman know (`~/.styrman/cmux-password`, readable only by you). It backs up `~/.config/cmux/cmux.json` first; remove the `"automation"` block there to undo it. If you'd rather set it in cmux yourself, run `styr cmux-password <password>`.
+
+**Voice:** tap the mic in the message box to dictate (on the iPhone; on-device where supported), **Listen** under a reply to hear it, or the speaker at the top of a session to hear new replies as they arrive. Each agent has its own voice; pick them in Settings › Voice.
+
 From the Mac:
 
 ```sh
 styr status [--all]           # sessions: working / needs approval / needs you / done
 styr events <ID>              # a session's full history
 styr send <ID> <text>         # send a prompt, like the phone does
+styr new <agent> [-C dir] [text]  # start an agent in a new cmux tab, shared
 styr forget <ID>… | --ended   # delete sessions and their history
 styr service restart          # after `cargo install --path crates/styrd`
 ```

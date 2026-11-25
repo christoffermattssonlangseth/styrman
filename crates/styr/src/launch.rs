@@ -125,7 +125,14 @@ pub fn exec(agent: AgentKind, args: Vec<OsString>) -> Result<std::convert::Infal
         AgentKind::Claude | AgentKind::Antigravity | AgentKind::Codex
     );
     if wrappable && interactive && crate::pty::can_wrap() {
-        let launch_id = format!("{:016x}", rand_u64());
+        // A session started from the phone comes with its terminal id (the daemon
+        // already made its placeholder).
+        let launch_id = std::env::var("STYR_PRESET_LAUNCH_ID")
+            .ok()
+            .filter(|s| s.len() == 16 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+            .unwrap_or_else(|| format!("{:016x}", rand_u64()));
+        // SAFETY: still single-threaded here; nested agents mustn't reuse it.
+        unsafe { std::env::remove_var("STYR_PRESET_LAUNCH_ID") };
         let mut all: Vec<OsString> = spec.extra_args.iter().map(OsString::from).collect();
         all.extend(args);
         let catch_styr = agent == AgentKind::Codex;
@@ -175,9 +182,27 @@ pub fn without_spent_wrappers(agent: AgentKind, path: OsString) -> OsString {
 /// `codex exec …`, `codex login`, `codex --version`, …: not the interactive TUI.
 fn codex_is_batch(args: &[OsString]) -> bool {
     const BATCH: &[&str] = &[
-        "exec", "e", "review", "login", "logout", "mcp", "mcp-server", "app-server",
-        "completion", "sandbox", "debug", "apply", "a", "cloud", "features", "queue",
-        "help", "-h", "--help", "-V", "--version",
+        "exec",
+        "e",
+        "review",
+        "login",
+        "logout",
+        "mcp",
+        "mcp-server",
+        "app-server",
+        "completion",
+        "sandbox",
+        "debug",
+        "apply",
+        "a",
+        "cloud",
+        "features",
+        "queue",
+        "help",
+        "-h",
+        "--help",
+        "-V",
+        "--version",
     ];
     args.first()
         .and_then(|a| a.to_str())
@@ -317,7 +342,15 @@ mod tests {
                 cmux.join("codex").display()
             ),
         );
-        let path = std::env::join_paths([&shims, &cmux, &tools, &real, &"/usr/bin".into(), &"/bin".into()]).unwrap();
+        let path = std::env::join_paths([
+            &shims,
+            &cmux,
+            &tools,
+            &real,
+            &"/usr/bin".into(),
+            &"/bin".into(),
+        ])
+        .unwrap();
         let out = std::process::Command::new(shims.join("codex"))
             .arg("hi")
             .env("PATH", &path)

@@ -4,6 +4,7 @@ import SwiftUI
 struct SessionListView: View {
     @Environment(DaemonConnection.self) private var connection
     @State private var showSettings = false
+    @State private var showNewSession = false
     @State private var path: [String] = []
     @State private var showAllDone = false
 
@@ -51,9 +52,15 @@ struct SessionListView: View {
                     Button { showSettings = true } label: { Image(systemName: "gearshape") }
                         .accessibilityLabel("Settings")
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showNewSession = true } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("New session")
+                        .disabled(connection.state != .connected)
+                }
             }
             .navigationDestination(for: String.self) { id in SessionDetailView(sessionId: id) }
             .sheet(isPresented: $showSettings) { SettingsView() }
+            .sheet(isPresented: $showNewSession) { NewSessionView() }
             .refreshable { connection.connect() }
             .onChange(of: connection.requestedSession, initial: true) { _, id in
                 if let id {

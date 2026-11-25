@@ -9,6 +9,7 @@
 
 use crate::Command;
 use crate::event::Event;
+use crate::ids::AgentKind;
 use crate::ids::SessionId;
 use crate::ipc::SessionSummary;
 use serde::{Deserialize, Serialize};
@@ -40,6 +41,40 @@ pub enum ClientMsg {
         token: String,
         env: String,
     },
+    /// Folders for the new-session picker (default: the home directory).
+    ListFolders {
+        #[serde(default)]
+        path: Option<String>,
+    },
+    /// Start `agent` in `cwd` in a new cmux tab on the Mac, shared with the phone.
+    StartSession {
+        agent: AgentKind,
+        cwd: String,
+        #[serde(default)]
+        prompt: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FolderEntry {
+    pub name: String,
+    pub path: String,
+    /// Has a `.git` folder.
+    #[serde(default)]
+    pub is_repo: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FolderListing {
+    pub path: String,
+    /// `None` at the home directory (the top of what can be browsed).
+    pub parent: Option<String>,
+    pub home: String,
+    pub entries: Vec<FolderEntry>,
+    /// Folders recent sessions ran in, newest first.
+    pub recent: Vec<String>,
+    /// Agents that can be started (set up on the Mac).
+    pub agents: Vec<AgentKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -90,6 +125,13 @@ pub enum ServerMsg {
     },
     Error {
         message: String,
+    },
+    Folders {
+        listing: FolderListing,
+    },
+    /// A session started from the phone; it opens as soon as the agent runs.
+    SessionStarting {
+        session: SessionId,
     },
 }
 

@@ -560,6 +560,35 @@ impl Connection {
                 tracing::info!(device = %self.device, %env, "push token registered");
                 Ok(())
             }
+            ClientMsg::ListFolders { path } => match self.daemon.list_folders(path.as_deref()) {
+                Ok(listing) => send(tx, &ServerMsg::Folders { listing }).await,
+                Err(e) => {
+                    send(
+                        tx,
+                        &ServerMsg::Error {
+                            message: format!("{e:#}"),
+                        },
+                    )
+                    .await
+                }
+            },
+            ClientMsg::StartSession { agent, cwd, prompt } => {
+                match self
+                    .daemon
+                    .start_session(agent, &cwd, prompt, self.device.as_str().into())
+                {
+                    Ok(session) => send(tx, &ServerMsg::SessionStarting { session }).await,
+                    Err(e) => {
+                        send(
+                            tx,
+                            &ServerMsg::Error {
+                                message: format!("{e:#}"),
+                            },
+                        )
+                        .await
+                    }
+                }
+            }
             ClientMsg::Unsubscribe { session } => {
                 self.subs.remove(&session);
                 Ok(())

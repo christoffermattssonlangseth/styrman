@@ -1,9 +1,10 @@
 //! `styr`: the Styrman CLI. Agent launcher (`styr claude …`), hook helper
 //! (`styr hook <agent> <event>`) and inspection commands.
 
+mod cmux_access;
+mod codex_hooks;
 pub(crate) mod hook;
 pub(crate) mod launch;
-mod codex_hooks;
 mod pty;
 mod service;
 mod setup;
@@ -82,6 +83,20 @@ enum Cmd {
         /// The prompt.
         text: Vec<String>,
     },
+    /// Start an agent in a folder in a new cmux tab, shared with the phone
+    /// (what the phone's New session does).
+    New {
+        /// claude, codex or agy.
+        agent: String,
+        /// The folder (inside your home directory). Default: the current one.
+        #[arg(long, short = 'C')]
+        dir: Option<std::path::PathBuf>,
+        /// An optional first message, typed in once the agent is ready.
+        prompt: Vec<String>,
+    },
+    /// Give Styrman the password of cmux's socket (if you set password mode yourself),
+    /// so sessions started from the phone can open cmux tabs.
+    CmuxPassword { password: String },
     /// Pair a phone: shows a QR code with a one-time code (valid 5 minutes).
     Pair {
         /// Use this phone-API URL instead of the detected Tailscale one,
@@ -294,6 +309,24 @@ fn main() -> Result<()> {
             }
             ServiceCmd::Restart => service::restart()?,
         },
+        Cmd::CmuxPassword { password } => {
+            cmux_access::store_password(&password)?;
+            println!("saved; sessions started from your phone can now open cmux tabs");
+        }
+        Cmd::New { agent, dir, prompt } => {
+            let agent: AgentKind = match agent.as_str() {
+                "agy" => AgentKind::Antigravity,
+                other => other.parse().map_err(|e| anyhow::anyhow!("{e}"))?,
+            };
+            let cwd = std::fs::canonicalize(dir.unwrap_or(std::env::current_dir()?))?;
+            let prompt = (!prompt.is_empty()).then(|| prompt.join(" "));
+            match call(Request::StartSession { agent, cwd, prompt })? {
+                Response::SessionStarting { session } => {
+                    println!("started {session} in a new cmux tab (shared with your phone)")
+                }
+                other => bail!("unexpected response: {other:?}"),
+            }
+        }
         Cmd::Send { session, text } => {
             let id = resolve_session(&session)?;
             let text = text.join(" ");

@@ -4,6 +4,7 @@ pub mod api;
 pub mod auth;
 pub mod daemon;
 pub mod ipc;
+pub mod launcher;
 pub mod permissions;
 pub mod prompts;
 pub mod push;

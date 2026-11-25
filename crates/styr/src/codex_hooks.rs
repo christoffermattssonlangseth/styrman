@@ -38,14 +38,17 @@ fn shim_path() -> Option<PathBuf> {
 }
 
 fn ours(entry: &Value) -> bool {
-    entry["hooks"]
-        .as_array()
-        .is_some_and(|hs| hs.iter().any(|h| h["command"].as_str().is_some_and(|c| c.contains(MARKER))))
+    entry["hooks"].as_array().is_some_and(|hs| {
+        hs.iter()
+            .any(|h| h["command"].as_str().is_some_and(|c| c.contains(MARKER)))
+    })
 }
 
 /// `hooks.json` with Styrman's entries (re)placed and everything else kept.
 pub fn merged(existing: Option<Value>, shim: &str) -> Value {
-    let mut doc = existing.filter(Value::is_object).unwrap_or_else(|| json!({}));
+    let mut doc = existing
+        .filter(Value::is_object)
+        .unwrap_or_else(|| json!({}));
     if !doc["hooks"].is_object() {
         doc["hooks"] = json!({});
     }
@@ -91,13 +94,17 @@ pub fn installed() -> bool {
 /// entries of each of our events). A changed hook needs trusting again, which
 /// Codex asks about itself.
 pub fn trusted() -> bool {
-    let Some(home) = codex_home() else { return false };
+    let Some(home) = codex_home() else {
+        return false;
+    };
     let Ok(cfg) = std::fs::read_to_string(home.join("config.toml")) else {
         return false;
     };
     let file = home.join("hooks.json");
     let file = file.to_string_lossy();
-    EVENTS.iter().all(|ev| cfg.contains(&format!("{file}:{}:", snake(ev))))
+    EVENTS
+        .iter()
+        .all(|ev| cfg.contains(&format!("{file}:{}:", snake(ev))))
 }
 
 fn snake(ev: &str) -> String {
@@ -128,10 +135,12 @@ pub fn install() -> Result<bool> {
     std::fs::create_dir_all(&home)?;
     let path = home.join("hooks.json");
     let existing = match std::fs::read_to_string(&path) {
-        Ok(t) => Some(
-            serde_json::from_str(&t)
-                .with_context(|| format!("{} isn't valid JSON; fix or remove it first", path.display()))?,
-        ),
+        Ok(t) => Some(serde_json::from_str(&t).with_context(|| {
+            format!(
+                "{} isn't valid JSON; fix or remove it first",
+                path.display()
+            )
+        })?),
         Err(_) => None,
     };
     let doc = merged(existing, &shim.to_string_lossy());
@@ -160,7 +169,10 @@ mod tests {
         assert_eq!(stop[0]["hooks"][0]["command"], "notify-me");
         let pre = doc["hooks"]["PreToolUse"].as_array().unwrap();
         assert_eq!(pre.len(), 1, "the stale entry of ours was replaced");
-        assert_eq!(pre[0]["hooks"][0]["command"], format!("{SHIM_AT} codex PreToolUse"));
+        assert_eq!(
+            pre[0]["hooks"][0]["command"],
+            format!("{SHIM_AT} codex PreToolUse")
+        );
         assert_eq!(pre[0]["hooks"][0]["timeout"], 30);
         assert!(doc["hooks"].get("PermissionRequest").is_none());
         // Idempotent.

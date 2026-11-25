@@ -66,7 +66,7 @@ fn first_line_title(text: &str) -> String {
 }
 
 /// The stand-in native id of a session shared before its agent created it.
-fn placeholder_native(agent: AgentKind, launch: &str) -> NativeSessionRef {
+pub(crate) fn placeholder_native(agent: AgentKind, launch: &str) -> NativeSessionRef {
     NativeSessionRef::new(agent, format!("launch:{launch}"))
 }
 
@@ -729,7 +729,10 @@ impl Daemon {
             let Some(rec) = self.lock().store.session(&id)? else {
                 continue;
             };
-            if self.summary(&id)?.is_some_and(|s| s.status != styr_core::SessionStatus::Done) {
+            if self
+                .summary(&id)?
+                .is_some_and(|s| s.status != styr_core::SessionStatus::Done)
+            {
                 self.set_sharing(&rec.native, shared)?;
                 n += 1;
             }
@@ -798,7 +801,10 @@ impl Daemon {
         let known = adapter
             .native_session(&hook)
             .and_then(|n| self.session_by_native(&n).ok().flatten());
-        if let Some(l) = known.as_ref().and_then(|rec| self.terminals.launch_of(&rec.id)) {
+        if let Some(l) = known
+            .as_ref()
+            .and_then(|rec| self.terminals.launch_of(&rec.id))
+        {
             hook.launch_id = Some(l);
             return hook;
         }
@@ -832,7 +838,10 @@ impl Daemon {
         native: &NativeSessionRef,
     ) -> Result<bool> {
         let mut g = self.lock();
-        let Some(rec) = g.store.session_by_native(&placeholder_native(agent, launch))? else {
+        let Some(rec) = g
+            .store
+            .session_by_native(&placeholder_native(agent, launch))?
+        else {
             return Ok(false);
         };
         if g.store.session_by_native(native)?.is_some() {
@@ -970,6 +979,9 @@ impl Daemon {
                     host: Self::host_name(),
                 })
             }
+            Request::StartSession { agent, cwd, prompt } => self
+                .start_session(agent, &cwd.to_string_lossy(), prompt, "cli".into())
+                .map(|session| Response::SessionStarting { session }),
             Request::ShareLaunch {
                 launch_id,
                 shared,
@@ -1014,20 +1026,20 @@ impl Daemon {
                 launch_id,
                 agent,
                 cwd,
-            } => match {
+            } => {
                 if let (Some(agent), Some(cwd)) = (agent, &cwd) {
                     self.terminals.note_wrapper(&launch_id, agent, cwd);
                 }
-                self.attach_terminal(&launch_id).await
-            } {
-                Some(crate::terminals::TerminalAction::Type(text)) => {
-                    Ok(Response::TypePrompt { text })
+                match self.attach_terminal(&launch_id).await {
+                    Some(crate::terminals::TerminalAction::Type(text)) => {
+                        Ok(Response::TypePrompt { text })
+                    }
+                    Some(crate::terminals::TerminalAction::Select(index)) => {
+                        Ok(Response::SelectOption { index })
+                    }
+                    None => Err(anyhow::anyhow!("detached")),
                 }
-                Some(crate::terminals::TerminalAction::Select(index)) => {
-                    Ok(Response::SelectOption { index })
-                }
-                None => Err(anyhow::anyhow!("detached")),
-            },
+            }
             Request::TerminalPrompt { launch_id, prompt } => self
                 .terminal_prompt(&launch_id, prompt)
                 .map(|()| Response::Ok),

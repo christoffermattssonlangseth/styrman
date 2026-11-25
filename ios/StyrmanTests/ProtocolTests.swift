@@ -226,3 +226,34 @@ private func event(_ seq: UInt64, _ kind: String) -> String {
         #expect(displayTitle(edit, cwd: nil) == edit.title)
     }
 }
+
+@Suite struct NewSessionTests {
+    @Test func startSessionMatchesRust() throws {
+        let data = try JSONEncoder().encode(ClientMsg.startSession(agent: .codex, cwd: "/Users/me/work/x", prompt: "hi"))
+        let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        #expect(obj["type"] as? String == "start_session")
+        #expect(obj["agent"] as? String == "codex")
+        #expect(obj["cwd"] as? String == "/Users/me/work/x")
+        #expect(obj["prompt"] as? String == "hi")
+        let list = try JSONSerialization.jsonObject(with: JSONEncoder().encode(ClientMsg.listFolders(path: nil))) as! [String: Any]
+        #expect(list["type"] as? String == "list_folders")
+        #expect(list["path"] == nil)
+    }
+
+    @Test func foldersDecode() throws {
+        let json = """
+        {"type": "folders", "listing": {"path": "/Users/me/work", "parent": "/Users/me", "home": "/Users/me",
+         "entries": [{"name": "x", "path": "/Users/me/work/x", "is_repo": true}],
+         "recent": ["/Users/me/work/x"], "agents": ["claude", "codex"]}}
+        """
+        guard case .folders(let l) = try decode(ServerMsg.self, json) else { Issue.record("not folders"); return }
+        #expect(l.entries.first?.isRepo == true)
+        #expect(l.agents == [.claude, .codex])
+        #expect(l.display("/Users/me/work/x") == "~/work/x")
+        #expect(l.display("/Users/me") == "~")
+        guard case .sessionStarting(let s) = try decode(ServerMsg.self, #"{"type": "session_starting", "session": "S"}"#) else {
+            Issue.record("not session_starting"); return
+        }
+        #expect(s == "S")
+    }
+}

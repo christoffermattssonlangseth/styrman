@@ -77,7 +77,12 @@ fn canon(p: &std::path::Path) -> std::path::PathBuf {
 /// the `$ command` line if there is one (Codex), else the first line that isn't
 /// "Environment: …" / "Reason: …".
 pub fn menu_tool(p: &styr_core::ipc::TerminalPrompt) -> ToolInfo {
-    let lines: Vec<&str> = p.detail.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let lines: Vec<&str> = p
+        .detail
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
     if let Some(cmd) = lines.iter().find_map(|l| l.strip_prefix("$ ")) {
         return ToolInfo {
             name: "command".into(),
@@ -152,7 +157,12 @@ impl Terminals {
     }
 
     /// Record what a wrapper runs and where (sent with every attach).
-    pub fn note_wrapper(&self, launch: &str, agent: styr_core::ids::AgentKind, cwd: &std::path::Path) {
+    pub fn note_wrapper(
+        &self,
+        launch: &str,
+        agent: styr_core::ids::AgentKind,
+        cwd: &std::path::Path,
+    ) {
         let mut g = self.lock();
         g.wrappers
             .entry(launch.to_owned())
@@ -161,11 +171,18 @@ impl Terminals {
 
     fn launch_live(g: &Inner, launch: &str) -> bool {
         g.attached.contains_key(launch)
-            || g.last_seen.get(launch).is_some_and(|t| t.elapsed() < LIVE_GRACE)
+            || g.last_seen
+                .get(launch)
+                .is_some_and(|t| t.elapsed() < LIVE_GRACE)
     }
 
     /// Whether `launch` is a live wrapper of `agent` in `cwd`.
-    pub fn wrapper_in(&self, launch: &str, agent: styr_core::ids::AgentKind, cwd: &std::path::Path) -> bool {
+    pub fn wrapper_in(
+        &self,
+        launch: &str,
+        agent: styr_core::ids::AgentKind,
+        cwd: &std::path::Path,
+    ) -> bool {
         let g = self.lock();
         Self::launch_live(&g, launch)
             && g.wrappers
@@ -174,7 +191,11 @@ impl Terminals {
     }
 
     /// Live wrappers of `agent` in `cwd`, newest first.
-    pub fn live_wrappers_in(&self, agent: styr_core::ids::AgentKind, cwd: &std::path::Path) -> Vec<String> {
+    pub fn live_wrappers_in(
+        &self,
+        agent: styr_core::ids::AgentKind,
+        cwd: &std::path::Path,
+    ) -> Vec<String> {
         let g = self.lock();
         let cwd = canon(cwd);
         let mut v: Vec<(&String, Instant)> = g
@@ -183,7 +204,7 @@ impl Terminals {
             .filter(|(l, (a, c, _))| *a == agent && *c == cwd && Self::launch_live(&g, l))
             .map(|(l, (_, _, t))| (l, *t))
             .collect();
-        v.sort_by(|a, b| b.1.cmp(&a.1));
+        v.sort_by_key(|x| std::cmp::Reverse(x.1));
         v.into_iter().map(|(l, _)| l.clone()).collect()
     }
 
@@ -292,7 +313,14 @@ impl Daemon {
                 SessionStatus::Waiting | SessionStatus::Working | SessionStatus::Error
             ))
         );
-        let typed = safe && self.terminals.try_deliver(session);
+        // A session started from the phone: Claude and agy announce themselves once
+        // they're up (after any "trust this folder?" question), so their first message
+        // waits for that. Codex only creates its session with the first message; its
+        // wrapper waits for Codex's input box instead.
+        let started = self.summary(session).ok().flatten().is_some_and(|s| {
+            !s.native_id.starts_with("launch:") || s.agent == styr_core::ids::AgentKind::Codex
+        });
+        let typed = safe && started && self.terminals.try_deliver(session);
         if typed {
             tracing::info!(%session, "typing a phone prompt into the terminal");
         }
@@ -535,12 +563,16 @@ mod menu_tool_tests {
     fn a_codex_menu_is_titled_by_its_command() {
         let p = styr_core::ipc::TerminalPrompt {
             title: "Would you like to run the following command?".into(),
-            detail: "Environment: local\nReason: Do you want to allow creating x?\n$ touch x.txt".into(),
+            detail: "Environment: local\nReason: Do you want to allow creating x?\n$ touch x.txt"
+                .into(),
             options: vec!["Yes, proceed".into(), "No".into()],
             selected: 0,
         };
         let t = menu_tool(&p);
-        assert_eq!((t.kind, t.title.as_str()), (ToolKind::Execute, "Run `touch x.txt`"));
+        assert_eq!(
+            (t.kind, t.title.as_str()),
+            (ToolKind::Execute, "Run `touch x.txt`")
+        );
         let hooks = styr_core::ipc::TerminalPrompt {
             title: "Hooks need review".into(),
             detail: "6 hooks are new or changed.".into(),

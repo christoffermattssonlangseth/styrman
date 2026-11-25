@@ -223,3 +223,51 @@ fn command_and_ipc_shapes() {
         json!({"result": "ok"})
     );
 }
+
+#[test]
+fn new_session_shapes() {
+    use styr_core::phone::{ClientMsg, FolderEntry, FolderListing, ServerMsg};
+    let m: ClientMsg = serde_json::from_value(json!({"type": "list_folders"})).unwrap();
+    assert_eq!(m, ClientMsg::ListFolders { path: None });
+    let m: ClientMsg = serde_json::from_value(
+        json!({"type": "start_session", "agent": "codex", "cwd": "/Users/me/work/x", "prompt": "hi"}),
+    )
+    .unwrap();
+    assert_eq!(
+        m,
+        ClientMsg::StartSession {
+            agent: styr_core::ids::AgentKind::Codex,
+            cwd: "/Users/me/work/x".into(),
+            prompt: Some("hi".into())
+        }
+    );
+    let listing = FolderListing {
+        path: "/Users/me/work".into(),
+        parent: Some("/Users/me".into()),
+        home: "/Users/me".into(),
+        entries: vec![FolderEntry {
+            name: "x".into(),
+            path: "/Users/me/work/x".into(),
+            is_repo: true,
+        }],
+        recent: vec!["/Users/me/work/x".into()],
+        agents: vec![
+            styr_core::ids::AgentKind::Claude,
+            styr_core::ids::AgentKind::Codex,
+        ],
+    };
+    assert_eq!(
+        serde_json::to_value(ServerMsg::Folders { listing }).unwrap(),
+        json!({"type": "folders", "listing": {
+            "path": "/Users/me/work", "parent": "/Users/me", "home": "/Users/me",
+            "entries": [{"name": "x", "path": "/Users/me/work/x", "is_repo": true}],
+            "recent": ["/Users/me/work/x"], "agents": ["claude", "codex"]}})
+    );
+    assert_eq!(
+        serde_json::to_value(ServerMsg::SessionStarting {
+            session: "S".into()
+        })
+        .unwrap(),
+        json!({"type": "session_starting", "session": "S"})
+    );
+}

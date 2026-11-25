@@ -340,10 +340,12 @@ enum ServerMsg: Decodable, Sendable {
     case promptQueued(session: String, text: String, position: Int)
     case promptDelivered(session: String, text: String)
     case error(String)
+    case folders(FolderListing)
+    case sessionStarting(session: String)
     case unknown(type: String)
 
     private enum K: String, CodingKey {
-        case type, `protocol`, host, sessions, session, id, events, event, message, text, position, warnings
+        case type, `protocol`, host, sessions, session, id, events, event, message, text, position, warnings, listing
         case daemonVersion = "daemon_version", deviceId = "device_id", lastSeq = "last_seq"
     }
 
@@ -372,6 +374,8 @@ enum ServerMsg: Decodable, Sendable {
                                  text: try c.decode(String.self, forKey: .text),
                                  position: try c.decode(Int.self, forKey: .position))
         case "error": self = .error(try c.decode(String.self, forKey: .message))
+        case "folders": self = .folders(try c.decode(FolderListing.self, forKey: .listing))
+        case "session_starting": self = .sessionStarting(session: try c.decode(String.self, forKey: .session))
         default: self = .unknown(type: type)
         }
     }
@@ -387,8 +391,10 @@ enum ClientMsg: Encodable, Sendable {
     case sendPrompt(session: String, text: String)
     case registerPush(token: String, env: String)
     case stopSharing(session: String)
+    case listFolders(path: String?)
+    case startSession(agent: AgentKind, cwd: String, prompt: String?)
 
-    private enum K: String, CodingKey { case type, session, command, request, option, text, token, env, shared, sinceSeq = "since_seq" }
+    private enum K: String, CodingKey { case type, session, command, request, option, text, token, env, shared, path, agent, cwd, prompt, sinceSeq = "since_seq" }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: K.self)
@@ -410,6 +416,13 @@ enum ClientMsg: Encodable, Sendable {
             var cmd = c.nestedContainer(keyedBy: K.self, forKey: .command)
             try cmd.encode("set_sharing", forKey: .type)
             try cmd.encode(false, forKey: .shared)
+        case .listFolders(let path):
+            try c.encode("list_folders", forKey: .type); try c.encodeIfPresent(path, forKey: .path)
+        case .startSession(let agent, let cwd, let prompt):
+            try c.encode("start_session", forKey: .type)
+            try c.encode(agent.rawValue, forKey: .agent)
+            try c.encode(cwd, forKey: .cwd)
+            try c.encodeIfPresent(prompt, forKey: .prompt)
         case .registerPush(let token, let env):
             try c.encode("register_push", forKey: .type); try c.encode(token, forKey: .token); try c.encode(env, forKey: .env)
         case .sendPrompt(let s, let text):
@@ -418,6 +431,36 @@ enum ClientMsg: Encodable, Sendable {
             try cmd.encode("send_prompt", forKey: .type)
             try cmd.encode(text, forKey: .text)
         }
+    }
+}
+
+// MARK: - Starting sessions
+
+struct FolderEntry: Decodable, Sendable, Hashable, Identifiable {
+    let name: String
+    let path: String
+    let isRepo: Bool
+    var id: String { path }
+    enum CodingKeys: String, CodingKey { case name, path, isRepo = "is_repo" }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        path = try c.decode(String.self, forKey: .path)
+        isRepo = (try? c.decodeIfPresent(Bool.self, forKey: .isRepo)) ?? false
+    }
+}
+
+struct FolderListing: Decodable, Sendable, Equatable {
+    let path: String
+    let parent: String?
+    let home: String
+    let entries: [FolderEntry]
+    let recent: [String]
+    let agents: [AgentKind]
+
+    /// `~/work/styrman` rather than `/Users/me/work/styrman`.
+    func display(_ p: String) -> String {
+        p == home ? "~" : p.hasPrefix(home + "/") ? "~" + p.dropFirst(home.count) : p
     }
 }
 

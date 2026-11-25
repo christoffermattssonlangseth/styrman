@@ -338,8 +338,19 @@ fn subagent_reports_are_not_shown_as_the_users_messages() {
         launch_id: None,
         agent_version: None,
     };
-    let v = SessionView { id: "S".into(), native: NativeSessionRef::new(AgentKind::Claude, "x"), shared: true, open_requests: vec![] };
+    let v = SessionView {
+        id: "S".into(),
+        native: NativeSessionRef::new(AgentKind::Claude, "x"),
+        shared: true,
+        open_requests: vec![],
+    };
     let plan = a.on_hook(&h, &v).unwrap();
-    assert_eq!(plan.events.iter().map(|e| e.name()).collect::<Vec<_>>(), vec!["turn_started", "notice"]);
-    assert_eq!(tool_info("SubagentHandback", json!({})).title, "Subagent reported back");
+    assert_eq!(
+        plan.events.iter().map(|e| e.name()).collect::<Vec<_>>(),
+        vec!["turn_started", "notice"]
+    );
+    assert_eq!(
+        tool_info("SubagentHandback", json!({})).title,
+        "Subagent reported back"
+    );
 }

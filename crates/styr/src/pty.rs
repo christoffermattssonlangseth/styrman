@@ -37,7 +37,12 @@ pub struct StyrCatcher {
 
 impl Default for StyrCatcher {
     fn default() -> Self {
-        Self { typed: Vec::new(), clean: true, esc: None, mouse_bytes: 0 }
+        Self {
+            typed: Vec::new(),
+            clean: true,
+            esc: None,
+            mouse_bytes: 0,
+        }
     }
 }
 
@@ -85,7 +90,10 @@ fn classify(seq: &[u8]) -> Key {
                 return Key::Neutral; // key release
             }
             let text = fields.next().and_then(|t| {
-                t.split(':').filter_map(|c| c.parse::<u32>().ok()).map(char::from_u32).collect::<Option<String>>()
+                t.split(':')
+                    .filter_map(|c| c.parse::<u32>().ok())
+                    .map(char::from_u32)
+                    .collect::<Option<String>>()
             });
             match (code, mods) {
                 (13, 1) => Key::Enter,
@@ -118,7 +126,8 @@ impl StyrCatcher {
                 // OSC / DCS / APC / PM strings (e.g. colour query replies) run to
                 // BEL or ESC \\ and are never typing.
                 if seq.len() > 2 && matches!(seq[1], b']' | b'P' | b'_' | b'^') {
-                    let end = b == 0x07 || (b == b'\\' && seq[seq.len() - 2] == 0x1b) || seq.len() > 4096;
+                    let end =
+                        b == 0x07 || (b == b'\\' && seq[seq.len() - 2] == 0x1b) || seq.len() > 4096;
                     if end {
                         out.extend(self.esc.take().expect("seq"));
                     }
@@ -147,7 +156,8 @@ impl StyrCatcher {
                         Key::Backspace => self.backspace(),
                         Key::Char(c) => {
                             let mut buf = [0u8; 4];
-                            self.typed.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
+                            self.typed
+                                .extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
                         }
                         Key::Neutral => {}
                         Key::Other => self.clean = false,
@@ -180,9 +190,16 @@ impl StyrCatcher {
 
     /// On Enter: if the line is a plainly typed `/styr`, erase it and return true
     /// (the Enter must not be passed on). Either way a new line starts.
-    fn on_enter(&mut self, out: &mut Vec<u8>, caught: &mut Option<styr_core::adapter::StyrCommand>) -> bool {
+    fn on_enter(
+        &mut self,
+        out: &mut Vec<u8>,
+        caught: &mut Option<styr_core::adapter::StyrCommand>,
+    ) -> bool {
         let line = String::from_utf8_lossy(&self.typed).into_owned();
-        let cmd = self.clean.then(|| styr_core::adapter::parse_styr_command(&line)).flatten();
+        let cmd = self
+            .clean
+            .then(|| styr_core::adapter::parse_styr_command(&line))
+            .flatten();
         self.reset();
         match cmd.filter(|_| caught.is_none()) {
             Some(cmd) => {
@@ -210,10 +227,15 @@ impl StyrCatcher {
 }
 
 /// Tracks whether the user has a partly typed line (so we don't type over it).
+///
+/// Only keys count. The terminal also sends replies to the agent's own queries
+/// (colours, cursor position, keyboard mode), focus and mouse reports; those are
+/// skipped whole, or a colour reply like `]11;rgb:…` would look like typing.
 #[derive(Debug, Default, Clone)]
 pub struct LineState {
     dirty: bool,
-    in_escape: bool,
+    esc: Option<Vec<u8>>,
+    mouse_bytes: u8,
 }
 
 impl LineState {
@@ -223,15 +245,42 @@ impl LineState {
 
     pub fn feed(&mut self, bytes: &[u8]) {
         for &b in bytes {
-            if self.in_escape {
-                // CSI/SS3 sequences end with a byte in 0x40..=0x7e (after the opener).
-                if (0x40..=0x7e).contains(&b) && b != b'[' && b != b'O' {
-                    self.in_escape = false;
+            if self.mouse_bytes > 0 {
+                self.mouse_bytes -= 1;
+                continue;
+            }
+            if let Some(seq) = self.esc.as_mut() {
+                seq.push(b);
+                if seq.len() > 2 && matches!(seq[1], b']' | b'P' | b'_' | b'^') {
+                    // A string (OSC, DCS, …) ends at BEL or ESC \.
+                    if b == 0x07 || (b == b'\\' && seq[seq.len() - 2] == 0x1b) || seq.len() > 4096 {
+                        self.esc = None;
+                    }
+                    continue;
+                }
+                let done = match seq.len() {
+                    2 => !matches!(b, b'[' | b'O' | b']' | b'P' | b'_' | b'^'),
+                    3 if seq[1] == b'O' => true,
+                    3 if seq[1] == b'[' && b == b'M' => {
+                        self.mouse_bytes = 3;
+                        self.esc = None;
+                        continue;
+                    }
+                    n => n > 2 && seq[1] == b'[' && (0x40..=0x7e).contains(&b) || n > 64,
+                };
+                if done {
+                    let seq = self.esc.take().expect("seq");
+                    match classify(&seq) {
+                        Key::Enter => self.dirty = false,
+                        Key::Char(_) => self.dirty = true,
+                        // Arrows, focus, mouse, replies: not typing.
+                        Key::Backspace | Key::Neutral | Key::Other => {}
+                    }
                 }
                 continue;
             }
             match b {
-                0x1b => self.in_escape = true,
+                0x1b => self.esc = Some(vec![b]),
                 // Enter submits; Ctrl-C / Ctrl-U clear the line.
                 b'\r' | b'\n' | 0x03 | 0x15 => self.dirty = false,
                 0x20..=0x7e | 0x80..=0xff => self.dirty = true,
@@ -462,7 +511,9 @@ fn numbered(line: &str) -> Option<(bool, &str)> {
     if digits == 0 {
         return None;
     }
-    rest[digits..].strip_prefix(". ").map(|l| (marked, l.trim_end()))
+    rest[digits..]
+        .strip_prefix(". ")
+        .map(|l| (marked, l.trim_end()))
 }
 
 pub fn run(
@@ -531,7 +582,11 @@ pub fn run(
             let mut catcher = catch_styr.then(StyrCatcher::default);
             // Diagnostics: STYR_KEYLOG=/path logs what the terminal sends (escaped).
             let mut keylog = std::env::var_os("STYR_KEYLOG").and_then(|p| {
-                std::fs::OpenOptions::new().create(true).append(true).open(p).ok()
+                std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(p)
+                    .ok()
             });
             while let Ok(n) = stdin.read(&mut buf) {
                 if n == 0 {
@@ -544,9 +599,7 @@ pub fn run(
                     Some(c) => c.feed(&buf[..n]),
                     None => (buf[..n].to_vec(), None),
                 };
-                line.lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .feed(&bytes);
+                line.lock().unwrap_or_else(|p| p.into_inner()).feed(&bytes);
                 if w.lock()
                     .unwrap_or_else(|p| p.into_inner())
                     .write_all(&bytes)
@@ -577,7 +630,10 @@ pub fn run(
                 let _ = out.flush();
                 let chunk = &buf[..n];
                 if let Some(i) = find(chunk, b"\x1b]7501;state=") {
-                    blocked.store(chunk[i..].starts_with(b"\x1b]7501;state=blocked"), Ordering::Relaxed);
+                    blocked.store(
+                        chunk[i..].starts_with(b"\x1b]7501;state=blocked"),
+                        Ordering::Relaxed,
+                    );
                 }
                 if emulate {
                     screen
@@ -590,8 +646,12 @@ pub fn run(
     };
     // Permission menus on screen → daemon (agents without a permission hook).
     if let Some(detect) = detector {
-        let (screen, on_screen, done, blocked) =
-            (screen.clone(), on_screen.clone(), done.clone(), blocked.clone());
+        let (screen, on_screen, done, blocked) = (
+            screen.clone(),
+            on_screen.clone(),
+            done.clone(),
+            blocked.clone(),
+        );
         let launch_id = launch_id.to_owned();
         std::thread::spawn(move || {
             let client =
@@ -663,7 +723,10 @@ pub fn run(
         );
         let launch_id = launch_id.to_owned();
         let agent = catch_styr.then_some(styr_core::ids::AgentKind::Codex);
-        std::thread::spawn(move || inject_loop(agent, &launch_id, &w, &line, &done, &on_screen));
+        let screen = screen.clone();
+        std::thread::spawn(move || {
+            inject_loop(agent, &launch_id, &w, &line, &done, &on_screen, &screen)
+        });
     }
 
     // Wait for the agent to exit.
@@ -681,6 +744,16 @@ pub fn run(
     Ok(code)
 }
 
+/// Codex shows its input box with a "? for shortcuts" hint below it, and no menu.
+pub fn codex_ready(screen: &str) -> bool {
+    detect_codex_prompt(screen).is_none()
+        && screen
+            .lines()
+            .rev()
+            .take(8)
+            .any(|l| l.contains("for shortcuts"))
+}
+
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     hay.windows(needle.len()).position(|w| w == needle)
 }
@@ -689,7 +762,9 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
 /// approval that Styrman couldn't read. Readable only by you.
 fn dump_unread_menu(contents: &str) {
     use std::os::unix::fs::OpenOptionsExt;
-    let Some(home) = std::env::var_os("HOME") else { return };
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
     let path = std::path::Path::new(&home).join(".styrman/unread-menu.txt");
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
@@ -730,9 +805,11 @@ fn inject_loop(
     line: &Mutex<LineState>,
     done: &AtomicBool,
     on_screen: &Mutex<Option<TerminalPrompt>>,
+    screen: &Mutex<vt100::Parser>,
 ) {
     let client = Client::new(Paths::resolve().socket).with_timeout(None);
     let cwd = std::env::current_dir().ok();
+    let codex = agent == Some(styr_core::ids::AgentKind::Codex);
     while !done.load(Ordering::Relaxed) {
         match client.call(&Request::AttachTerminal {
             launch_id: launch_id.to_owned(),
@@ -741,9 +818,30 @@ fn inject_loop(
         }) {
             Ok(Response::TypePrompt { text }) => {
                 // Don't type over a half-written line; wait until it's sent or cleared.
-                while line.lock().unwrap_or_else(|p| p.into_inner()).dirty()
+                let waiting_since = std::time::Instant::now();
+                let mut dumped = false;
+                // Codex: only into its input box, never into a question on screen
+                // (e.g. "trust this folder?" right after starting).
+                while (line.lock().unwrap_or_else(|p| p.into_inner()).dirty()
+                    || (codex
+                        && !codex_ready(
+                            &screen
+                                .lock()
+                                .unwrap_or_else(|p| p.into_inner())
+                                .screen()
+                                .contents(),
+                        )))
                     && !done.load(Ordering::Relaxed)
                 {
+                    if codex && !dumped && waiting_since.elapsed() > Duration::from_secs(5) {
+                        dumped = true;
+                        let s = screen.lock().unwrap_or_else(|p| p.into_inner());
+                        let (rows, cols) = s.screen().size();
+                        dump_unread_menu(&format!(
+                            "[waiting for Codex's input box; screen {rows}x{cols}]\n{}",
+                            s.screen().contents()
+                        ));
+                    }
                     std::thread::sleep(Duration::from_millis(150));
                 }
                 let (body, enter) = keystrokes(&text);
@@ -808,6 +906,18 @@ mod tests {
         assert!(!l.dirty(), "Ctrl-C clears");
         l.feed("é".as_bytes());
         assert!(l.dirty());
+        // Terminal replies and reports aren't typing.
+        let mut l = LineState::default();
+        l.feed(b"\x1b]11;rgb:0000/0000/0000\x1b\\\x1b]10;rgb:ffff/ffff/ffff\x07\x1b[?62;22c\x1b[12;1R\x1b[?5u\x1b[I\x1b[<35;10;5M");
+        assert!(
+            !l.dirty(),
+            "colour/DA/cursor/kitty replies, focus and mouse"
+        );
+        // kitty-encoded keys still count.
+        l.feed(b"\x1b[104u");
+        assert!(l.dirty());
+        l.feed(b"\x1b[13u");
+        assert!(!l.dirty(), "kitty Enter submits");
     }
 
     #[test]
@@ -864,7 +974,11 @@ mod tests {
         let mut c = StyrCatcher::default();
         let (out, cmd) = c.feed(b"/styr\r");
         assert_eq!(cmd, Some(StyrCommand::On));
-        assert_eq!(out, [b"/styr".as_slice(), &[0x7f; 5]].concat(), "typed, then erased; no Enter");
+        assert_eq!(
+            out,
+            [b"/styr".as_slice(), &[0x7f; 5]].concat(),
+            "typed, then erased; no Enter"
+        );
         // Typed in pieces, with a correction.
         let mut c = StyrCatcher::default();
         assert_eq!(c.feed(b"/styr ofx").1, None);
@@ -873,11 +987,18 @@ mod tests {
         assert_eq!(out, [&[0x7f, b'f'][..], &[0x7f; 9]].concat());
         // Everything else passes through untouched.
         let mut c = StyrCatcher::default();
-        assert_eq!(c.feed(b"fix /styr please\r"), (b"fix /styr please\r".to_vec(), None));
+        assert_eq!(
+            c.feed(b"fix /styr please\r"),
+            (b"fix /styr please\r".to_vec(), None)
+        );
         // A line edited with arrow keys isn't caught (we can't know what's in the box).
         let mut c = StyrCatcher::default();
         assert_eq!(c.feed(b"/sty\x1b[Dr\r").1, None);
-        assert_eq!(c.feed(b"/styr\r").1, Some(StyrCommand::On), "the next line is clean again");
+        assert_eq!(
+            c.feed(b"/styr\r").1,
+            Some(StyrCommand::On),
+            "the next line is clean again"
+        );
         // Focus and mouse reports (Codex turns both on) don't disqualify a line.
         let mut c = StyrCatcher::default();
         let (out, cmd) = c.feed(b"\x1b[I\x1b[<35;10;5M/st\x1b[<35;11;5Myr\r");
@@ -887,9 +1008,18 @@ mod tests {
         // kitty keyboard protocol: Enter as CSI 13 u, letters as CSI u with text.
         let mut c = StyrCatcher::default();
         let (out, cmd) = c.feed(b"/styr\x1b[13u");
-        assert_eq!((cmd, out), (Some(StyrCommand::On), [b"/styr".as_slice(), &[0x7f; 5]].concat()));
+        assert_eq!(
+            (cmd, out),
+            (
+                Some(StyrCommand::On),
+                [b"/styr".as_slice(), &[0x7f; 5]].concat()
+            )
+        );
         let mut c = StyrCatcher::default();
-        assert_eq!(c.feed(b"\x1b[47u\x1b[115u\x1b[116u\x1b[121u\x1b[114u").1, None);
+        assert_eq!(
+            c.feed(b"\x1b[47u\x1b[115u\x1b[116u\x1b[121u\x1b[114u").1,
+            None
+        );
         assert_eq!(c.feed(b"\x1b[13;1u").1, Some(StyrCommand::On));
         // Split across reads.
         let mut c = StyrCatcher::default();
@@ -909,7 +1039,11 @@ mod tests {
     }
 
     fn codex_screen(file: &str) -> String {
-        let b = std::fs::read(format!("{}/tests/fixtures/{file}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let b = std::fs::read(format!(
+            "{}/tests/fixtures/{file}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
         let mut p = vt100::Parser::new(nz(40), nz(120), 0);
         p.process(&b);
         p.screen().contents()
@@ -920,7 +1054,10 @@ mod tests {
         let p = detect_codex_prompt(&codex_screen("codex_approval.bin")).expect("menu");
         assert_eq!(p.title, "Would you like to run the following command?");
         assert!(p.detail.contains("$ touch menu.txt"), "{}", p.detail);
-        assert!(p.detail.contains("Reason: Do you want to allow creating menu.txt"));
+        assert!(
+            p.detail
+                .contains("Reason: Do you want to allow creating menu.txt")
+        );
         assert_eq!(
             p.options,
             vec![
@@ -942,7 +1079,14 @@ mod tests {
         let s = "› Ask Codex to do anything\n\n  Hooks need review\n  6 hooks are new or changed.\n  Hooks can run outside the sandbox after you trust them.\n\n› 1. Review hooks\n  2. Trust all and continue\n  3. Continue without trusting (hooks won't run)\n\n  enter confirm · esc skip\n";
         let p = detect_codex_prompt(s).expect("menu");
         assert_eq!(p.title, "Hooks need review");
-        assert_eq!(p.options, vec!["Review hooks", "Trust all and continue", "Continue without trusting (hooks won't run)"]);
+        assert_eq!(
+            p.options,
+            vec![
+                "Review hooks",
+                "Trust all and continue",
+                "Continue without trusting (hooks won't run)"
+            ]
+        );
         assert!(p.detail.contains("6 hooks are new or changed."));
     }
 
@@ -967,5 +1111,18 @@ mod tests {
         let s = "  Would you like to run the following command?\n› 1. Yes, proceed (y)\n  2. No (esc)\n";
         assert_eq!(detect_codex_prompt(s), None);
         assert_eq!(detect_codex_prompt("› Ask Codex to do anything"), None);
+    }
+
+    #[test]
+    fn codex_is_ready_only_at_its_input_box() {
+        assert!(
+            !codex_ready(&codex_screen("codex_approval.bin")),
+            "a menu is open"
+        );
+        let idle = "› Ask Codex to do anything\n\n  GPT-5.6-Luna default · ~/work\n  ← for agents · ? for shortcuts\n";
+        assert!(codex_ready(idle));
+        assert!(!codex_ready(
+            "  Do you trust the contents of this directory?\n› 1. Yes, continue\n  2. No, quit\n\n  Press enter to continue\n"
+        ));
     }
 }

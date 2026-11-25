@@ -27,6 +27,10 @@ final class DaemonConnection {
     var lastError: String?
     /// Set when a notification was tapped: the list opens this session.
     var requestedSession: String?
+    /// The new-session picker's current folder listing.
+    private(set) var folders: FolderListing?
+    /// The first message of a session being started, shown as pending once it opens.
+    @ObservationIgnored private var startPrompt: String?
     /// APNs device token (hex), sent to the daemon on every connection.
     @ObservationIgnored var pushToken: String? {
         didSet { if state == .connected { registerPush() } }
@@ -160,6 +164,13 @@ final class DaemonConnection {
         case .promptDelivered(let sid, let text):
             timelines[sid]?.markDelivered(text)
             if lastSentPrompt?.1 == text { lastSentPrompt = nil }
+        case .folders(let listing):
+            folders = listing
+        case .sessionStarting(let sid):
+            // Open it right away; it fills in as the agent starts.
+            if let p = startPrompt { timeline(for: sid).addPending(p); startPrompt = nil }
+            requestedSession = sid
+            send(.listSessions)
         case .error(let message):
             lastError = message
             // A refused prompt shouldn't sit in the timeline as "queued" forever.
@@ -209,6 +220,20 @@ final class DaemonConnection {
         guard state == .connected else { return }
         sessions.removeAll { $0.id == session }
         send(.stopSharing(session: session))
+    }
+
+    func listFolders(_ path: String? = nil) {
+        guard state == .connected else { return }
+        send(.listFolders(path: path))
+    }
+
+    /// Start `agent` in `cwd` in a new cmux tab on the Mac.
+    func startSession(agent: AgentKind, cwd: String, prompt: String?) -> Bool {
+        guard state == .connected else { return false }
+        let p = prompt?.trimmingCharacters(in: .whitespacesAndNewlines)
+        startPrompt = (p?.isEmpty ?? true) ? nil : p
+        send(.startSession(agent: agent, cwd: cwd, prompt: startPrompt))
+        return true
     }
 
     /// Send a prompt; it shows as pending until the agent picks it up.

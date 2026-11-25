@@ -93,6 +93,13 @@ pub enum Request {
         session: SessionId,
         text: String,
     },
+    /// Start `agent` in `cwd` in a new cmux tab, shared with the phone (`styr new`).
+    StartSession {
+        agent: AgentKind,
+        cwd: std::path::PathBuf,
+        #[serde(default)]
+        prompt: Option<String>,
+    },
     /// `/styr` caught by a `styr <agent>` terminal wrapper (Codex rejects unknown
     /// slash commands before any hook sees them).
     ShareLaunch {
@@ -180,6 +187,9 @@ pub enum Response {
         delivered: bool,
     },
     Ok,
+    SessionStarting {
+        session: SessionId,
+    },
     /// How many sessions changed; 0 means it applies to the terminal's first session.
     LaunchShared {
         sessions: usize,

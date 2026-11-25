@@ -30,7 +30,12 @@ fn raw(payload: Value) -> RawHook {
 }
 
 fn view(native: NativeSessionRef) -> SessionView {
-    SessionView { id: "S".into(), native, shared: true, open_requests: vec![] }
+    SessionView {
+        id: "S".into(),
+        native,
+        shared: true,
+        open_requests: vec![],
+    }
 }
 
 #[test]
@@ -41,30 +46,70 @@ fn a_real_turn_maps_to_events() {
         let h = raw(p);
         let native = a.native_session(&h).expect("session_id");
         let plan = a.on_hook(&h, &view(native)).unwrap();
-        assert_eq!(plan.session.as_ref().unwrap().launch_id.as_deref(), Some("L1"));
-        assert_eq!(a.render_reply(&h, &HookDecision::PassThrough), None, "{}: never blocks", h.event);
+        assert_eq!(
+            plan.session.as_ref().unwrap().launch_id.as_deref(),
+            Some("L1")
+        );
+        assert_eq!(
+            a.render_reply(&h, &HookDecision::PassThrough),
+            None,
+            "{}: never blocks",
+            h.event
+        );
         all.extend(plan.events);
     }
     let names: Vec<_> = all.iter().map(|e| e.name()).collect();
     assert_eq!(
         names,
-        vec!["session_started", "turn_started", "user_message", "tool_call", "tool_call", "assistant_message", "turn_ended"]
+        vec![
+            "session_started",
+            "turn_started",
+            "user_message",
+            "tool_call",
+            "tool_call",
+            "assistant_message",
+            "turn_ended"
+        ]
     );
-    let EventKind::ToolCall { tool, status: ToolStatus::Pending, call, .. } = &all[3] else { panic!() };
+    let EventKind::ToolCall {
+        tool,
+        status: ToolStatus::Pending,
+        call,
+        ..
+    } = &all[3]
+    else {
+        panic!()
+    };
     assert_eq!(tool.title, "Run `touch approved.txt`");
     assert!(call.0.starts_with("exec-"));
-    let EventKind::ToolCall { status, call: done, .. } = &all[4] else { panic!() };
+    let EventKind::ToolCall {
+        status, call: done, ..
+    } = &all[4]
+    else {
+        panic!()
+    };
     assert_eq!(*status, ToolStatus::Completed);
     assert_eq!(done, call, "the same call id before and after");
-    let EventKind::AssistantMessage { text, mode: TextMode::Final, .. } = &all[5] else { panic!() };
+    let EventKind::AssistantMessage {
+        text,
+        mode: TextMode::Final,
+        ..
+    } = &all[5]
+    else {
+        panic!()
+    };
     assert_eq!(text, "Created `approved.txt` successfully.");
 }
 
 #[test]
 fn styr_via_prompt_is_consumed() {
     let a = CodexAdapter;
-    let h = raw(json!({"hook_event_name": "UserPromptSubmit", "session_id": "x", "prompt": "/styr off", "turn_id": "t"}));
-    let plan = a.on_hook(&h, &view(NativeSessionRef::new(AgentKind::Codex, "x"))).unwrap();
+    let h = raw(
+        json!({"hook_event_name": "UserPromptSubmit", "session_id": "x", "prompt": "/styr off", "turn_id": "t"}),
+    );
+    let plan = a
+        .on_hook(&h, &view(NativeSessionRef::new(AgentKind::Codex, "x")))
+        .unwrap();
     assert_eq!(plan.set_sharing, Some(false));
     assert!(plan.events.is_empty());
     let reply = a.render_reply(&h, plan.reply.as_ref().unwrap()).unwrap();
@@ -79,7 +124,14 @@ fn apply_patch_is_an_edit() {
         "tool_name": "apply_patch",
         "tool_input": {"patch": "*** Begin Patch\n*** Update File: src/main.rs\n@@\n-a\n+b\n*** End Patch"}
     }));
-    let plan = a.on_hook(&h, &view(NativeSessionRef::new(AgentKind::Codex, "x"))).unwrap();
-    let EventKind::ToolCall { tool, .. } = &plan.events[0] else { panic!() };
-    assert_eq!((tool.kind, tool.title.as_str()), (ToolKind::Edit, "Edit src/main.rs"));
+    let plan = a
+        .on_hook(&h, &view(NativeSessionRef::new(AgentKind::Codex, "x")))
+        .unwrap();
+    let EventKind::ToolCall { tool, .. } = &plan.events[0] else {
+        panic!()
+    };
+    assert_eq!(
+        (tool.kind, tool.title.as_str()),
+        (ToolKind::Edit, "Edit src/main.rs")
+    );
 }
