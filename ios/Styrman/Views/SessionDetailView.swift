@@ -34,6 +34,12 @@ struct SessionDetailView: View {
                 .padding(.vertical, 12)
             }
             .defaultScrollAnchor(.bottom)
+            // Like the Claude app: drag the conversation down to pull the keyboard away,
+            // or tap the conversation to dismiss it.
+            .scrollDismissesKeyboard(.interactively)
+            .simultaneousGesture(TapGesture().onEnded {
+                UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+            })
             .onChange(of: timeline.items.count + timeline.pending.count) {
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
