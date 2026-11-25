@@ -270,24 +270,22 @@ fn styr_codex_catches_styr_and_types_phone_messages_in_a_real_terminal() {
         "Codex never saw /styr:\n{received:?}"
     );
 
-    // And it's on the phone as the phone's message.
-    let Response::Events { events } = d
-        .client()
-        .call(&Request::Events {
-            session: id,
+    // And it's on the phone as the phone's message (the hook records it a moment later).
+    let from_phone = || {
+        let Ok(Response::Events { events }) = d.client().call(&Request::Events {
+            session: id.clone(),
             since_seq: 0,
             limit: 100,
-        })
-        .unwrap()
-    else {
-        panic!()
+        }) else {
+            return false;
+        };
+        events.iter().any(|e| matches!(&e.kind,
+            styr_core::event::EventKind::UserMessage { text, origin: styr_core::event::Origin::Remote(_) } if text == "hello from the phone"))
     };
-    let from_phone = events.iter().any(|e| matches!(&e.kind,
-        styr_core::event::EventKind::UserMessage { text, origin: styr_core::event::Origin::Remote(_) } if text == "hello from the phone"));
-    assert!(
-        from_phone,
-        "{:#?}",
-        events.iter().map(|e| e.kind.name()).collect::<Vec<_>>()
+    wait_for(
+        "the phone's message on the timeline",
+        |_| from_phone(),
+        &mut pty,
     );
 
     let _ = child.kill();
