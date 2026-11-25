@@ -61,8 +61,8 @@ Design details and the reasoning behind them are in [`docs/design.md`](docs/desi
 | 3. iOS app: pairing and live sessions (read-only) | ✅ done |
 | 4. Permission round-trip | ✅ done |
 | 5. Prompts from the phone | ✅ done |
-| 6. Push notifications | built; verifying with a real APNs key |
-| 7. Pairing and auth hardening, launchd, install docs | |
+| 6. Push notifications | ✅ done |
+| 7. Pairing and auth hardening, launchd, install docs | in progress |
 
 ## Try it (checkpoint 2)
 
