@@ -110,7 +110,13 @@ fn close_open_requests(view: &SessionView, events: &mut Vec<EventKind>) {
 /// Prompts Claude Code submits on its own, such as the wake-up turn after an
 /// `asyncRewake` hook (`<task-notification>…Stop hook feedback…`).
 pub fn is_internal_prompt(prompt: &str) -> bool {
-    prompt.trim_start().starts_with("<task-notification>")
+    let p = prompt.trim_start();
+    p.starts_with("<task-notification>") || p.starts_with("<agent-message")
+}
+
+/// A subagent's report, which Claude Code hands to the main agent as a prompt.
+pub fn is_subagent_report(prompt: &str) -> bool {
+    prompt.trim_start().starts_with("<agent-message")
 }
 
 /// Event name the plugin passes for its background (asyncRewake) Stop hook.
@@ -215,11 +221,17 @@ impl AgentAdapter for ClaudeAdapter {
                         },
                     });
                 } else if is_internal_prompt(&prompt) {
-                    // Claude Code's own wake-up turn (e.g. after our asyncRewake hook
-                    // delivered a phone prompt): not something the user typed.
+                    // Claude Code's own turns (the wake-up after our asyncRewake hook,
+                    // a subagent handing back its report): not something the user typed.
                     ev.push(EventKind::TurnStarted {
                         turn: s(p, "prompt_id").map(TurnId),
                     });
+                    if is_subagent_report(&prompt) {
+                        ev.push(EventKind::Notice {
+                            level: Level::Info,
+                            text: "A subagent reported back".into(),
+                        });
+                    }
                 } else {
                     close_open_requests(view, ev);
                     ev.push(EventKind::TurnStarted {

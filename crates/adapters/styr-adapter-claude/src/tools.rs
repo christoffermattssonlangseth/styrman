@@ -70,6 +70,8 @@ pub fn tool_info(name: &str, input: Value) -> ToolInfo {
             ),
         ),
         "TodoWrite" => (ToolKind::Think, "Update plan".to_owned()),
+        "SubagentHandback" => (ToolKind::Think, "Subagent reported back".to_owned()),
+        "SendMessage" => (ToolKind::Think, "Message to an agent".to_owned()),
         "ExitPlanMode" => (ToolKind::Think, "Propose plan".to_owned()),
         n if n.starts_with("mcp__") => {
             let mut parts = n.splitn(3, "__").skip(1);

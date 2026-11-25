@@ -324,3 +324,22 @@ fn rewake_turns_are_not_user_messages_and_phone_prompts_exit_2() {
         None
     );
 }
+
+#[test]
+fn subagent_reports_are_not_shown_as_the_users_messages() {
+    let a = ClaudeAdapter::default();
+    let report = "<agent-message from=\"ad662682bce2ec8f5\">\n[Subagent hand-back] The text below is the final report of a subagent...";
+    let h = RawHook {
+        agent: AgentKind::Claude,
+        event: "UserPromptSubmit".into(),
+        payload: json!({"session_id": "x", "prompt": report}),
+        launched_by_styr: false,
+        agent_pid: None,
+        launch_id: None,
+        agent_version: None,
+    };
+    let v = SessionView { id: "S".into(), native: NativeSessionRef::new(AgentKind::Claude, "x"), shared: true, open_requests: vec![] };
+    let plan = a.on_hook(&h, &v).unwrap();
+    assert_eq!(plan.events.iter().map(|e| e.name()).collect::<Vec<_>>(), vec!["turn_started", "notice"]);
+    assert_eq!(tool_info("SubagentHandback", json!({})).title, "Subagent reported back");
+}
