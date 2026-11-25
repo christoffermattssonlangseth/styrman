@@ -455,7 +455,10 @@ pub fn detect_codex_prompt(screen: &str) -> Option<TerminalPrompt> {
             Some((marked, label)) => raw.push((marked, label.to_owned())),
             None => {
                 let last = raw.last_mut()?;
-                last.1.push(' ');
+                // Codex breaks long words at '-' or '/'; don't add a space there.
+                if !last.1.ends_with('-') && !last.1.ends_with('/') {
+                    last.1.push(' ');
+                }
                 last.1.push_str(l.trim());
             }
         }
@@ -1124,5 +1127,57 @@ mod tests {
         assert!(!codex_ready(
             "  Do you trust the contents of this directory?\n› 1. Yes, continue\n  2. No, quit\n\n  Press enter to continue\n"
         ));
+    }
+
+    /// Real Codex 0.172.0 approval menus (tests/fixtures/codex_menus/<kind>_<cols>.bin),
+    /// rendered at the width they were captured at.
+    #[test]
+    fn real_codex_menus_at_every_width() {
+        let dir = format!("{}/tests/fixtures/codex_menus", env!("CARGO_MANIFEST_DIR"));
+        let mut seen = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let name = path.file_stem().unwrap().to_string_lossy().into_owned();
+            let cols: u16 = name.rsplit('_').next().unwrap().parse().unwrap();
+            let mut p = vt100::Parser::new(nz(40), nz(cols), 0);
+            p.process(&std::fs::read(&path).unwrap());
+            let screen = p.screen().contents();
+            let m = detect_codex_prompt(&screen)
+                .unwrap_or_else(|| panic!("{name}: no menu found in\n{screen}"));
+            eprintln!(
+                "{name}: {:?} / {:?} / options {:?}",
+                m.title, m.detail, m.options
+            );
+            assert!(m.title.ends_with('?'), "{name}: title {:?}", m.title);
+            assert!(m.options.len() >= 2, "{name}: options {:?}", m.options);
+            assert!(
+                m.options.iter().any(|o| o.starts_with("Yes")),
+                "{name}: {:?}",
+                m.options
+            );
+            assert!(
+                m.options.iter().any(|o| o.starts_with("No")),
+                "{name}: {:?}",
+                m.options
+            );
+            assert!(
+                m.options
+                    .iter()
+                    .all(|o| !o.ends_with(')') || o.contains('`')),
+                "{name}: shortcut left in {:?}",
+                m.options
+            );
+            assert!(
+                m.options.iter().all(|o| !o.contains("- ")),
+                "{name}: a word broken at a hyphen was re-joined with a space: {:?}",
+                m.options
+            );
+            assert!(
+                !codex_ready(&screen),
+                "{name}: a menu is open, not the input box"
+            );
+            seen += 1;
+        }
+        assert!(seen >= 4);
     }
 }

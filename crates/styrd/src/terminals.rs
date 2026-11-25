@@ -83,6 +83,29 @@ pub fn menu_tool(p: &styr_core::ipc::TerminalPrompt) -> ToolInfo {
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .collect();
+    // Codex's file edits: "Destination:" then the path, hard-wrapped over lines.
+    if let Some(i) = lines.iter().position(|l| l.starts_with("Destination:")) {
+        let mut path = lines[i]
+            .trim_start_matches("Destination:")
+            .trim()
+            .to_owned();
+        for l in &lines[i + 1..] {
+            if l.contains(": ") || l.starts_with("$ ") {
+                break;
+            }
+            path.push_str(l);
+        }
+        if !path.is_empty() {
+            let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
+            return ToolInfo {
+                name: "edit".into(),
+                kind: ToolKind::Edit,
+                title: format!("Edit {name}"),
+                input: serde_json::json!({"path": path}),
+                locations: vec![path.into()],
+            };
+        }
+    }
     if let Some(cmd) = lines.iter().find_map(|l| l.strip_prefix("$ ")) {
         return ToolInfo {
             name: "command".into(),
@@ -580,5 +603,21 @@ mod menu_tool_tests {
             selected: 0,
         };
         assert_eq!(menu_tool(&hooks).title, "6 hooks are new or changed.");
+        // A file edit, with the destination path wrapped like on a real 100-column screen.
+        let edits = styr_core::ipc::TerminalPrompt {
+            title: "Would you like to make the following edits?".into(),
+            detail: "Description: Apply proposed file edits\nDestination:\n/private/tmp/w/637c37c2/scr\natchpad/cap/notes.txt".into(),
+            options: vec!["Yes, proceed".into(), "No".into()],
+            selected: 0,
+        };
+        let t = menu_tool(&edits);
+        assert_eq!(
+            (t.kind, t.title.as_str()),
+            (ToolKind::Edit, "Edit notes.txt")
+        );
+        assert_eq!(
+            t.input["path"],
+            "/private/tmp/w/637c37c2/scratchpad/cap/notes.txt"
+        );
     }
 }
