@@ -1,4 +1,5 @@
 import AVFoundation
+import Speech
 import Testing
 @testable import Styrman
 
@@ -51,5 +52,25 @@ import Testing
         VoiceChoice.choose(pick, for: .codex)
         defer { VoiceChoice.choose(nil, for: .codex) }
         #expect(VoiceChoice.voice(for: .codex)?.identifier == pick)
+    }
+}
+
+/// iOS calls the speech callbacks on its own threads; they must not assume the main actor
+/// (that crashed the app when tapping the mic).
+@Suite struct DictationThreadingTests {
+    @Test func callbacksRunOffTheMainThread() async throws {
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        let tap = Dictation.tap(feeding: request)
+        let handler = Dictation.results { _, _ in }
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1))
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 160))
+        buffer.frameLength = 160
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global().async {
+                tap(buffer, AVAudioTime(sampleTime: 0, atRate: 16_000))
+                handler(nil, nil)
+                done.resume()
+            }
+        }
     }
 }

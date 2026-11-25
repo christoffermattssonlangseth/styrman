@@ -58,21 +58,19 @@ final class Dictation {
             let format = input.outputFormat(forBus: 0)
             input.removeTap(onBus: 0)
             // The tap runs on an audio thread: it only hands buffers to the request.
-            input.installTap(onBus: 0, bufferSize: 1024, format: format) { [request] buffer, _ in
-                request.append(buffer)
-            }
+            input.installTap(onBus: 0, bufferSize: 1024, format: format, block: Self.tap(feeding: request))
             engine.prepare()
             try engine.start()
 
-            task = recognizer.recognitionTask(with: request) { [weak self] result, error in
-                let text = result?.bestTranscription.formattedString
-                let final = result?.isFinal ?? false
-                Task { @MainActor in
-                    guard let self else { return }
-                    if let text { self.transcript = text }
-                    if final || error != nil { self.finish() }
-                }
-            }
+            task = recognizer.recognitionTask(
+                with: request,
+                resultHandler: Self.results { [weak self] text, ended in
+                    Task { @MainActor in
+                        guard let self else { return }
+                        if let text { self.transcript = text }
+                        if ended { self.finish() }
+                    }
+                })
             state = .listening
         } catch {
             finish()
@@ -97,7 +95,24 @@ final class Dictation {
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
-    private static func authorized() async -> Bool {
+    // The callbacks below are called by iOS on its own threads. They're made here,
+    // outside the main actor: a closure written inside a @MainActor method is
+    // assumed to run on the main thread, and Swift stops the app when it doesn't.
+
+    nonisolated static func tap(feeding request: SFSpeechAudioBufferRecognitionRequest) -> AVAudioNodeTapBlock {
+        nonisolated(unsafe) let request = request
+        return { buffer, _ in request.append(buffer) }
+    }
+
+    nonisolated static func results(
+        _ handle: @escaping @Sendable (_ text: String?, _ ended: Bool) -> Void
+    ) -> @Sendable (SFSpeechRecognitionResult?, (any Error)?) -> Void {
+        { result, error in
+            handle(result?.bestTranscription.formattedString, (result?.isFinal ?? false) || error != nil)
+        }
+    }
+
+    nonisolated static func authorized() async -> Bool {
         let speech: Bool = await withCheckedContinuation { c in
             SFSpeechRecognizer.requestAuthorization { c.resume(returning: $0 == .authorized) }
         }
