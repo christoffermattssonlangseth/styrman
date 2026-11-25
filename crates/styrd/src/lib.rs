@@ -17,6 +17,20 @@ use styr_core::paths::Paths;
 
 pub use daemon::Daemon;
 
+/// Session history and keys are private: data dir 0700, its files 0600.
+fn restrict_permissions(paths: &Paths) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(&paths.data_dir, std::fs::Permissions::from_mode(0o700));
+    if let Ok(entries) = std::fs::read_dir(&paths.data_dir) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_file() {
+                let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600));
+            }
+        }
+    }
+}
+
 /// Holds the single-instance lock for as long as it lives.
 pub struct InstanceLock(#[allow(dead_code)] File);
 
@@ -87,6 +101,7 @@ pub async fn run_with(
 ) -> Result<()> {
     let _lock = lock_instance(&paths)?;
     let store = store::Store::open(&paths.db)?;
+    restrict_permissions(&paths);
     let daemon: Arc<Daemon> = Daemon::open(store, default_adapters())?;
     let listener = ipc::bind(&paths.socket)?;
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);

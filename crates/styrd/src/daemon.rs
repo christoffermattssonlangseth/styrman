@@ -30,6 +30,7 @@ pub struct Daemon {
     inner: Mutex<Inner>,
     bus: broadcast::Sender<BusMsg>,
     pub auth: crate::auth::Auth,
+    pub auth_throttle: crate::api::AuthThrottle,
     api_urls: Mutex<Vec<String>>,
     /// Device ids revoked while connected; their WebSockets close.
     pub revoked: broadcast::Sender<String>,
@@ -101,6 +102,7 @@ impl Daemon {
             inner: Mutex::new(inner),
             bus,
             auth: crate::auth::Auth::default(),
+            auth_throttle: Default::default(),
             revoked: broadcast::channel(16).0,
             api_urls: Mutex::new(Vec::new()),
             adapters: adapters.into_iter().map(|a| (a.kind(), a)).collect(),

@@ -3,6 +3,7 @@
 
 mod hook;
 mod launch;
+mod service;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
@@ -77,6 +78,11 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Run styrd as a launchd agent (starts at login, restarted if it exits).
+    Service {
+        #[command(subcommand)]
+        action: ServiceCmd,
+    },
     /// Push notifications (APNs): setup, status, test.
     Push {
         #[command(subcommand)]
@@ -88,7 +94,7 @@ enum Cmd {
         action: Option<DeviceCmd>,
     },
     /// Hook helper called by agent hooks: `styr hook <agent> <event>` (stdin: payload).
-    /// Always exits 0; prints nothing unless the daemon has an answer.
+    /// Exits 0 and prints nothing unless the daemon has an answer (exit 2 only to wake Claude).
     Hook {
         #[arg(num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
@@ -96,6 +102,14 @@ enum Cmd {
     /// Launch an agent through Styrman: `styr claude …`, `styr agy …`, `styr codex …`.
     #[command(external_subcommand)]
     Launch(Vec<OsString>),
+}
+
+#[derive(Subcommand)]
+enum ServiceCmd {
+    Install,
+    Uninstall,
+    Status,
+    Restart,
 }
 
 #[derive(Subcommand)]
@@ -237,6 +251,22 @@ fn main() -> Result<()> {
             println!("forgot {n} session{}", if n == 1 { "" } else { "s" });
         }
         Cmd::Push { action } => push(action)?,
+        Cmd::Service { action } => match action {
+            ServiceCmd::Install => service::install()?,
+            ServiceCmd::Uninstall => service::uninstall()?,
+            ServiceCmd::Status => {
+                service::status()?;
+                match client().call(&Request::Hello) {
+                    Ok(Response::Hello {
+                        pid,
+                        daemon_version,
+                        ..
+                    }) => println!("styrd:  running (pid {pid}, {daemon_version})"),
+                    _ => println!("styrd:  not answering"),
+                }
+            }
+            ServiceCmd::Restart => service::restart()?,
+        },
         Cmd::Send { session, text } => {
             let id = resolve_session(&session)?;
             let text = text.join(" ");

@@ -1,6 +1,6 @@
 # Styrman design (phase 1 proposal)
 
-Status: **approved; checkpoints 1–5 built.** Verified findings are recorded in §8.
+Status: **phase 1 complete (checkpoints 1–7).** Next: the Antigravity (`agy`) adapter, then Codex. Verified findings are recorded in §8.
 
 ## 1. What the three agents actually offer
 
@@ -276,3 +276,26 @@ Each checkpoint ends with something runnable and its tests green.
   - A newer wait, a prompt typed in the terminal, `/styr off` or `SessionEnd` releases the waiting hook, so at most one waits per session.
   - If the daemon restarts mid-wait, the hook reconnects for up to an hour.
 - **Channels, considered and deferred.** The official push mechanism (`notifications/claude/channel`, plus permission relay) needs `--dangerously-load-development-channels` and shows a full-screen confirmation in every interactive session during the research preview. It's possible later as an opt-in through `styr claude` for delivery mid-turn.
+
+## 9. Threat model (phase 1)
+
+**Assets.** These are, in order of sensitivity:
+1. The power to approve tool calls and send prompts: effectively, code execution on the Mac.
+2. Session content: prompts, code and command output.
+3. The APNs key.
+
+**Who can reach what:**
+- **The Unix socket.** Only the user (0600 socket, 0700 directory). Anyone who can open it is already that user.
+- **The phone API.** Reachable over loopback and the tailnet. Every route except `/v1/health` and `/v1/pair` needs a device token.
+  - Pairing needs a fresh one-time code that only `styr pair` on the Mac prints.
+  - Browsers are refused (`Origin` header), which also defeats DNS rebinding.
+  - Token guessing is throttled.
+  - The token is 256 bits, so brute force is moot anyway.
+- **A lost phone.** Revoke it with `styr devices revoke`; the connection drops at once and the token stops working. The token sits in the Keychain (`AfterFirstUnlockThisDeviceOnly`), so it isn't in backups.
+- **Apple (APNs).** Sees device tokens and "agent · repo" text, plus a command title or the first line of a reply if `details` is on.
+
+**Residual risks, accepted for a personal tool:**
+- **Plain `ws://` inside the tailnet.** It relies on WireGuard for confidentiality.
+- **Anyone else on the tailnet can try to pair.** They would still need a live code from the Mac's terminal.
+- **Markdown links in Claude's replies are tappable on the phone.**
+- **Permission prompts describe commands, not their effects.** As in the terminal, approve only what you would approve at the keyboard.

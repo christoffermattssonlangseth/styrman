@@ -14,6 +14,7 @@ styr-adapter-claude.workspace = true
 styr-adapter-agy.workspace = true
 styr-adapter-codex.workspace = true
 qrcode = { version = "0.15.0", default-features = false }
+libc = "0.2.191"
 
 [dev-dependencies]
 tempfile = "3.27.0"

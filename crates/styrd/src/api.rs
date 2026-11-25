@@ -137,9 +137,52 @@ struct AppState {
 pub fn router(daemon: Arc<Daemon>, stop: watch::Receiver<bool>) -> Router {
     Router::new()
         .route("/v1/health", get(health))
-        .route("/v1/pair", post(pair))
+        .route(
+            "/v1/pair",
+            post(pair).layer(axum::extract::DefaultBodyLimit::max(16 * 1024)),
+        )
         .route("/v1/ws", get(ws))
+        .layer(axum::middleware::from_fn(reject_browsers))
         .with_state(AppState { daemon, stop })
+}
+
+/// The phone app never sends `Origin`; browsers always do on cross-site requests
+/// and WebSocket upgrades. Refusing them stops a web page open on this Mac (or a
+/// DNS-rebinding page) from talking to the daemon at all.
+async fn reject_browsers(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    if req.headers().contains_key(header::ORIGIN) {
+        return error(StatusCode::FORBIDDEN, "browsers are not allowed");
+    }
+    next.run(req).await
+}
+
+/// Global brake on bad tokens: after `MAX_AUTH_FAILURES` within a minute,
+/// WebSocket auth is refused for the rest of that minute.
+pub const MAX_AUTH_FAILURES: u32 = 20;
+
+#[derive(Default)]
+pub struct AuthThrottle {
+    state: std::sync::Mutex<(Option<std::time::Instant>, u32)>,
+}
+
+impl AuthThrottle {
+    pub fn blocked(&self) -> bool {
+        let g = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        matches!(g.0, Some(start) if start.elapsed() < Duration::from_secs(60) && g.1 >= MAX_AUTH_FAILURES)
+    }
+
+    pub fn failed(&self) {
+        let mut g = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        match g.0 {
+            Some(start) if start.elapsed() < Duration::from_secs(60) => g.1 += 1,
+            _ => *g = (Some(std::time::Instant::now()), 1),
+        }
+        if g.1 == MAX_AUTH_FAILURES {
+            tracing::warn!(
+                "{MAX_AUTH_FAILURES} failed phone logins in a minute; refusing logins for a minute"
+            );
+        }
+    }
 }
 
 /// Keep listeners in sync with the wanted addresses until `stop` flips.
@@ -257,7 +300,14 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
 }
 
 async fn ws(State(st): State<AppState>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
+    if st.daemon.auth_throttle.blocked() {
+        return error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many failed logins; try again in a minute",
+        );
+    }
     let Some(device) = bearer(&headers).and_then(|t| st.daemon.authenticate(t)) else {
+        st.daemon.auth_throttle.failed();
         return error(StatusCode::UNAUTHORIZED, "missing or invalid device token");
     };
     upgrade

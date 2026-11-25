@@ -54,120 +54,167 @@ Design details and the reasoning behind them are in [`docs/design.md`](docs/desi
 
 ## Status
 
-| Checkpoint | State |
+Phase 1 is complete: the daemon, the Claude Code adapter and plugin, and the iPhone app. Antigravity (`agy`) is the next adapter, then Codex.
+
+| Checkpoint | |
 |---|---|
-| 1. Daemon, Unix socket, SQLite, `styr status` | ✅ done |
-| 2. `styr hook` plus the Claude plugin (mirroring only) and the fake-agent test harness | ✅ done |
-| 3. iOS app: pairing and live sessions (read-only) | ✅ done |
-| 4. Permission round-trip | ✅ done |
-| 5. Prompts from the phone | ✅ done |
-| 6. Push notifications | ✅ done |
-| 7. Pairing and auth hardening, launchd, install docs | in progress |
+| 1. Daemon, Unix socket, SQLite, `styr status` | ✅ |
+| 2. `styr hook`, Claude plugin, fake-agent harness | ✅ |
+| 3. iOS app: pairing and live sessions | ✅ |
+| 4. Approve / always allow / deny from the phone | ✅ |
+| 5. Prompts from the phone | ✅ |
+| 6. Push notifications | ✅ |
+| 7. launchd, auth hardening, docs | ✅ |
 
-## Try it (checkpoint 2)
+## Install
 
-Install the binaries, start the daemon, and add the Claude Code plugin:
+You need macOS (Apple Silicon), a Rust toolchain, Xcode with XcodeGen for the app, Tailscale on the Mac and the iPhone, and a paid Apple Developer account for push notifications.
 
 ```sh
-cargo install --path crates/styrd
-cargo install --path crates/styr          # puts styr on PATH (~/.cargo/bin)
-styrd &                                   # launchd setup comes in checkpoint 7
+git clone https://github.com/christoffermattssonlangseth/styrman && cd styrman
 
+# 1. The daemon and the CLI
+cargo install --path crates/styrd
+cargo install --path crates/styr        # into ~/.cargo/bin; make sure that's on PATH
+
+# 2. Run styrd as a launchd agent (starts at login, restarted if it ever exits)
+styr service install
+styr service status                     # plist loaded, daemon answering
+
+# 3. The Claude Code plugin (hooks + /styr), from this checkout
 claude plugin marketplace add "$PWD/plugins"
 claude plugin install styrman@styrman
+
+# 4. The iPhone app
+cd ios && xcodegen && open Styrman.xcodeproj
+#    Select your iPhone, set your team in Signing (or DEVELOPMENT_TEAM in project.yml), Run.
 ```
 
-Then, in any Claude Code session:
-
-```
-/styr        share this session (handled by a hook: no model call, nothing sent to Claude)
-/styr off    stop sharing
-```
-
-From the terminal:
+### Shell aliases (optional)
 
 ```sh
-styr status            # shared sessions: working / needs approval / needs you / done
-styr status --all      # include sessions that were never shared
-styr events <ID>       # full mirrored history of one session
+# ~/.zshrc
+alias claude='styr claude'
+alias agy='styr agy'        # adapter coming in phase 2
+alias codex='styr codex'    # adapter coming in phase 3
 ```
 
-Optional: `alias claude='styr claude'` (likewise `agy`, `codex`). This runs the next `claude` on your PATH (wrappers such as cmux's stay in the chain) and tags the session as started through Styrman. The plugin works without the alias.
+`styr claude …` execs the next `claude` on your PATH, so wrappers such as cmux's stay in the chain, and it tags the session as started through Styrman. The plugin works without the aliases.
 
-**Fail-open guarantee.** Every hook goes through `styr hook`. It always exits 0, and prints nothing unless the daemon has an answer. If `styrd` isn't running, or `styr` isn't installed at all, Claude Code behaves exactly as it would without Styrman.
+### Pair your phone
 
-**Privacy.** Until you type `/styr`, Styrman keeps only a session's start and end (for `styr status --all`). Your prompts, Claude's replies and tool calls are not stored, and nothing about the session is visible to the phone.
+```sh
+styr pair          # QR code + one-time code, valid 5 minutes
+```
 
-### Approving from the phone
-
-When a shared session needs permission, the phone shows a card with **Allow once**, **Always allow** (when Claude offers a "don't ask again" rule), and **Deny**. Claude Code shows its own prompt in the terminal at the same time, and whichever answer comes first wins. Answering at the keyboard closes the card on the phone, and answering on the phone dismisses the terminal prompt. Nothing is ever approved automatically.
-
-The phone can answer for 9 minutes; set `STYR_PERMISSION_TIMEOUT` (seconds) on `styrd` to change that. Unshared sessions never wait.
-
-If your Claude Code runs in `auto` permission mode, it approves routine actions itself, so cards only appear for the actions it would ask you about.
-
-### Prompts from the phone
-
-Type in the message box at the bottom of a session.
-
-- **Claude is idle:** it wakes up and answers within a couple of seconds.
-- **Claude is working:** the message is queued and sent the moment Claude finishes, and the phone shows it as queued until then.
-- **Typing in the terminal still works:** whatever you type there takes priority, and the phone's pending wait steps aside.
-- **From the Mac:** `styr send <ID> <text>` does the same, for scripts.
-
-This uses a second, background `Stop` hook in the plugin (`async` + `asyncRewake`). It waits for a phone message and, when one arrives, exits with code 2 to wake Claude. In the terminal, the message appears as "Stop hook feedback".
+Scan it with the iPhone Camera and tap **Pair**. `styr devices` lists paired phones, and `styr devices revoke <ID>` unpairs one. A revoked phone is disconnected immediately.
 
 ### Push notifications
 
-`styrd` sends notifications straight to Apple's push service (APNs). Nothing else is involved.
+1. At developer.apple.com, go to Certificates, IDs & Profiles › Keys and click **+**. Tick **Apple Push Notifications service**, set Environment to **Sandbox & Production**, and download `AuthKey_XXXXXXXXXX.p8`. Apple lets you download it only once, so keep a backup.
+2. Run `styr push setup ~/Downloads/AuthKey_XXXXXXXXXX.p8`. The key is copied into Styrman's data folder (0600), and the Key ID is read from the filename.
+3. Open the app and allow notifications. Then run `styr push test`.
 
-1. Create an APNs key at developer.apple.com › Certificates, IDs & Profiles › Keys. Tick "Apple Push Notifications service" and download `AuthKey_XXXXXXXXXX.p8`.
-2. Run `styr push setup ~/Downloads/AuthKey_XXXXXXXXXX.p8`. This copies the key into Styrman's data folder (mode 0600) and turns push on.
-3. Open the app once and allow notifications. Then run `styr push test`.
+## Using it
 
-When notifications are sent:
+In any Claude Code session:
 
-- **Needs approval:** when a shared session has a permission waiting 8 s after it was asked. If you answer at the keyboard first, there's no buzz.
-- **Finished:** when a turn that ran 30 s or longer ends.
-- **Never** while the app is open.
-
-By default a notification reads "Claude · repo: Needs your approval / Finished", with no commands, code or replies. `styr push details on` adds the command or the first line of Claude's reply, and that text then passes through Apple. Tapping a notification opens the session.
-
-### The iPhone app
-
-```sh
-cd ios && xcodegen            # regenerate Styrman.xcodeproj after changing project.yml
-open Styrman.xcodeproj        # run on your iPhone (team 7R6QL53THM is preset)
-styr pair                     # on the Mac: shows a QR code; scan it with the iPhone camera
-styr devices                  # list paired phones; `styr devices revoke <ID>` unpairs one
+```
+/styr        share this session with your phone (handled by a hook: no model call)
+/styr off    stop sharing
 ```
 
-The phone reaches `styrd` over Tailscale only. Have Tailscale running on both the Mac and the iPhone.
+On the phone:
 
-- The daemon binds to loopback and the Mac's Tailscale addresses on port 4719 (`STYR_PORT`), never to `0.0.0.0`. `STYR_TAILSCALE=0` restricts it to loopback.
-- Pairing links use the Mac's MagicDNS name (`*.ts.net`). iOS only lets the app make unencrypted connections to `ts.net` hosts, and Tailscale's WireGuard tunnel already encrypts that traffic.
-- The QR code holds a one-time code that expires after 5 minutes. Redeeming it gives the phone a device token, which is stored in the iOS Keychain and sent only in the `Authorization` header.
+- **Sessions** are grouped into *Needs you*, *Working* and *Done*. Each row shows the repo and your first prompt. Swipe left to stop sharing a session or remove a finished one.
+- **The timeline** shows your prompts, Claude's replies, the plan, and every tool call. Tap a tool call to see its full output.
+- **Permission cards** offer *Allow once*, *Always allow* (Claude's own "don't ask again" rule) and *Deny*. Claude shows its own prompt in the terminal at the same time, and the first answer wins. Nothing is ever approved automatically. The phone can answer for 9 minutes (`STYR_PERMISSION_TIMEOUT` on `styrd`).
+- **The message box:** an idle Claude wakes up and answers. If Claude is busy, the message is queued and sent the moment it finishes. Typing in the terminal still works.
+- **Notifications:**
+  - *Needs your approval* arrives if a permission is still unanswered after 8 s.
+  - *Finished* arrives for turns of 30 s or more.
+  - Nothing arrives while the app is open.
+  - Tapping a notification opens the session.
+  - Notifications say only "Claude · repo" unless you run `styr push details on`.
 
-### Developing
+From the Mac:
 
 ```sh
-cargo test --workspace                          # unit + end-to-end tests (real styr binary, in-process styrd)
-cargo run -p styr-testkit --bin styr-fake-agent  # demo session; pauses at a permission until you answer on the phone
-cargo run -p styr-testkit --bin styr-fake-phone  # a scripted phone that answers the next permission request
-STYR_HOOK_RECORD=/tmp/hooks.jsonl claude …       # record raw hook payloads as fixtures
+styr status [--all]           # sessions: working / needs approval / needs you / done
+styr events <ID>              # a session's full history
+styr send <ID> <text>         # send a prompt, like the phone does
+styr forget <ID>… | --ended   # delete sessions and their history
+styr service restart          # after `cargo install --path crates/styrd`
 ```
 
-Environment: `STYR_HOME` (data directory), `STYR_SOCKET` (socket path; macOS caps it at 103 bytes), `STYR_BIN` (which `styr` the plugin calls), `STYR_LOG` (daemon log filter, e.g. `debug`), `STYR_DEBUG` (make `styr hook` report errors on stderr).
+Sessions that are never shared stay invisible: only their start and end are recorded (for `styr status --all`). If an agent's process dies without saying goodbye (closed window, crash), its session is marked done within 30 s.
+
+## Security
+
+| | |
+|---|---|
+| **Network** | The phone API binds to loopback and the Mac's Tailscale addresses only (port 4719), never `0.0.0.0`. The phone connects through the Mac's MagicDNS name over the WireGuard tunnel. iOS allows plain `ws://` only to `ts.net` hosts. |
+| **Pairing** | The QR code holds a one-time code (about 49 bits) that expires after 5 minutes. Ten wrong codes cancel all outstanding codes. The link contains no other secret. |
+| **Devices** | Each phone has a 256-bit bearer token, stored in the iOS Keychain and sent only in the `Authorization` header. The daemon stores only SHA-256 of the token and compares in constant time. After 20 failed logins in a minute, logins are refused for a minute. Revoking a phone takes effect immediately. |
+| **Browsers** | Any request carrying an `Origin` header is refused, so a web page on the Mac (including a DNS-rebinding page) can't use the API. |
+| **Local** | The Unix socket is 0600 in a 0700 directory. The database, APNs key and config are 0600. |
+| **Fail-open** | `styr hook` exits 0 and prints nothing unless the daemon answers. If `styrd` is down, every agent behaves exactly as it would without Styrman. |
+| **Third parties** | The only one is Apple's push service, which sees "Claude · repo" text unless you turn details on. There's no relay and no account. |
+
+## Adding an adapter
+
+Each agent is a crate under `crates/adapters/` implementing `styr_core::adapter::AgentAdapter`. Antigravity, Codex and PTY already exist as stubs.
+
+1. **Pick the integration style** and declare it in `capabilities()`:
+   - **Hook path** (Claude, agy, Codex hooks). The agent's hooks run `styr hook <agent> <event>` with the payload on stdin. Implement:
+     - `native_session` to find the session id;
+     - `on_hook` to turn one hook into a `HookPlan`: session metadata, normalized `EventKind`s, and optionally `wait: Permission | NextPrompt`, `set_sharing` or an immediate `reply`;
+     - `render_reply` / `render_exit` to turn the daemon's `HookDecision` back into what the agent's hook protocol expects. `PassThrough` must always render as "print nothing, exit 0".
+   - **Protocol path** (Codex `app-server`, agy ACP). Implement `attach` to connect to a live session, push events into the `EventSink`, and return a `SessionDriver` that carries out `Command`s (prompts, permission answers, interrupt).
+2. **Map the agent's concepts** onto the event model in `crates/styr-core/src/event.rs`:
+   - tool calls with a stable id and a lifecycle;
+   - permission requests with their options (`allow_once`, `allow_always`, `reject_once`, `reject_always`);
+   - text sent either `Delta` or `Final`.
+3. **Register** the adapter in `styrd::default_adapters()` and in `styr`'s launcher (`crates/styr/src/launch.rs`).
+4. **Ship the agent-side glue** next to `plugins/claude/`, for example an agy plugin whose `hooks.json` calls `styr hook agy <event>`.
+5. **Test it.** Record real payloads with `STYR_HOOK_RECORD=/tmp/hooks.jsonl`, keep them as fixtures under `tests/fixtures/`, and test `on_hook`/`render_reply` against them, as `styr-adapter-claude` does. `styr-testkit` provides an in-process daemon, a hook runner, and `styr-fake-agent` / `styr-fake-phone` for end-to-end tests.
+
+The integration plan for each agent, from their official docs, is in [`docs/design.md`](docs/design.md) §1 and §4.
+
+## Development
+
+```sh
+cargo test --workspace                                   # Rust: unit + end-to-end (real binaries, in-process daemon)
+cd ios && xcodebuild -scheme Styrman -destination 'platform=iOS Simulator,name=iPhone 18 Pro' test
+cargo run -p styr-testkit --bin styr-fake-agent          # demo session: pauses for a phone approval and a phone prompt
+cargo run -p styr-testkit --bin styr-fake-phone          # a scripted phone that answers the next permission request
+STYR_HOOK_RECORD=/tmp/hooks.jsonl claude …               # record raw hook payloads
+```
+
+Environment variables:
+
+- `STYR_HOME`: data directory.
+- `STYR_SOCKET`: socket path. macOS limits socket paths to 103 bytes.
+- `STYR_PORT`: phone API port, default 4719.
+- `STYR_TAILSCALE=0`: listen on loopback only.
+- `STYR_PERMISSION_TIMEOUT`: how long the phone can answer a permission.
+- `STYR_LOG`: daemon log filter.
+- `STYR_BIN`: which `styr` the plugin calls.
+- `STYR_DEBUG`: make `styr hook` report errors on stderr.
+
+Logs go to `~/Library/Logs/styrd.log`.
 
 ## Repository layout
 
 ```
-crates/styr-core          event model, status reducer, adapter trait, IPC types
-crates/styrd              the daemon
-crates/styr               the CLI (launcher, hook helper, status)
-crates/styr-testkit       fake-agent harness + styr-fake-agent
-crates/adapters/*         claude (working); agy, codex, pty (stubs)
+crates/styr-core          event model, status reducer, adapter trait, IPC + phone protocol types
+crates/styrd              the daemon: sessions, SQLite, permission broker, prompt queue, phone API, APNs
+crates/styr               the CLI: launcher, hook helper, status, pairing, service, push
+crates/styr-testkit       in-process daemon, hook runner, fake agent, fake phone
+crates/adapters/*         claude (complete); agy, codex, pty (stubs)
 plugins/                  Claude Code plugin + local marketplace
-assets/logo               icon and logo concepts
-docs/design.md     architecture and protocol notes
+ios/                      SwiftUI app (XcodeGen project.yml)
+packaging/launchd/        example launchd plist (`styr service install` writes the real one)
+assets/logo/              icon and logo concepts
+docs/design.md            architecture, protocol notes, verified agent behaviour
 ```

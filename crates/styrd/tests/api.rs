@@ -196,3 +196,75 @@ async fn shutdown_closes_open_phone_connections() {
         .await
         .expect("daemon stopped with a phone connected");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn browsers_and_token_guessing_are_refused() {
+    let d = Daemon::start().await;
+    let (code, _, urls) = d.pairing().await;
+    let base = http_base(&urls[0]);
+    let http = reqwest::Client::new();
+
+    // Anything carrying an Origin header (a web page) is refused, even with a valid code.
+    let r = http
+        .post(format!("{base}/v1/pair"))
+        .header("origin", "https://evil.example")
+        .json(&json!({"code": code, "device_name": "x"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 403);
+    let r = http
+        .get(format!("{base}/v1/health"))
+        .header("origin", "http://localhost")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 403);
+    // The code was not consumed by the refused request.
+    let (_, token) = (
+        (),
+        http.post(format!("{base}/v1/pair"))
+            .json(&json!({"code": code, "device_name": "x"}))
+            .send()
+            .await
+            .unwrap()
+            .json::<PairResponse>()
+            .await
+            .unwrap()
+            .token,
+    );
+    let mut req =
+        tungstenite::client::IntoClientRequest::into_client_request(urls[0].as_str()).unwrap();
+    req.headers_mut()
+        .insert("authorization", format!("Bearer {token}").parse().unwrap());
+    req.headers_mut()
+        .insert("origin", "https://evil.example".parse().unwrap());
+    assert!(
+        tokio_tungstenite::connect_async(req).await.is_err(),
+        "browser WebSocket refused"
+    );
+
+    // Oversized pairing bodies are refused.
+    let big = "x".repeat(64 * 1024);
+    let r = http
+        .post(format!("{base}/v1/pair"))
+        .json(&json!({"code": big, "device_name": "x"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 413);
+
+    // Guessing tokens: after 20 failures even the right token is refused for a minute.
+    for _ in 0..20 {
+        assert!(connect(&urls[0], "sd1.guess.guess").await.is_err());
+    }
+    let mut req =
+        tungstenite::client::IntoClientRequest::into_client_request(urls[0].as_str()).unwrap();
+    req.headers_mut()
+        .insert("authorization", format!("Bearer {token}").parse().unwrap());
+    match tokio_tungstenite::connect_async(req).await {
+        Err(tungstenite::Error::Http(resp)) => assert_eq!(resp.status(), 429),
+        other => panic!("expected 429, got {:?}", other.map(|_| ())),
+    }
+    d.stop().await;
+}
