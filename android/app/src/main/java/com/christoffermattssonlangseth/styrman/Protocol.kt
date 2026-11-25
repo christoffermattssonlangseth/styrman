@@ -13,6 +13,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.longOrNull
@@ -267,10 +268,44 @@ data class FolderListing(
     }
 }
 
+data class UsageWindow(val title: String, val usedFraction: Double, val resetsAtMs: Long, val rolling: Boolean)
+
+data class UsageProvider(
+    val id: String,
+    val estimated: Boolean,
+    val observedAtMs: Long,
+    val windows: List<UsageWindow>,
+) {
+    val name: String get() = when (id) {
+        "claude" -> "Claude"
+        "codex" -> "Codex"
+        "gemini" -> "Gemini / Antigravity"
+        else -> id
+    }
+
+    companion object {
+        fun parse(o: JsonObject) = UsageProvider(
+            id = o.str("id") ?: "",
+            estimated = o.bool("estimated") ?: false,
+            observedAtMs = o.long("observed_at_ms") ?: 0,
+            windows = o.arr("windows").orEmpty().map { entry ->
+                val window = entry.jsonObject
+                UsageWindow(
+                    title = window.str("title") ?: "",
+                    usedFraction = (window["used_fraction"] as? JsonPrimitive)?.doubleOrNull ?: 0.0,
+                    resetsAtMs = window.long("resets_at_ms") ?: 0,
+                    rolling = window.bool("rolling") ?: false,
+                )
+            },
+        )
+    }
+}
+
 // ---- server → phone ----
 
 sealed interface ServerMsg {
-    data class Hello(val host: String, val warnings: List<String>) : ServerMsg
+    data class Hello(val host: String, val warnings: List<String>, val usageSupported: Boolean) : ServerMsg
+    data class Usage(val providers: List<UsageProvider>) : ServerMsg
     data class Sessions(val sessions: List<SessionSummary>) : ServerMsg
     data class SessionUpdated(val session: SessionSummary) : ServerMsg
     data class SessionRemoved(val id: String) : ServerMsg
@@ -288,7 +323,12 @@ sealed interface ServerMsg {
         fun parse(text: String): ServerMsg {
             val o = json.parseToJsonElement(text).jsonObject
             return when (val type = o.str("type")) {
-                "hello" -> Hello(o.str("host") ?: "", o.arr("warnings").orEmpty().mapNotNull { (it as? JsonPrimitive)?.contentOrNull })
+                "hello" -> Hello(
+                    o.str("host") ?: "",
+                    o.arr("warnings").orEmpty().mapNotNull { (it as? JsonPrimitive)?.contentOrNull },
+                    o.bool("usage_supported") ?: false,
+                )
+                "usage" -> Usage(o.arr("providers").orEmpty().map { UsageProvider.parse(it.jsonObject) })
                 "sessions" -> Sessions(o.arr("sessions").orEmpty().map { SessionSummary.parse(it.jsonObject) })
                 "session_updated" -> SessionUpdated(SessionSummary.parse(o.obj("session") ?: JsonObject(emptyMap())))
                 "session_removed" -> SessionRemoved(o.str("id") ?: "")
@@ -309,6 +349,8 @@ sealed interface ServerMsg {
 // ---- phone → server ----
 
 object ClientMsg {
+    fun getUsage() = buildJsonObject { put("type", "get_usage") }
+
     fun listSessions() = buildJsonObject { put("type", "list_sessions") }
     fun subscribe(session: String, sinceSeq: Long) =
         buildJsonObject { put("type", "subscribe"); put("session", session); put("since_seq", sinceSeq) }

@@ -418,6 +418,7 @@ impl Connection {
                 device_id: self.device.clone(),
                 host: Daemon::host_name(),
                 warnings: self.daemon.warnings(),
+                usage_supported: true,
             },
         )
         .await?;
@@ -536,6 +537,13 @@ impl Connection {
     async fn on_client(&mut self, tx: &mut Tx, msg: ClientMsg) -> anyhow::Result<()> {
         match msg {
             ClientMsg::ListSessions => self.send_sessions(tx).await,
+            ClientMsg::GetUsage => {
+                let providers = tokio::task::spawn_blocking(crate::usage::read)
+                    .await
+                    .unwrap_or_default();
+                send(tx, &ServerMsg::Usage { providers }).await
+            }
+
             ClientMsg::Subscribe { session, since_seq } => {
                 let visible = self.daemon.summary(&session)?.is_some_and(|s| s.shared);
                 if !visible {

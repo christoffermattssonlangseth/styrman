@@ -14,6 +14,7 @@
 		49C3228F71AD43C16091C244 /* SessionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A494FA97E73F2292F21D283 /* SessionDetailView.swift */; };
 		4B398F324DB74E7B8197541E /* DaemonConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C5647A67574DB7C5E369840 /* DaemonConnection.swift */; };
 		6542962E87DA49169ADCCC5B /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B27AED31838D3975D0DCEFA /* PairingView.swift */; };
+		679620EC756673D37F73FC31 /* UsageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCDF33717CBF4E65531B1021 /* UsageView.swift */; };
 		706EB106558B1B609DC45E2B /* StyrmanApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E2DA42B6895A9B2D3DE2D56 /* StyrmanApp.swift */; };
 		7310210765518C68DB35E424 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = CB9682178940E3A389F29142 /* PrivacyInfo.xcprivacy */; };
 		787DEFC79040854312CEC7F9 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45DBF7130A3704CEE2895C33 /* Theme.swift */; };
@@ -51,6 +52,7 @@
 		9E2DA42B6895A9B2D3DE2D56 /* StyrmanApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StyrmanApp.swift; sourceTree = "<group>"; };
 		A5D69A43CF54A86119E59F1F /* Styrman.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Styrman.entitlements; sourceTree = "<group>"; };
 		B220CBE574863299DA11C433 /* Timeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Timeline.swift; sourceTree = "<group>"; };
+		BCDF33717CBF4E65531B1021 /* UsageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageView.swift; sourceTree = "<group>"; };
 		BD19E4712373962A32F05800 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C7E776EFAAFF5AC5CE31CE09 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		CB9682178940E3A389F29142 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
@@ -129,6 +131,7 @@
 				9A494FA97E73F2292F21D283 /* SessionDetailView.swift */,
 				6D0ACD1C6115207E5344249C /* SessionListView.swift */,
 				45DBF7130A3704CEE2895C33 /* Theme.swift */,
+				BCDF33717CBF4E65531B1021 /* UsageView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -273,6 +276,7 @@
 				706EB106558B1B609DC45E2B /* StyrmanApp.swift in Sources */,
 				787DEFC79040854312CEC7F9 /* Theme.swift in Sources */,
 				9B9388375EFD227C2D3B3ED8 /* Timeline.swift in Sources */,
+				679620EC756673D37F73FC31 /* UsageView.swift in Sources */,
 				494D951C69223CEE06CDB022 /* Voice.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

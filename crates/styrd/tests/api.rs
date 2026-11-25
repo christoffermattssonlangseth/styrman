@@ -74,6 +74,7 @@ async fn phone_api_end_to_end() {
     let ServerMsg::Hello {
         device_id,
         protocol,
+        usage_supported,
         ..
     } = recv(&mut ws).await
     else {
@@ -88,6 +89,10 @@ async fn phone_api_end_to_end() {
     };
     assert_eq!(sessions.len(), 1, "unshared sessions are invisible");
     let sid = sessions[0].id.clone();
+
+    assert!(usage_supported);
+    send(&mut ws, json!({"type": "get_usage"})).await;
+    assert!(matches!(recv(&mut ws).await, ServerMsg::Usage { .. }));
 
     // Unknown/unshared sessions cannot be subscribed to.
     send(&mut ws, json!({"type": "subscribe", "session": "nope"})).await;

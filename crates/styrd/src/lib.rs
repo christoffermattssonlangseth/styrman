@@ -10,6 +10,7 @@ pub mod prompts;
 pub mod push;
 pub mod store;
 pub mod terminals;
+mod usage;
 
 use anyhow::{Context, Result, bail};
 use std::fs::File;

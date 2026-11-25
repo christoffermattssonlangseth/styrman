@@ -28,6 +28,10 @@ The agents' own answers to this don't fit how I work:
 
 Styrman (Swedish/Norwegian *styrmann*, "helmsman") is one helm for all of them. Your terminal workflow doesn't change. Sessions stay invisible until you type `/styr` in one; from then on, that session appears on your phone with its live conversation, tool calls, permission cards (Allow once / Always / Deny) and a prompt box, and you get a notification when it needs you or is done.
 
+## Usage monitoring
+
+Open **Usage** from the mobile session list to see the available quota windows, reset times, and activity estimates. Run a KarvMac build with local quota export on the same Mac as `styrd`, then sync Karv once. Styrman reads the export and sends the quota figures over its paired connection. Provider credentials stay with Karv.
+
 ## How it works
 
 ```

@@ -364,8 +364,9 @@ struct Lossy<T: Decodable>: Decodable {
 // MARK: - Server → phone
 
 enum ServerMsg: Decodable, Sendable {
-    case hello(protocolVersion: Int, daemonVersion: String, deviceId: String, host: String, warnings: [String])
+    case hello(protocolVersion: Int, daemonVersion: String, deviceId: String, host: String, warnings: [String], usageSupported: Bool)
     case sessions([SessionSummary])
+    case usage([UsageProvider])
     case sessionUpdated(SessionSummary)
     case sessionRemoved(id: String)
     case events(session: String, events: [Event])
@@ -380,6 +381,7 @@ enum ServerMsg: Decodable, Sendable {
 
     private enum K: String, CodingKey {
         case type, `protocol`, host, sessions, session, id, events, event, message, text, position, warnings, listing
+        case providers, usageSupported = "usage_supported"
         case daemonVersion = "daemon_version", deviceId = "device_id", lastSeq = "last_seq"
     }
 
@@ -393,7 +395,9 @@ enum ServerMsg: Decodable, Sendable {
                 daemonVersion: try c.decode(String.self, forKey: .daemonVersion),
                 deviceId: try c.decode(String.self, forKey: .deviceId),
                 host: try c.decode(String.self, forKey: .host),
-                warnings: (try? c.decodeIfPresent([String].self, forKey: .warnings)) ?? [])
+                warnings: (try? c.decodeIfPresent([String].self, forKey: .warnings)) ?? [],
+                usageSupported: try c.decodeIfPresent(Bool.self, forKey: .usageSupported) ?? false)
+        case "usage": self = .usage(try c.decode([UsageProvider].self, forKey: .providers))
         case "sessions": self = .sessions(try c.decode([SessionSummary].self, forKey: .sessions))
         case "session_updated": self = .sessionUpdated(try c.decode(SessionSummary.self, forKey: .session))
         case "session_removed": self = .sessionRemoved(id: try c.decode(String.self, forKey: .id))
@@ -419,6 +423,7 @@ enum ServerMsg: Decodable, Sendable {
 
 enum ClientMsg: Encodable, Sendable {
     case listSessions
+    case getUsage
     case subscribe(session: String, sinceSeq: UInt64)
     case unsubscribe(session: String)
     case resolvePermission(session: String, request: String, option: String)
@@ -434,6 +439,8 @@ enum ClientMsg: Encodable, Sendable {
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: K.self)
         switch self {
+        case .getUsage:
+            try c.encode("get_usage", forKey: .type)
         case .listSessions:
             try c.encode("list_sessions", forKey: .type)
         case .subscribe(let s, let since):
@@ -530,3 +537,35 @@ struct PairRequest: Encodable { let code: String; let deviceName: String
 
 struct PairResponse: Decodable { let deviceId: String; let token: String; let host: String
     enum CodingKeys: String, CodingKey { case token, host, deviceId = "device_id" } }
+
+
+struct UsageProvider: Decodable, Identifiable, Sendable {
+    let id: String
+    let estimated: Bool
+    let observedAtMs: Int64
+    let windows: [UsageWindow]
+
+    enum CodingKeys: String, CodingKey {
+        case id, estimated, windows, observedAtMs = "observed_at_ms"
+    }
+
+    var name: String {
+        switch id {
+        case "claude": "Claude"
+        case "codex": "Codex"
+        case "gemini": "Gemini / Antigravity"
+        default: id
+        }
+    }
+}
+
+struct UsageWindow: Decodable, Sendable {
+    let title: String
+    let usedFraction: Double
+    let resetsAtMs: Int64
+    let rolling: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case title, rolling, usedFraction = "used_fraction", resetsAtMs = "resets_at_ms"
+    }
+}

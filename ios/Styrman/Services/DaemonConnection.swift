@@ -22,6 +22,8 @@ final class DaemonConnection {
     private(set) var sessions: [SessionSummary] = []
     private(set) var host: String = ""
     /// Notes from the Mac (e.g. an agent version Styrman hasn't been checked with).
+    private(set) var usageSupported = false
+    private(set) var usage: [UsageProvider]?
     private(set) var warnings: [String] = []
     /// Last error the daemon reported for something this phone asked (shown briefly).
     var lastError: String?
@@ -64,6 +66,8 @@ final class DaemonConnection {
         host = creds.host
         sessions = []
         timelines = [:]
+        usage = nil
+        usageSupported = false
         connect()
     }
 
@@ -73,6 +77,8 @@ final class DaemonConnection {
         credentials = nil
         sessions = []
         timelines = [:]
+        usage = nil
+        usageSupported = false
         state = .unpaired
     }
 
@@ -167,7 +173,8 @@ final class DaemonConnection {
 
     private func handle(_ msg: ServerMsg) {
         switch msg {
-        case .hello(_, _, _, let host, let warnings):
+        case .hello(_, _, _, let host, let warnings, let usageSupported):
+            self.usageSupported = usageSupported
             self.host = host
             self.warnings = warnings
             state = .connected
@@ -191,6 +198,8 @@ final class DaemonConnection {
             timelines[sid]?.markQueued(text)
         case .promptDelivered(let sid, let text):
             timelines[sid]?.markDelivered(text)
+        case .usage(let providers):
+            usage = providers
         case .folders(let listing):
             folders = listing
         case .sessionStarting(let sid):
@@ -203,6 +212,10 @@ final class DaemonConnection {
         case .unknown:
             break
         }
+    }
+
+    func refreshUsage() {
+        if state == .connected && usageSupported { send(.getUsage) }
     }
 
     // MARK: Timelines

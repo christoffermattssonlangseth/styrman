@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -44,6 +45,7 @@ import com.christoffermattssonlangseth.styrman.SessionSummary
 fun SessionListScreen(
     connection: DaemonConnection,
     onOpen: (String) -> Unit,
+    onUsage: () -> Unit,
     onSettings: () -> Unit,
     onNewSession: () -> Unit,
 ) {
@@ -62,6 +64,7 @@ fun SessionListScreen(
                 title = { Text("Styrman") },
                 actions = {
                     IconButton(onClick = onNewSession, enabled = connected) { Icon(Icons.Filled.Add, "New session") }
+                    IconButton(onClick = onUsage) { Icon(Icons.Filled.BarChart, "Usage") }
                     IconButton(onClick = onSettings) { Icon(Icons.Filled.Settings, "Settings") }
                 },
             )

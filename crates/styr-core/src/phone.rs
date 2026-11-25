@@ -24,6 +24,7 @@ pub const PAIR_SCHEME: &str = "styrman";
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMsg {
     ListSessions,
+    GetUsage,
     Subscribe {
         session: SessionId,
         #[serde(default)]
@@ -92,6 +93,23 @@ pub struct FolderListing {
     pub git_branch: Option<String>,
 }
 
+/// Read-only quota information exported by KarvMac.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UsageProvider {
+    pub id: String,
+    pub estimated: bool,
+    pub observed_at_ms: i64,
+    pub windows: Vec<UsageWindow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UsageWindow {
+    pub title: String,
+    pub used_fraction: f64,
+    pub resets_at_ms: i64,
+    pub rolling: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMsg {
@@ -103,6 +121,8 @@ pub enum ServerMsg {
         /// Things the user should know (e.g. an unverified agent version).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         warnings: Vec<String>,
+        #[serde(default)]
+        usage_supported: bool,
     },
     Sessions {
         sessions: Vec<SessionSummary>,
@@ -140,6 +160,9 @@ pub enum ServerMsg {
     },
     Error {
         message: String,
+    },
+    Usage {
+        providers: Vec<UsageProvider>,
     },
     Folders {
         listing: FolderListing,

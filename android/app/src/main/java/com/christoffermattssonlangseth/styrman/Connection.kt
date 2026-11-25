@@ -39,6 +39,10 @@ class DaemonConnection(context: Context) {
     val sessions = mutableStateListOf<SessionSummary>()
     var host by mutableStateOf(credentials?.host ?: "")
         private set
+    var usageSupported by mutableStateOf(false)
+        private set
+    var usage by mutableStateOf<List<UsageProvider>?>(null)
+        private set
     var warnings by mutableStateOf(listOf<String>())
         private set
     /** Last error the daemon reported for something this phone asked (shown briefly). */
@@ -72,9 +76,12 @@ class DaemonConnection(context: Context) {
         ws?.close(1000, null)
         ws = null
         timelines.values.forEach { it.isLive = false }
+        if (credentials != null && state != State.Unauthorized) state = State.Offline("Disconnected")
     }
 
     fun adopt(c: Credentials) {
+        usage = null
+        usageSupported = false
         store.save(c)
         credentials = c
         host = c.host
@@ -85,6 +92,8 @@ class DaemonConnection(context: Context) {
 
     fun forget() {
         stop()
+        usage = null
+        usageSupported = false
         store.clear()
         credentials = null
         sessions.clear()
@@ -136,10 +145,12 @@ class DaemonConnection(context: Context) {
             is ServerMsg.Hello -> {
                 host = msg.host
                 warnings = msg.warnings
+                usageSupported = msg.usageSupported
                 state = State.Connected
                 backoffMs = 1000
                 watched.forEach { subscribe(it) }
             }
+            is ServerMsg.Usage -> usage = msg.providers
             is ServerMsg.Sessions -> {
                 sessions.clear()
                 sessions.addAll(msg.sessions.sortedByDescending { it.updatedMs })
@@ -180,6 +191,10 @@ class DaemonConnection(context: Context) {
     }
 
     private fun subscribe(id: String) = send(ClientMsg.subscribe(id, timeline(id).lastSeq))
+
+    fun refreshUsage() {
+        if (state == State.Connected && usageSupported) send(ClientMsg.getUsage())
+    }
 
     fun refresh() {
         if (state == State.Connected) send(ClientMsg.listSessions()) else { backoffMs = 1000; connect() }

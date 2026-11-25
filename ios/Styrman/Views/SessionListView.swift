@@ -5,6 +5,7 @@ struct SessionListView: View {
     @Environment(DaemonConnection.self) private var connection
     @State private var showSettings = false
     @State private var showNewSession = false
+    @State private var showUsage = false
     @State private var path: [String] = []
     @State private var showAllDone = false
 
@@ -50,6 +51,10 @@ struct SessionListView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { WheelMark(size: 24) }
                 ToolbarItem(placement: .topBarTrailing) {
+                    Button { showUsage = true } label: { Image(systemName: "chart.bar") }
+                        .accessibilityLabel("Usage")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Button { showSettings = true } label: { Image(systemName: "gearshape") }
                         .accessibilityLabel("Settings")
                 }
@@ -60,6 +65,7 @@ struct SessionListView: View {
                 }
             }
             .navigationDestination(for: String.self) { id in SessionDetailView(sessionId: id) }
+            .sheet(isPresented: $showUsage) { UsageView() }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .sheet(isPresented: $showNewSession) { NewSessionView() }
             .refreshable { connection.connect() }

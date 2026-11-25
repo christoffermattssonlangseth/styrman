@@ -16,6 +16,7 @@ import com.christoffermattssonlangseth.styrman.Speaker
 @Composable
 fun StyrmanApp(connection: DaemonConnection, speaker: Speaker, incomingLink: PairingLink?, consumeLink: () -> Unit) {
     var open by rememberSaveable { mutableStateOf<String?>(null) }
+    var usage by rememberSaveable { mutableStateOf(false) }
     var settings by remember { mutableStateOf(false) }
     var newSession by remember { mutableStateOf(false) }
 
@@ -27,6 +28,10 @@ fun StyrmanApp(connection: DaemonConnection, speaker: Speaker, incomingLink: Pai
     val paired = connection.credentials != null
     when {
         !paired || incomingLink != null -> PairScreen(connection, incomingLink, onDone = consumeLink)
+        usage -> {
+            BackHandler { usage = false }
+            UsageScreen(connection, onClose = { usage = false })
+        }
         settings -> {
             BackHandler { settings = false }
             SettingsScreen(connection, speaker, onClose = { settings = false })
@@ -38,6 +43,7 @@ fun StyrmanApp(connection: DaemonConnection, speaker: Speaker, incomingLink: Pai
         else -> SessionListScreen(
             connection,
             onOpen = { open = it },
+            onUsage = { usage = true },
             onSettings = { settings = true },
             onNewSession = { newSession = true },
         )
