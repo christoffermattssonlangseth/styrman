@@ -269,14 +269,16 @@ private fun Reply(item: TimelineItem.Assistant, agent: AgentKind, speaker: Speak
 private fun ToolRow(item: TimelineItem.Tool, title: String) {
     var open by remember { mutableStateOf(false) }
     Row(
-        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(12.dp))
-            .clickable { open = true }.padding(10.dp),
+        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(8.dp))
+            .clickable { open = true }.padding(horizontal = 10.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Icon(toolIcon(item.tool.kind), null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
-        Text(title, Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis,
-            fontFamily = if (item.tool.kind == ToolKind.Execute) Mono else null, style = MaterialTheme.typography.bodyMedium)
+        // Compact: one line, small type. Tap for the full command and output.
+        Icon(toolIcon(item.tool.kind), null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp))
+        Text(title, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
+            fontFamily = if (item.tool.kind == ToolKind.Execute) Mono else null,
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         when (item.status) {
             ToolStatus.Pending, ToolStatus.Running -> CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
             ToolStatus.Completed -> Icon(Icons.Filled.Check, "Done", tint = Color(0xFF34A853), modifier = Modifier.size(16.dp))

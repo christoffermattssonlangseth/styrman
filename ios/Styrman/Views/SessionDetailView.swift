@@ -174,7 +174,9 @@ struct TimelineRow: View {
         case .assistant(let id, let text, _):
             ReplyView(id: id, text: markdown(text), raw: text, agent: agent)
         case .tool(_, let tool):
+            // Runs of tool calls sit close together (the list's spacing is 12).
             ToolCallRow(item: tool, title: displayTitle(tool.tool, cwd: cwd))
+                .padding(.vertical, -4)
         case .permission(_, let p):
             PermissionCard(item: p, title: displayTitle(p.tool, cwd: cwd), sessionId: sessionId)
         case .plan(_, let entries):
@@ -273,20 +275,24 @@ struct ToolCallRow: View {
         Button {
             showDetail = true
         } label: {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
+            // Compact: one line, small type. Tap for the full command and output.
+            HStack(alignment: .center, spacing: 6) {
                 Image(systemName: Theme.symbol(for: item.tool.kind))
-                    .foregroundStyle(.secondary).frame(width: 18)
+                    .font(.caption)
+                    .foregroundStyle(.secondary).frame(width: 14)
                 Text(title)
-                    .font(item.tool.kind == .execute ? Theme.mono : .callout)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                Spacer(minLength: 6)
+                    .font(item.tool.kind == .execute
+                          ? .system(.caption, design: .monospaced) : .footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 4)
                 statusIcon
             }
-            .padding(10)
+            .padding(.horizontal, 10).padding(.vertical, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
-            .contentShape(RoundedRectangle(cornerRadius: 12))
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+            .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
         .accessibilityHint("Shows the full command and its output")
@@ -297,9 +303,9 @@ struct ToolCallRow: View {
 
     @ViewBuilder private var statusIcon: some View {
         switch item.status {
-        case .pending, .running: ProgressView().controlSize(.small)
-        case .completed: Image(systemName: "checkmark").foregroundStyle(.green).font(.caption.bold())
-        case .failed: Image(systemName: "xmark").foregroundStyle(.red).font(.caption.bold())
+        case .pending, .running: ProgressView().controlSize(.mini)
+        case .completed: Image(systemName: "checkmark").foregroundStyle(.green).font(.caption2.bold())
+        case .failed: Image(systemName: "xmark").foregroundStyle(.red).font(.caption2.bold())
         }
     }
 }
