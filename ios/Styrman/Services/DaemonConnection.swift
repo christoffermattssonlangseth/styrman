@@ -17,7 +17,32 @@ final class DaemonConnection {
         case unauthorized
     }
 
-    private(set) var state: State = .unpaired
+    private(set) var state: State = .unpaired {
+        didSet { trackTrouble() }
+    }
+    /// The connection has been down for a while (not just a quick reconnect, like
+    /// coming back to the app). The UI only shows connection problems when this is set.
+    private(set) var troubled = false
+    @ObservationIgnored private var troubleTimer: Task<Void, Never>?
+
+    private func trackTrouble() {
+        switch state {
+        case .connected, .unpaired:
+            troubleTimer?.cancel()
+            troubleTimer = nil
+            troubled = false
+        case .unauthorized:
+            troubled = true
+        case .connecting, .offline:
+            guard !troubled, troubleTimer == nil else { return }
+            troubleTimer = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(3))
+                guard let self, !Task.isCancelled else { return }
+                self.troubleTimer = nil
+                if self.state != .connected { self.troubled = true }
+            }
+        }
+    }
     private(set) var credentials: Credentials?
     private(set) var sessions: [SessionSummary] = []
     private(set) var host: String = ""

@@ -7,7 +7,7 @@ struct SessionListView: View {
     @State private var showNewSession = false
     @State private var showUsage = false
     @State private var path: [String] = []
-    @State private var showAllDone = false
+    @State private var showDone = false
 
     private var needsYou: [SessionSummary] { connection.sessions.filter { $0.status.needsUser } }
     private var working: [SessionSummary] { connection.sessions.filter { $0.status == .working || $0.status == .error } }
@@ -16,41 +16,66 @@ struct SessionListView: View {
     var body: some View {
         NavigationStack(path: $path) {
             List {
-                if connection.state != .connected {
-                    Section { ConnectionBanner() }
+                SummaryHeader(working: working.count, needs: needsYou.count, done: done.count)
+                    .plainRow(top: 4, bottom: 10)
+                if connection.state == .unauthorized {
+                    UnpairedCard().plainRow()
                 }
-                if !connection.warnings.isEmpty {
-                    Section {
-                        ForEach(connection.warnings, id: \.self) { w in
-                            Label(w, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange)
+                ForEach(connection.warnings, id: \.self) { w in
+                    Label(w, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange).plainRow()
+                }
+                // Busy agents first, then the ones waiting for you.
+                group("Working", working)
+                group("Needs you", needsYou)
+                if !done.isEmpty {
+                    Button {
+                        withAnimation(.snappy) { showDone.toggle() }
+                    } label: {
+                        HStack {
+                            SectionTitle(title: "Done", count: done.count)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                                .rotationEffect(.degrees(showDone ? 90 : 0))
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .plainRow(top: 14, bottom: 2)
+                    if showDone {
+                        ForEach(done) { s in
+                            card(s, compact: true)
                         }
                     }
                 }
-                // Busy agents first, then the ones waiting for you.
-                section("Working", working)
-                section("Needs you", needsYou)
-                section("Done", showAllDone ? done : Array(done.prefix(5)))
-                if done.count > 5 {
-                    Button(showAllDone ? "Show fewer" : "Show all \(done.count) finished sessions") {
-                        withAnimation { showAllDone.toggle() }
-                    }
-                    .font(.footnote)
-                }
             }
-            .listStyle(.insetGrouped)
+            .listStyle(.plain)
+            .scrollContentBackground(.hidden)
+            .background(HomeBackground())
             .animation(.snappy, value: connection.sessions.map { "\($0.id)\($0.status)" })
             .overlay {
                 if connection.sessions.isEmpty && connection.state == .connected {
                     ContentUnavailableView {
                         Label { Text("No shared sessions") } icon: { WheelMark(size: 56) }
                     } description: {
-                        Text("Type **/styr** in Claude Code or agy on \(connection.host) and the session shows up here.")
+                        Text("Type **/styr** in Claude Code, Codex or agy on \(connection.host), or start one with **+**.")
                     }
+                    .padding(.top, 120)
                 }
             }
+            // Only a connection that stays down gets a word; quick reconnects (coming
+            // back to the app) don't.
+            .overlay(alignment: .bottom) {
+                if connection.troubled, connection.state != .unauthorized {
+                    ConnectionPill().padding(.bottom, 12)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.snappy, value: connection.troubled)
             .navigationTitle("Styrman")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { WheelMark(size: 24) }
+                ToolbarItem(placement: .topBarLeading) { WheelMark(size: 26) }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { showUsage = true } label: { Image(systemName: "chart.bar") }
                         .accessibilityLabel("Usage")
@@ -104,85 +129,210 @@ struct SessionListView: View {
     }
 
     @ViewBuilder
-    private func section(_ title: String, _ items: [SessionSummary]) -> some View {
+    private func group(_ title: String, _ items: [SessionSummary]) -> some View {
         if !items.isEmpty {
-            Section(title) {
-                ForEach(items) { s in
-                    NavigationLink(value: s.id) { SessionRow(session: s) }
-                        .swipeActions(edge: .trailing) {
-                            Button(s.status == .done ? "Remove" : "Stop sharing", role: .destructive) {
-                                connection.stopSharing(s.id)
-                            }
-                        }
-                }
+            SectionTitle(title: title, count: items.count).plainRow(top: 14, bottom: 2)
+            ForEach(items) { s in card(s, compact: false) }
+        }
+    }
+
+    private func card(_ s: SessionSummary, compact: Bool) -> some View {
+        Button { path.append(s.id) } label: {
+            SessionCard(session: s, compact: compact)
+        }
+        .buttonStyle(CardPressStyle())
+        .plainRow(top: 5, bottom: 5)
+        .swipeActions(edge: .trailing) {
+            Button(s.status == .done ? "Remove" : "Stop sharing", role: .destructive) {
+                connection.stopSharing(s.id)
+            }
+        }
+        .contextMenu {
+            Button(role: .destructive) { connection.stopSharing(s.id) } label: {
+                Label(s.status == .done ? "Remove" : "Stop sharing", systemImage: "eye.slash")
             }
         }
     }
 }
 
-struct SessionRow: View {
-    let session: SessionSummary
+private extension View {
+    /// A list row without the list's chrome: no separator, no background, our own insets.
+    func plainRow(top: CGFloat = 4, bottom: CGFloat = 4) -> some View {
+        listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: top, leading: 16, bottom: bottom, trailing: 16))
+    }
+}
+
+/// A faint wash of the helm's red at the top, over the grouped background.
+private struct HomeBackground: View {
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color(.systemGroupedBackground)
+            RadialGradient(colors: [Theme.accent.opacity(0.10), .clear], center: .topLeading, startRadius: 0, endRadius: 420)
+                .frame(height: 420)
+            RadialGradient(colors: [Color.blue.opacity(0.06), .clear], center: .topTrailing, startRadius: 0, endRadius: 360)
+                .frame(height: 360)
+        }
+        .ignoresSafeArea()
+    }
+}
+
+/// "2 need you · 1 working", the Mac, and the connection, at a glance.
+private struct SummaryHeader: View {
+    @Environment(DaemonConnection.self) private var connection
+    let working: Int
+    let needs: Int
+    let done: Int
+
+    /// "2 need you" in amber, the rest plain.
+    private var headline: Text {
+        let needsText = Text(needs == 1 ? "1 needs you" : "\(needs) need you").foregroundStyle(Theme.attention)
+        let workText = Text(working == 1 ? "1 at work" : "\(working) at work")
+        switch (needs, working) {
+        case (0, 0): return Text(connection.sessions.isEmpty ? "Ready when you are" : "All quiet")
+        case (_, 0): return needsText
+        case (0, _): return workText
+        default: return Text("\(needsText), \(workText)")
+        }
+    }
 
     var body: some View {
-        // Three calm lines; nothing important competes for width:
-        //   repo                          [status]
-        //   what it's doing now (or the first message)
-        //   Agent · ~/folder                    time
-        HStack(alignment: .center, spacing: 12) {
-            AgentAvatar(agent: session.agent)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
+            headline
+                .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                .contentTransition(.numericText())
+                .animation(.snappy, value: needs * 1000 + working)
+                .lineLimit(2)
+                .minimumScaleFactor(0.7)
+            HStack(spacing: 8) {
+                ConnectionDot()
+                Text(connection.host.isEmpty ? "Your Mac" : connection.host)
+                    .font(.subheadline.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// Green when connected; amber while (re)connecting; grey after a while offline.
+private struct ConnectionDot: View {
+    @Environment(DaemonConnection.self) private var connection
+    var body: some View {
+        let color: Color = connection.state == .connected ? .green : connection.troubled ? .gray : .orange
+        Circle().fill(color).frame(width: 8, height: 8)
+            .overlay(Circle().stroke(color.opacity(0.35), lineWidth: 4))
+            .animation(.easeOut(duration: 0.3), value: color)
+            .accessibilityLabel(connection.state == .connected ? "Connected" : "Not connected")
+    }
+}
+
+private struct SectionTitle: View {
+    let title: String
+    let count: Int
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title.uppercased()).font(.caption.weight(.bold)).tracking(1.2).foregroundStyle(.secondary)
+            Text("\(count)").font(.caption.weight(.bold)).monospacedDigit().foregroundStyle(.tertiary)
+        }
+    }
+}
+
+/// Cards sink a little under your finger.
+private struct CardPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
+    }
+}
+
+/// A session as a card: who, where, what it's doing now, and whether it needs you.
+struct SessionCard: View {
+    let session: SessionSummary
+    var compact = false
+
+    private var needs: Bool { session.status.needsUser }
+    private var tint: Color { Theme.color(for: session.agent) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: compact ? 4 : 10) {
+            HStack(alignment: .center, spacing: 12) {
+                WorkingAvatar(agent: session.agent, working: session.status == .working, size: compact ? 30 : 40)
+                VStack(alignment: .leading, spacing: 1) {
                     Text(session.repoName)
-                        .font(.headline)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Spacer(minLength: 4)
-                    StatusChip(status: session.status)
-                        .fixedSize()
+                        .font(compact ? .subheadline.weight(.semibold) : .headline)
+                        .lineLimit(1).truncationMode(.middle)
+                    HStack(spacing: 4) {
+                        Text(session.agent.displayName).foregroundStyle(tint).fontWeight(.semibold)
+                        if let cwd = session.cwd, !cwd.isEmpty {
+                            Text("· \(shortPath(cwd))").foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
+                        }
+                    }
+                    .font(.caption)
                 }
-                if let line = headline {
+                Spacer(minLength: 4)
+                VStack(alignment: .trailing, spacing: 4) {
+                    if !compact { StatusChip(status: session.status).fixedSize() }
+                    Text(session.updated, format: .relative(presentation: .named))
+                        .font(.caption2).foregroundStyle(.tertiary).lineLimit(1).fixedSize()
+                }
+            }
+            if !compact, let line = activity {
+                if session.status == .needsApproval {
+                    // What it wants to run, as code.
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: "hand.raised.fill").font(.caption).foregroundStyle(Theme.attention)
+                        Text(line)
+                            .font(.system(.footnote, design: .monospaced))
+                            .lineLimit(2)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 8)
+                    .background(Theme.attention.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
+                } else {
                     Text(line)
                         .font(.subheadline)
-                        .foregroundStyle(session.status == .needsApproval ? AnyShapeStyle(Theme.attention) : AnyShapeStyle(.secondary))
+                        .foregroundStyle(.secondary)
                         .lineLimit(2)
                         .contentTransition(.opacity)
                 }
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(session.agent.displayName)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.color(for: session.agent))
-                        .fixedSize()
-                    if let cwd = session.cwd, !cwd.isEmpty {
-                        Text("· \(shortPath(cwd))")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    Spacer(minLength: 4)
-                    Text(session.updated, format: .relative(presentation: .named))
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                        .fixedSize()
-                }
             }
         }
-        .padding(.vertical, 4)
+        .padding(compact ? 12 : 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+                .shadow(color: needs ? Theme.attention.opacity(0.22) : .black.opacity(0.05), radius: needs ? 14 : 6, y: needs ? 4 : 2)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(needs ? Theme.attention.opacity(0.55) : Color.primary.opacity(0.05), lineWidth: needs ? 1.5 : 1)
+        }
+        .opacity(compact ? 0.85 : 1)
         .animation(.easeOut(duration: 0.25), value: session.activity)
+        .animation(.easeOut(duration: 0.25), value: session.status)
         .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
     }
 
-    /// What it's doing right now; an open approval reads as a question.
-    private var headline: AttributedString? {
-        let raw: String
+    /// What it's doing right now (paths relative to its folder), else its first message.
+    private var activity: AttributedString? {
+        var raw: String
         if var a = session.activity, !a.isEmpty, session.status != .done {
-            // Paths inside the session's folder read relative to it; the rest from ~.
             if let cwd = session.cwd, !cwd.isEmpty {
                 a = a.replacingOccurrences(of: cwd.hasSuffix("/") ? cwd : cwd + "/", with: "")
             }
-            a = a.replacingOccurrences(of: #"/Users/[^/\s`]+"#, with: "~", options: .regularExpression)
-            raw = session.status == .needsApproval ? "Allow? \(a)" : a
+            raw = a.replacingOccurrences(of: #"/Users/[^/\s`]+"#, with: "~", options: .regularExpression)
+            if session.status == .needsApproval {
+                // "Run `cargo test`" → "cargo test": the chip already says it's a request.
+                if let open = raw.firstIndex(of: "`"), let close = raw[raw.index(after: open)...].firstIndex(of: "`") {
+                    raw = String(raw[raw.index(after: open)..<close])
+                }
+                return AttributedString(raw)
+            }
         } else if let t = session.title, !t.isEmpty {
             raw = t
         } else {
@@ -193,31 +343,79 @@ struct SessionRow: View {
     }
 }
 
+/// The agent's avatar; while it works, a ring in its colour turns around it.
+struct WorkingAvatar: View {
+    let agent: AgentKind
+    let working: Bool
+    var size: CGFloat = 40
+    @State private var spin = false
+
+    var body: some View {
+        let c = Theme.color(for: agent)
+        AgentAvatar(agent: agent, size: size)
+            .overlay {
+                if working {
+                    Circle()
+                        .trim(from: 0, to: 0.28)
+                        .stroke(c, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                        .padding(-4)
+                        .rotationEffect(.degrees(spin ? 360 : 0))
+                        .onAppear {
+                            withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) { spin = true }
+                        }
+                        .onDisappear { spin = false }
+                }
+            }
+            .padding(working ? 4 : 0)
+            .frame(width: size + 8, height: size + 8)
+    }
+}
+
+/// Shown only when the connection has been down for a while.
+private struct ConnectionPill: View {
+    @Environment(DaemonConnection.self) private var connection
+    var body: some View {
+        HStack(spacing: 8) {
+            if case .connecting = connection.state {
+                ProgressView().controlSize(.small)
+            } else {
+                Image(systemName: "wifi.slash")
+            }
+            Text(text).lineLimit(1)
+        }
+        .font(.footnote.weight(.medium))
+        .padding(.horizontal, 14).padding(.vertical, 9)
+        .background(.regularMaterial, in: Capsule())
+        .shadow(color: .black.opacity(0.12), radius: 10, y: 3)
+    }
+
+    private var text: String {
+        switch connection.state {
+        case .offline(let why): "\(why). Retrying…"
+        default: "Reconnecting to \(connection.host)…"
+        }
+    }
+}
+
+private struct UnpairedCard: View {
+    @Environment(DaemonConnection.self) private var connection
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("This phone is no longer paired with \(connection.host).", systemImage: "lock.slash")
+                .font(.subheadline.weight(.medium))
+            Button("Pair again") { connection.forget() }.buttonStyle(.borderedProminent)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+    }
+}
+
 func shortPath(_ p: String) -> String {
     if let r = p.range(of: #"^/Users/[^/]+"#, options: .regularExpression) {
         return "~" + p[r.upperBound...]
     }
     return p
-}
-
-struct ConnectionBanner: View {
-    @Environment(DaemonConnection.self) private var connection
-
-    var body: some View {
-        switch connection.state {
-        case .connecting:
-            Label { Text("Connecting to \(connection.host)…") } icon: { ProgressView() }
-        case .offline(let why):
-            Label("\(why). Retrying…", systemImage: "wifi.slash").foregroundStyle(.secondary)
-        case .unauthorized:
-            VStack(alignment: .leading, spacing: 8) {
-                Label("This phone is no longer paired with \(connection.host).", systemImage: "lock.slash")
-                Button("Pair again") { connection.forget() }
-            }
-        case .connected, .unpaired:
-            EmptyView()
-        }
-    }
 }
 
 struct SettingsView: View {
