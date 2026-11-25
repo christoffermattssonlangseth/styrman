@@ -249,15 +249,15 @@ html.has-js .toast[data-step].gone { opacity: 0; transform: translateY(-8px) sca
   .c-consult { grid-column: span 2; }
 }
 
-.mini-card { margin-top: 1.25rem; padding: .9rem; border-radius: .9rem; background: #fff3f1; border: 1px solid #f5c9c2; }
-.mc-head { display: flex; align-items: center; gap: .45rem; color: var(--signal-deep) !important; font-weight: 700; font-size: .85rem; margin-bottom: .6rem !important; }
-.mc-dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--signal); }
-@media (prefers-reduced-motion: no-preference) { .mc-dot { animation: pulse 1.6s ease-in-out infinite; } @keyframes pulse { 50% { box-shadow: 0 0 0 5px rgba(232, 50, 30, .18); } } }
+.mini-card { margin-top: 1.25rem; padding: .9rem; border-radius: .9rem; background: #fbf4e6; border: 1px solid #e6d2a8; }
+.mc-head { display: flex; align-items: center; gap: .45rem; color: #855008 !important; font-weight: 700; font-size: .85rem; margin-bottom: .6rem !important; }
+.mc-dot { width: .5rem; height: .5rem; border-radius: 50%; background: #c98a1b; }
+@media (prefers-reduced-motion: no-preference) { .mc-dot { animation: pulse 1.6s ease-in-out infinite; } @keyframes pulse { 50% { box-shadow: 0 0 0 5px rgba(201, 138, 27, .2); } } }
 .mini-card code { display: block; background: #fff; padding: .5rem .6rem; margin-bottom: .6rem; border-radius: .45rem; font-size: .8rem; }
-.mc-btns { display: grid; gap: .35rem; font-size: .8rem; font-weight: 600; color: var(--signal-deep); }
-.mc-btns span { padding: .4rem .6rem; border-radius: .45rem; background: #fde4e0; }
-.mc-btns .mc-allow { background: var(--signal); color: #fff; }
-
+.mc-btns { display: grid; gap: .35rem; font-size: .8rem; font-weight: 600; }
+.mc-btns span { padding: .4rem .6rem; border-radius: .45rem; background: #ece9e2; color: #55595c; border: 1px solid #dad6cc; }
+.mc-btns .mc-allow { background: #e9dcc4; color: var(--ink); border-color: #d9c59e; }
+.mc-btns span:last-child { background: #fbe3e0; color: var(--signal-deep); border-color: #f2bdb6; }
 .status-list { list-style: none; margin: 1.25rem 0 0; padding: 0; display: grid; gap: .5rem; }
 .status-list li { display: flex; align-items: center; gap: .6rem; padding: .6rem .7rem; border-radius: .7rem; background: var(--bg); font-size: .9rem; }
 .status-list b { flex: 1; }
