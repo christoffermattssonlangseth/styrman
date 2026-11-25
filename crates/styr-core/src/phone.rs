@@ -46,6 +46,12 @@ pub enum ClientMsg {
         #[serde(default)]
         path: Option<String>,
     },
+    /// Make a folder `name` inside `parent` (both inside the home directory); the
+    /// answer is the new folder's listing.
+    CreateFolder {
+        parent: String,
+        name: String,
+    },
     /// Start `agent` in `cwd` in a new cmux tab on the Mac, shared with the phone.
     StartSession {
         agent: AgentKind,
@@ -75,6 +81,15 @@ pub struct FolderListing {
     pub recent: Vec<String>,
     /// Agents that can be started (set up on the Mac).
     pub agents: Vec<AgentKind>,
+    /// Files directly in `path` (names; hidden ones left out), to see what's there.
+    #[serde(default)]
+    pub files: Vec<String>,
+    /// More files than listed.
+    #[serde(default)]
+    pub more_files: bool,
+    /// The checked-out branch, when `path` is a git repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_branch: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

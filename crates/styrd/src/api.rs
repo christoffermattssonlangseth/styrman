@@ -585,6 +585,20 @@ impl Connection {
                     .await
                 }
             },
+            ClientMsg::CreateFolder { parent, name } => {
+                match self.daemon.create_folder(&parent, &name) {
+                    Ok(listing) => send(tx, &ServerMsg::Folders { listing }).await,
+                    Err(e) => {
+                        send(
+                            tx,
+                            &ServerMsg::Error {
+                                message: format!("{e:#}"),
+                            },
+                        )
+                        .await
+                    }
+                }
+            }
             ClientMsg::StartSession { agent, cwd, prompt } => {
                 match self
                     .daemon

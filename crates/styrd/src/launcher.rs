@@ -18,6 +18,7 @@ use styr_core::phone::{FolderEntry, FolderListing};
 const START_GRACE: Duration = Duration::from_secs(90);
 const MAX_ENTRIES: usize = 400;
 const MAX_RECENT: usize = 12;
+const MAX_FILES: usize = 200;
 
 fn home() -> Result<PathBuf> {
     let h = std::env::var_os("HOME").context("HOME is not set")?;
@@ -36,6 +37,28 @@ pub fn inside_home(path: &Path) -> Result<PathBuf> {
         bail!("{} isn't a folder", real.display());
     }
     Ok(real)
+}
+
+/// A folder name typed on the phone: one plain path component.
+pub fn valid_folder_name(name: &str) -> Result<&str> {
+    let name = name.trim();
+    if name.is_empty() || name.len() > 100 {
+        bail!("give the folder a name (up to 100 characters)");
+    }
+    if name.contains('/') || name.contains('\0') || name.starts_with('.') {
+        bail!("a folder name can't contain '/' or start with '.'");
+    }
+    Ok(name)
+}
+
+/// The checked-out branch of a git repository at `dir` (from .git/HEAD).
+fn git_branch(dir: &Path) -> Option<String> {
+    let head = std::fs::read_to_string(dir.join(".git/HEAD")).ok()?;
+    let head = head.trim();
+    Some(match head.strip_prefix("ref: refs/heads/") {
+        Some(b) => b.to_owned(),
+        None => format!("detached at {}", head.chars().take(7).collect::<String>()),
+    })
 }
 
 /// The agents `styr setup` routed through Styrman (it only does so when installed).
@@ -88,6 +111,15 @@ impl Daemon {
             Some(p) if !p.is_empty() => inside_home(Path::new(p))?,
             _ => home.clone(),
         };
+        let mut files: Vec<String> = std::fs::read_dir(&dir)?
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_ok_and(|t| !t.is_dir()))
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| !n.starts_with('.'))
+            .collect();
+        files.sort_by_key(|n| n.to_lowercase());
+        let more_files = files.len() > MAX_FILES;
+        files.truncate(MAX_FILES);
         let mut entries: Vec<FolderEntry> = std::fs::read_dir(&dir)?
             .filter_map(Result::ok)
             .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
@@ -127,10 +159,27 @@ impl Daemon {
                 .then(|| dir.parent().map(|p| p.to_string_lossy().into_owned()))
                 .flatten(),
             home: home.to_string_lossy().into_owned(),
+            git_branch: git_branch(&dir),
             entries,
             recent,
             agents: launchable_agents(),
+            files,
+            more_files,
         })
+    }
+
+    /// Make a new folder inside `parent` and list it.
+    pub fn create_folder(&self, parent: &str, name: &str) -> Result<FolderListing> {
+        let parent = inside_home(Path::new(parent))?;
+        let name = valid_folder_name(name)?;
+        let path = parent.join(name);
+        if path.exists() {
+            bail!("“{name}” already exists there");
+        }
+        std::fs::create_dir(&path)
+            .with_context(|| format!("couldn't create {}", path.display()))?;
+        tracing::info!(path = %path.display(), "folder created from the phone");
+        self.list_folders(Some(&path.to_string_lossy()))
     }
 
     /// Open a new cmux tab in `cwd` running `agent`, shared with the phone. Returns the
@@ -252,6 +301,16 @@ fn agent_label(agent: AgentKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn folder_names_are_one_plain_component() {
+        for ok in ["app", "my project", "v2.0"] {
+            assert!(valid_folder_name(ok).is_ok(), "{ok}");
+        }
+        for bad in ["", "a/b", "../x", ".hidden", "..", &"x".repeat(101)] {
+            assert!(valid_folder_name(bad).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn folders_outside_home_are_refused() {

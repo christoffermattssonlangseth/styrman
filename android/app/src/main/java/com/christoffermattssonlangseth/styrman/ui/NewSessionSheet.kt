@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material3.Button
@@ -49,6 +50,14 @@ fun NewSessionSheet(connection: DaemonConnection, onDismiss: () -> Unit) {
     var agent by remember { mutableStateOf<AgentKind?>(null) }
     var folder by remember { mutableStateOf<String?>(null) }
     var first by remember { mutableStateOf("") }
+    var askNewFolder by remember { mutableStateOf(false) }
+    var newName by remember { mutableStateOf("") }
+    var selectNext by remember { mutableStateOf(false) }
+    var showFiles by remember { mutableStateOf(false) }
+    LaunchedEffect(listing?.path) {
+        showFiles = false
+        if (selectNext && listing != null) { folder = listing.path; selectNext = false }
+    }
 
     LaunchedEffect(Unit) { connection.listFolders(null) }
     LaunchedEffect(listing?.agents) { if (agent == null) agent = listing?.agents?.firstOrNull() }
@@ -75,7 +84,7 @@ fun NewSessionSheet(connection: DaemonConnection, onDismiss: () -> Unit) {
                     item { Label("Recent") }
                     items(listing.recent) { p -> FolderRow(listing.display(p), p, repo = true, selected = folder == p, onPick = { folder = it }, onOpen = null) }
                 }
-                item { Label(listing.display(listing.path)) }
+                item { Label(listing.display(listing.path) + (listing.gitBranch?.let { "  ·  ⎇ $it" } ?: "")) }
                 listing.parent?.let { parent ->
                     item {
                         Row(Modifier.fillMaxWidth().clickable { connection.listFolders(parent) }.padding(vertical = 10.dp),
@@ -89,11 +98,44 @@ fun NewSessionSheet(connection: DaemonConnection, onDismiss: () -> Unit) {
                 items(listing.entries, key = { it.path }) { e ->
                     FolderRow(e.name, e.path, e.isRepo, folder == e.path, onPick = { folder = it }, onOpen = { connection.listFolders(it) })
                 }
+                item {
+                    Row(Modifier.fillMaxWidth().clickable { newName = ""; askNewFolder = true }.padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.CreateNewFolder, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                        Text("  New folder…", color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+                // What's in this folder, to check it's the right one.
+                if (listing.files.isNotEmpty()) {
+                    item {
+                        Text(
+                            (if (showFiles) "▾ " else "▸ ") + "${listing.files.size}${if (listing.moreFiles) "+" else ""} files here",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.fillMaxWidth().clickable { showFiles = !showFiles }.padding(vertical = 8.dp),
+                        )
+                    }
+                    if (showFiles) items(listing.files) { f ->
+                        Text("    $f", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                    }
+                }
             }
             OutlinedTextField(first, { first = it }, label = { Text("First message (optional)") }, modifier = Modifier.fillMaxWidth(), maxLines = 4)
             Text(
                 "Opens a new cmux tab on your Mac running ${agent?.displayName ?: "the agent"} in this folder, shared with this phone.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (askNewFolder) androidx.compose.material3.AlertDialog(
+                onDismissRequest = { askNewFolder = false },
+                title = { Text("New folder") },
+                text = { OutlinedTextField(newName, { newName = it }, label = { Text("Name") }, singleLine = true) },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(onClick = {
+                        val parent = listing?.path
+                        if (parent != null && newName.isNotBlank()) { selectNext = true; connection.createFolder(parent, newName.trim()) }
+                        askNewFolder = false
+                    }) { Text("Create") }
+                },
+                dismissButton = { androidx.compose.material3.TextButton(onClick = { askNewFolder = false }) { Text("Cancel") } },
             )
             Button(
                 onClick = {

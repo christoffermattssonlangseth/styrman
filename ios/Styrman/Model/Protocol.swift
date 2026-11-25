@@ -427,8 +427,9 @@ enum ClientMsg: Encodable, Sendable {
     case stopSharing(session: String)
     case listFolders(path: String?)
     case startSession(agent: AgentKind, cwd: String, prompt: String?)
+    case createFolder(parent: String, name: String)
 
-    private enum K: String, CodingKey { case type, session, command, request, option, text, token, env, shared, path, agent, cwd, prompt, sinceSeq = "since_seq" }
+    private enum K: String, CodingKey { case type, session, command, request, option, text, token, env, shared, path, agent, cwd, prompt, parent, name, sinceSeq = "since_seq" }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: K.self)
@@ -452,6 +453,8 @@ enum ClientMsg: Encodable, Sendable {
             try cmd.encode(false, forKey: .shared)
         case .listFolders(let path):
             try c.encode("list_folders", forKey: .type); try c.encodeIfPresent(path, forKey: .path)
+        case .createFolder(let parent, let name):
+            try c.encode("create_folder", forKey: .type); try c.encode(parent, forKey: .parent); try c.encode(name, forKey: .name)
         case .startSession(let agent, let cwd, let prompt):
             try c.encode("start_session", forKey: .type)
             try c.encode(agent.rawValue, forKey: .agent)
@@ -491,6 +494,28 @@ struct FolderListing: Decodable, Sendable, Equatable {
     let entries: [FolderEntry]
     let recent: [String]
     let agents: [AgentKind]
+    /// Files directly in `path`, to see what's there.
+    var files: [String] = []
+    var moreFiles = false
+    var gitBranch: String?
+
+    enum CodingKeys: String, CodingKey {
+        case path, parent, home, entries, recent, agents, files
+        case moreFiles = "more_files", gitBranch = "git_branch"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        path = try c.decode(String.self, forKey: .path)
+        parent = try c.decodeIfPresent(String.self, forKey: .parent)
+        home = try c.decode(String.self, forKey: .home)
+        entries = (try? c.decode([FolderEntry].self, forKey: .entries)) ?? []
+        recent = (try? c.decode([String].self, forKey: .recent)) ?? []
+        agents = (try? c.decode([AgentKind].self, forKey: .agents)) ?? []
+        files = (try? c.decodeIfPresent([String].self, forKey: .files)) ?? []
+        moreFiles = (try? c.decodeIfPresent(Bool.self, forKey: .moreFiles)) ?? false
+        gitBranch = try? c.decodeIfPresent(String.self, forKey: .gitBranch)
+    }
 
     /// `~/work/styrman` rather than `/Users/me/work/styrman`.
     func display(_ p: String) -> String {

@@ -244,6 +244,12 @@ final class DaemonConnection {
         send(.stopSharing(session: session))
     }
 
+    /// Make a folder inside `parent`; the picker then shows (and can select) it.
+    func createFolder(in parent: String, named name: String) {
+        guard state == .connected else { return }
+        send(.createFolder(parent: parent, name: name))
+    }
+
     func listFolders(_ path: String? = nil) {
         guard state == .connected else { return }
         send(.listFolders(path: path))

@@ -309,3 +309,24 @@ private func event(_ seq: UInt64, _ kind: String) -> String {
         #expect(OptionLabel.split("Allow once") == ("Allow once", nil), "Claude's labels stay as they are")
     }
 }
+
+@Suite struct FolderPickerTests {
+    @Test func createFolderMatchesRust() throws {
+        let obj = try JSONSerialization.jsonObject(with: JSONEncoder().encode(ClientMsg.createFolder(parent: "/Users/me/work", name: "new app"))) as! [String: Any]
+        #expect(obj["type"] as? String == "create_folder")
+        #expect(obj["parent"] as? String == "/Users/me/work")
+        #expect(obj["name"] as? String == "new app")
+    }
+
+    @Test func listingsCarryFilesAndBranch() throws {
+        let json = #"{"type": "folders", "listing": {"path": "/Users/me/work", "parent": "/Users/me", "home": "/Users/me", "entries": [], "recent": [], "agents": ["codex"], "files": ["README.md"], "more_files": true, "git_branch": "main"}}"#
+        guard case .folders(let l) = try JSONDecoder().decode(ServerMsg.self, from: Data(json.utf8)) else { Issue.record("not folders"); return }
+        #expect(l.files == ["README.md"])
+        #expect(l.moreFiles)
+        #expect(l.gitBranch == "main")
+        // An older daemon without these fields still decodes.
+        let old = #"{"type": "folders", "listing": {"path": "/a", "parent": null, "home": "/a", "entries": [], "recent": [], "agents": []}}"#
+        guard case .folders(let o) = try JSONDecoder().decode(ServerMsg.self, from: Data(old.utf8)) else { Issue.record("not folders"); return }
+        #expect(o.files.isEmpty && o.gitBranch == nil)
+    }
+}

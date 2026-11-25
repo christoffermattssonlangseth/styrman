@@ -255,13 +255,28 @@ fn new_session_shapes() {
             styr_core::ids::AgentKind::Claude,
             styr_core::ids::AgentKind::Codex,
         ],
+        files: vec!["README.md".into()],
+        more_files: false,
+        git_branch: Some("main".into()),
     };
     assert_eq!(
         serde_json::to_value(ServerMsg::Folders { listing }).unwrap(),
         json!({"type": "folders", "listing": {
             "path": "/Users/me/work", "parent": "/Users/me", "home": "/Users/me",
             "entries": [{"name": "x", "path": "/Users/me/work/x", "is_repo": true}],
-            "recent": ["/Users/me/work/x"], "agents": ["claude", "codex"]}})
+            "recent": ["/Users/me/work/x"], "agents": ["claude", "codex"],
+            "files": ["README.md"], "more_files": false, "git_branch": "main"}})
+    );
+    let m: ClientMsg = serde_json::from_value(
+        json!({"type": "create_folder", "parent": "/Users/me/work", "name": "new app"}),
+    )
+    .unwrap();
+    assert_eq!(
+        m,
+        ClientMsg::CreateFolder {
+            parent: "/Users/me/work".into(),
+            name: "new app".into()
+        }
     );
     assert_eq!(
         serde_json::to_value(ServerMsg::SessionStarting {

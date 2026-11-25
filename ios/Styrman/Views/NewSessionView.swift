@@ -9,6 +9,11 @@ struct NewSessionView: View {
     @State private var folder: String?
     @State private var firstMessage = ""
     @State private var browsing: String?
+    @State private var newFolderName = ""
+    @State private var askNewFolder = false
+    @State private var showFiles = false
+    /// Select the folder that the next listing is about (just created).
+    @State private var selectNext = false
 
     var body: some View {
         let listing = connection.folders
@@ -63,8 +68,41 @@ struct NewSessionView: View {
                         ForEach(listing.entries) { e in
                             folderRow(name: e.name, path: e.path, repo: e.isRepo, canOpen: true)
                         }
+                        Button {
+                            newFolderName = ""
+                            askNewFolder = true
+                        } label: {
+                            Label("New folder…", systemImage: "folder.badge.plus")
+                        }
                     } header: {
-                        Text(listing.display(listing.path))
+                        HStack(spacing: 6) {
+                            Text(listing.display(listing.path))
+                            if let branch = listing.gitBranch {
+                                Label(branch, systemImage: "arrow.triangle.branch")
+                                    .labelStyle(.titleAndIcon)
+                                    .font(.caption2.weight(.semibold))
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                                    .background(.quaternary, in: Capsule())
+                            }
+                        }
+                    }
+
+                    // What's in this folder, to check it's the right one.
+                    if !listing.files.isEmpty {
+                        Section {
+                            DisclosureGroup(isExpanded: $showFiles) {
+                                ForEach(listing.files, id: \.self) { f in
+                                    Label(f, systemImage: "doc")
+                                        .font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                                }
+                                if listing.moreFiles {
+                                    Text("…and more").font(.footnote).foregroundStyle(.tertiary)
+                                }
+                            } label: {
+                                Text("\(listing.files.count)\(listing.moreFiles ? "+" : "") files in \(listing.display(listing.path))")
+                                    .font(.footnote)
+                            }
+                        }
                     }
                 }
 
@@ -90,6 +128,23 @@ struct NewSessionView: View {
                 }
             }
             .onAppear { connection.listFolders(nil) }
+            .onChange(of: listing?.path) { _, path in
+                showFiles = false
+                if selectNext, let path { folder = path; selectNext = false }
+            }
+            .alert("New folder", isPresented: $askNewFolder) {
+                TextField("Name", text: $newFolderName)
+                    .textInputAutocapitalization(.never)
+                Button("Create") {
+                    if let parent = listing?.path, !newFolderName.trimmingCharacters(in: .whitespaces).isEmpty {
+                        selectNext = true
+                        connection.createFolder(in: parent, named: newFolderName)
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Inside \(listing.map { $0.display($0.path) } ?? "~")")
+            }
             .onChange(of: listing?.agents, initial: true) { _, agents in
                 if agent == nil { agent = agents?.first }
             }

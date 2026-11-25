@@ -209,6 +209,10 @@ class DaemonConnection(context: Context) {
         send(ClientMsg.stopSharing(session))
     }
 
+    fun createFolder(parent: String, name: String) {
+        if (state == State.Connected) send(ClientMsg.createFolder(parent, name))
+    }
+
     fun listFolders(path: String? = null) {
         if (state == State.Connected) send(ClientMsg.listFolders(path))
     }

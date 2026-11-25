@@ -237,6 +237,10 @@ data class FolderListing(
     val entries: List<FolderEntry>,
     val recent: List<String>,
     val agents: List<AgentKind>,
+    /** Files directly in `path`, to see what's there. */
+    val files: List<String> = emptyList(),
+    val moreFiles: Boolean = false,
+    val gitBranch: String? = null,
 ) {
     /** `~/work/styrman` rather than `/Users/me/work/styrman`. */
     fun display(p: String) = when {
@@ -256,6 +260,9 @@ data class FolderListing(
             },
             recent = o.arr("recent").orEmpty().mapNotNull { (it as? JsonPrimitive)?.contentOrNull },
             agents = o.arr("agents").orEmpty().mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.map { AgentKind.of(it) },
+            files = o.arr("files").orEmpty().mapNotNull { (it as? JsonPrimitive)?.contentOrNull },
+            moreFiles = o.bool("more_files") ?: false,
+            gitBranch = o.str("git_branch"),
         )
     }
 }
@@ -320,6 +327,9 @@ object ClientMsg {
     }
     fun listFolders(path: String?) = buildJsonObject {
         put("type", "list_folders"); if (path != null) put("path", path)
+    }
+    fun createFolder(parent: String, name: String) = buildJsonObject {
+        put("type", "create_folder"); put("parent", parent); put("name", name)
     }
     fun startSession(agent: AgentKind, cwd: String, prompt: String?) = buildJsonObject {
         put("type", "start_session"); put("agent", agent.wire); put("cwd", cwd)
