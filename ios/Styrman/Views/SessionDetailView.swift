@@ -172,10 +172,7 @@ struct TimelineRow: View {
                 }
             }
         case .assistant(let id, let text, _):
-            VStack(alignment: .leading, spacing: 4) {
-                Text(markdown(text)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                ReadAloudButton(id: id, text: text, agent: agent)
-            }
+            ReplyView(id: id, text: markdown(text), raw: text, agent: agent)
         case .tool(_, let tool):
             ToolCallRow(item: tool, title: displayTitle(tool.tool, cwd: cwd))
         case .permission(_, let p):
@@ -197,24 +194,73 @@ struct TimelineRow: View {
 }
 
 /// Play / stop reading one reply.
-struct ReadAloudButton: View {
+/// An agent's reply with Claude-app-style actions under it: copy, and play/stop.
+/// While it's being read, a bar in the agent's colour marks it.
+struct ReplyView: View {
     let id: String
-    let text: String
+    let text: AttributedString
+    let raw: String
     let agent: AgentKind
     @State private var speaker = Speaker.shared
+    @State private var copied = false
 
     var body: some View {
         let playing = speaker.speakingId == id
-        Button {
-            speaker.toggle(text, id: id, agent: agent)
-        } label: {
-            Label(playing ? "Stop" : "Listen", systemImage: playing ? "stop.circle.fill" : "speaker.wave.2")
-                .font(.caption)
-                .foregroundStyle(playing ? AnyShapeStyle(Theme.color(for: agent)) : AnyShapeStyle(.secondary))
-                .symbolEffect(.variableColor.iterative, isActive: playing)
+        let tint = Theme.color(for: agent)
+        VStack(alignment: .leading, spacing: 6) {
+            Text(text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 2) {
+                ActionIcon(
+                    symbol: copied ? "checkmark" : "doc.on.doc",
+                    label: copied ? "Copied" : "Copy",
+                    tint: copied ? tint : .secondary
+                ) {
+                    UIPasteboard.general.string = raw
+                    copied = true
+                    Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
+                }
+                ActionIcon(
+                    symbol: playing ? "stop.fill" : "speaker.wave.2",
+                    label: playing ? "Stop reading" : "Read aloud",
+                    tint: playing ? tint : .secondary,
+                    animating: playing
+                ) {
+                    speaker.toggle(raw, id: id, agent: agent)
+                }
+            }
+            .padding(.leading, -8)
+        }
+        .padding(.leading, playing ? 10 : 0)
+        .overlay(alignment: .leading) {
+            if playing {
+                Capsule().fill(tint).frame(width: 3).padding(.vertical, 2)
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: playing)
+        .sensoryFeedback(.selection, trigger: playing)
+    }
+}
+
+/// A small icon button with a comfortable tap target.
+struct ActionIcon: View {
+    let symbol: String
+    let label: String
+    let tint: Color
+    var animating = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(tint)
+                .symbolEffect(.variableColor.iterative, isActive: animating)
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: 36, height: 30)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(playing ? "Stop reading" : "Read aloud")
+        .accessibilityLabel(label)
     }
 }
 
