@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 
 struct SessionDetailView: View {
@@ -278,14 +279,19 @@ struct TimelineRow: View {
             .padding(.vertical, 2)
         case .user(_, let text, _, _) where AgentMessage(text) != nil:
             AgentMessageRow(message: AgentMessage(text)!)
-        case .user(_, let text, let fromPhone, _):
+        case .user(_, let raw, let fromPhone, _):
+            let parts = AttachedFiles.split(raw)
+            let text = parts?.text ?? raw
             HStack {
                 Spacer(minLength: 40)
                 VStack(alignment: .trailing, spacing: 4) {
+                    if let files = parts?.files, !files.isEmpty { AttachedFilesRow(files: files) }
+                    if !text.isEmpty {
                     Text(text).textSelection(.enabled)
                         .padding(.horizontal, 14).padding(.vertical, 10)
                         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                         .shadow(color: .black.opacity(0.05), radius: 4, y: 1)
+                    }
                     if fromPhone {
                         Label("From this phone", systemImage: "iphone").font(.caption2).foregroundStyle(.secondary)
                     }
@@ -690,10 +696,42 @@ struct Composer: View {
     @State private var dictation = Dictation()
     /// What was in the box when dictation started; the transcript is added to it.
     @State private var beforeDictation = ""
+    @State private var attachments: [Attachment] = []
+    @State private var photoItems: [PhotosPickerItem] = []
+    @State private var pickingFiles = false
+    @State private var sending = false
 
     private var canSend: Bool {
-        connection.state == .connected && status != .done
-            && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        connection.state == .connected && status != .done && !sending
+            && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
+    }
+
+    /// Upload the attachments to the Mac, then send the message with their paths.
+    private func send() {
+        dictation.stop()
+        guard !attachments.isEmpty else {
+            if connection.sendPrompt(session: sessionId, text: text) { text = "" }
+            return
+        }
+        sending = true
+        let files = attachments
+        let message = text
+        Task {
+            defer { sending = false }
+            var paths: [String] = []
+            for f in files {
+                do {
+                    paths.append(try await connection.upload(session: sessionId, name: f.name, data: f.data))
+                } catch {
+                    connection.lastError = "Couldn't send \(f.name): \(error.localizedDescription)"
+                    return
+                }
+            }
+            if connection.sendPrompt(session: sessionId, text: AttachedFiles.compose(message, paths: paths)) {
+                text = ""
+                attachments = []
+            }
+        }
     }
 
     var body: some View {
@@ -704,7 +742,29 @@ struct Composer: View {
             } else if status == .done {
                 Text("This session has ended.").font(.caption).foregroundStyle(.secondary)
             }
+            if !attachments.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(attachments) { a in
+                            AttachmentChip(attachment: a) { attachments.removeAll { $0.id == a.id } }
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
             HStack(alignment: .bottom, spacing: 8) {
+                Menu {
+                    PhotosPicker(selection: $photoItems, maxSelectionCount: 5, matching: .images) {
+                        Label("Photos", systemImage: "photo.on.rectangle")
+                    }
+                    Button { pickingFiles = true } label: { Label("Files", systemImage: "folder") }
+                } label: {
+                    Image(systemName: "paperclip.circle")
+                        .font(.system(size: 34))
+                }
+                .tint(.secondary)
+                .disabled(status == .done || sending)
+                .accessibilityLabel("Attach images or files")
                 TextField("Message \(agent)", text: $text, axis: .vertical)
                     .lineLimit(1...6)
                     .focused($focused)
@@ -725,11 +785,12 @@ struct Composer: View {
                 .tint(dictation.isListening ? Theme.accent : .secondary)
                 .disabled(status == .done)
                 .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Dictate")
-                Button {
-                    dictation.stop()
-                    if connection.sendPrompt(session: sessionId, text: text) { text = "" }
-                } label: {
-                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 34))
+                Button(action: send) {
+                    if sending {
+                        ProgressView().frame(width: 34, height: 34)
+                    } else {
+                        Image(systemName: "arrow.up.circle.fill").font(.system(size: 34))
+                    }
                 }
                 .tint(Theme.accent)
                 .disabled(!canSend)
@@ -749,6 +810,101 @@ struct Composer: View {
             }
         }
         .onDisappear { dictation.stop() }
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            photoItems = []
+            Task {
+                for (i, item) in items.enumerated() {
+                    guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
+                    // HEIC isn't readable by every agent: send photos as JPEG.
+                    let jpeg = UIImage(data: data)?.jpegData(compressionQuality: 0.85) ?? data
+                    attachments.append(Attachment(name: "photo-\(attachments.count + i + 1).jpg", data: jpeg, isImage: true))
+                }
+            }
+        }
+        .fileImporter(isPresented: $pickingFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result else { return }
+            for url in urls.prefix(5) {
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                guard let data = try? Data(contentsOf: url) else { continue }
+                let image = ["png", "jpg", "jpeg", "gif", "webp", "heic"].contains(url.pathExtension.lowercased())
+                attachments.append(Attachment(name: url.lastPathComponent, data: data, isImage: image))
+            }
+        }
+    }
+}
+
+/// An image or file waiting to go with the next message.
+struct Attachment: Identifiable {
+    let id = UUID()
+    let name: String
+    let data: Data
+    let isImage: Bool
+}
+
+private struct AttachmentChip: View {
+    let attachment: Attachment
+    let remove: () -> Void
+    var body: some View {
+        HStack(spacing: 6) {
+            if attachment.isImage, let img = UIImage(data: attachment.data) {
+                Image(uiImage: img).resizable().scaledToFill()
+                    .frame(width: 30, height: 30).clipShape(RoundedRectangle(cornerRadius: 6))
+            } else {
+                Image(systemName: "doc").frame(width: 30, height: 30)
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 6))
+            }
+            Text(attachment.name).font(.caption).lineLimit(1).frame(maxWidth: 120)
+            Button(action: remove) { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Remove \(attachment.name)")
+        }
+        .padding(.leading, 4).padding(.trailing, 8).padding(.vertical, 4)
+        .background(Color(.secondarySystemGroupedBackground), in: Capsule())
+    }
+}
+
+/// How attachments ride along in a message: their paths on the Mac, after the text.
+enum AttachedFiles {
+    static let marker = "Attached (saved on this Mac):"
+
+    static func compose(_ text: String, paths: [String]) -> String {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let list = paths.map { "- \($0)" }.joined(separator: "\n")
+        return (t.isEmpty ? "" : t + "\n\n") + marker + "\n" + list
+    }
+
+    /// The text and the files' names (without the Mac's time stamp), if it has any.
+    static func split(_ message: String) -> (text: String, files: [String])? {
+        guard let r = message.range(of: marker) else { return nil }
+        let text = message[..<r.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
+        let files = message[r.upperBound...].split(separator: "\n").compactMap { line -> String? in
+            let p = line.trimmingCharacters(in: .whitespaces)
+            guard p.hasPrefix("- ") else { return nil }
+            let name = (String(p.dropFirst(2)) as NSString).lastPathComponent
+            // "20261125-223812-photo-1.jpg" → "photo-1.jpg"
+            if let m = name.range(of: #"^\d{8}-\d{6}-"#, options: .regularExpression) { return String(name[m.upperBound...]) }
+            return name
+        }
+        return (text, files)
+    }
+}
+
+/// Files that went with a message, as small chips.
+struct AttachedFilesRow: View {
+    let files: [String]
+    var body: some View {
+        HStack(spacing: 6) {
+            ForEach(files, id: \.self) { f in
+                let image = ["png", "jpg", "jpeg", "gif", "webp", "heic"].contains((f as NSString).pathExtension.lowercased())
+                Label(f, systemImage: image ? "photo" : "doc")
+                    .font(.caption)
+                    .lineLimit(1)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(Color(.tertiarySystemFill), in: Capsule())
+            }
+        }
     }
 }
 
@@ -767,10 +923,14 @@ struct PendingPromptRow: View {
         HStack {
             Spacer(minLength: 40)
             VStack(alignment: .trailing, spacing: 4) {
-                Text(prompt.text)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 14).padding(.vertical, 10)
-                    .background(Theme.accent.opacity(0.15), in: RoundedRectangle(cornerRadius: 16))
+                if let files = AttachedFiles.split(prompt.text)?.files, !files.isEmpty { AttachedFilesRow(files: files) }
+                let shown = AttachedFiles.split(prompt.text)?.text ?? prompt.text
+                if !shown.isEmpty {
+                    Text(shown)
+                        .textSelection(.enabled)
+                        .padding(.horizontal, 14).padding(.vertical, 10)
+                        .background(Theme.accent.opacity(0.15), in: RoundedRectangle(cornerRadius: 16))
+                }
                 Text(label).font(.caption2).foregroundStyle(.secondary)
                 if prompt.unconfirmed {
                     HStack {

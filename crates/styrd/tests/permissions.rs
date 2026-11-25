@@ -393,3 +393,73 @@ async fn answered_from_a_notification() {
     assert_eq!(r.status(), 404);
     d.stop().await;
 }
+
+/// Images and files from the phone: saved under the data folder, path returned.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn phone_uploads_a_file_for_a_message() {
+    init();
+    let d = Daemon::start().await;
+    share(&d, "u1").await;
+    let (url, token) = paired_phone(&d).await;
+    let base = http_base(&url);
+    let mut ws = connect(&url, &token).await.unwrap();
+    recv(&mut ws).await; // hello
+    let ServerMsg::Sessions { sessions } = recv(&mut ws).await else {
+        panic!()
+    };
+    let sid = sessions
+        .iter()
+        .find(|s| s.native_id == "u1")
+        .unwrap()
+        .id
+        .to_string();
+    let http = reqwest::Client::new();
+    let path = format!("{base}/v1/upload/{sid}?name=..%2F..%2Fsecret%20photo.png");
+
+    assert_eq!(
+        http.post(&path).body("x").send().await.unwrap().status(),
+        401
+    );
+
+    let v: Value = http
+        .post(&path)
+        .bearer_auth(&token)
+        .body(b"\x89PNG fake".to_vec())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let saved = std::path::PathBuf::from(v["path"].as_str().unwrap());
+    assert!(
+        saved.starts_with(&d.paths.data_dir),
+        "inside Styrman's folder: {}",
+        saved.display()
+    );
+    assert!(
+        saved.to_string_lossy().ends_with("-secret photo.png"),
+        "a safe name: {}",
+        saved.display()
+    );
+    assert_eq!(std::fs::read(&saved).unwrap(), b"\x89PNG fake");
+
+    let r = http
+        .post(format!("{base}/v1/upload/nope?name=a.txt"))
+        .bearer_auth(&token)
+        .body("x")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 400);
+    let big = vec![0u8; styrd::uploads::MAX_BYTES + 1];
+    let r = http
+        .post(&path)
+        .bearer_auth(&token)
+        .body(big)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 413);
+    d.stop().await;
+}

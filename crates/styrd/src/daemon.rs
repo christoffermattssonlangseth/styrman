@@ -892,6 +892,11 @@ impl Daemon {
         }
     }
 
+    /// Styrman's data folder (once the daemon has started).
+    pub fn data_dir_path(&self) -> Option<std::path::PathBuf> {
+        self.data_dir()
+    }
+
     fn data_dir(&self) -> Option<std::path::PathBuf> {
         self.data_dir
             .lock()

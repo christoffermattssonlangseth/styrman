@@ -13,6 +13,7 @@ pub mod push;
 pub mod quick;
 pub mod store;
 pub mod terminals;
+pub mod uploads;
 mod usage;
 
 use anyhow::{Context, Result, bail};
@@ -111,6 +112,7 @@ pub async fn run_with(
     let daemon: Arc<Daemon> = Daemon::open(store, default_adapters())?;
     let listener = ipc::bind(&paths.socket)?;
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(false);
+    uploads::prune(&paths.data_dir);
     match daemon.reload_push(Some(&paths.data_dir)) {
         Ok(true) => tracing::info!("push notifications on"),
         Ok(false) => tracing::info!("push notifications off (run `styr push setup`)"),

@@ -335,6 +335,27 @@ final class DaemonConnection {
 
     /// Send a prompt; it shows as pending until the agent picks it up.
     @discardableResult
+    /// Save an image or file on the Mac for a message; returns its path there.
+    func upload(session: String, name: String, data: Data) async throws -> String {
+        guard let creds = credentials else { throw QuickAnswer.Failure.status(0, "Not paired") }
+        var c = URLComponents(url: creds.httpBase.appending(path: "v1/upload").appending(path: session),
+                              resolvingAgainstBaseURL: false)!
+        c.queryItems = [URLQueryItem(name: "name", value: name)]
+        var req = URLRequest(url: c.url!)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(creds.token)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
+        req.timeoutInterval = 60
+        let (body, resp) = try await URLSession.shared.upload(for: req, from: data)
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+        guard status == 200, let path = json?["path"] as? String else {
+            let why = status == 413 ? "\(name) is too large (25 MB at most)." : (json?["error"] as? String ?? "Upload failed (\(status)).")
+            throw QuickAnswer.Failure.status(status, why)
+        }
+        return path
+    }
+
     func sendPrompt(session: String, text: String) -> Bool {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard state == .connected, !text.isEmpty else { return false }

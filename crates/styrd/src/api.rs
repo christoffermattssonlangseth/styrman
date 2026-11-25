@@ -190,6 +190,12 @@ pub fn router(daemon: Arc<Daemon>, stop: watch::Receiver<bool>) -> Router {
         )
         .route("/v1/ws", get(ws))
         .route(
+            "/v1/upload/{session}",
+            post(upload).layer(axum::extract::DefaultBodyLimit::max(
+                crate::uploads::MAX_BYTES,
+            )),
+        )
+        .route(
             "/v1/permission/{session}/{request}",
             get(permission_get)
                 .post(permission_answer)
@@ -395,6 +401,35 @@ async fn permission_get(
                 "couldn't read the request",
             )
         }
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct UploadQuery {
+    name: String,
+}
+
+/// An image or file for a message: saved on this Mac, its path returned.
+async fn upload(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(session): axum::extract::Path<String>,
+    axum::extract::Query(q): axum::extract::Query<UploadQuery>,
+    body: axum::body::Bytes,
+) -> Response {
+    let device = match authed(&st, &headers) {
+        Ok(d) => d,
+        Err(r) => return r,
+    };
+    match st
+        .daemon
+        .save_upload(&SessionId::from(session.as_str()), &q.name, &body)
+    {
+        Ok(path) => {
+            tracing::info!(%device, bytes = body.len(), path = %path.display(), "upload saved");
+            Json(serde_json::json!({"path": path})).into_response()
+        }
+        Err(e) => error(StatusCode::BAD_REQUEST, &format!("{e:#}")),
     }
 }
 
