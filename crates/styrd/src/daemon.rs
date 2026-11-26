@@ -28,6 +28,8 @@ pub enum BusMsg {
     LiveTokens,
     /// The reply being written in a session's terminal (see `ServerMsg::Preview`).
     Preview(SessionId, Option<String>),
+    /// A session's terminal screen, while a phone watches (see `ServerMsg::Screen`).
+    Screen(SessionId, String, u16),
 }
 
 pub struct Daemon {
@@ -870,6 +872,20 @@ impl Daemon {
         Ok(())
     }
 
+    /// From the phone: send this session's terminal screen for the next 20 s.
+    pub fn watch_screen(&self, session: &SessionId) -> Result<()> {
+        self.summary(session)?
+            .filter(|s| s.shared)
+            .context("unknown session")?;
+        let launch = self
+            .terminals
+            .launch_of(session)
+            .filter(|_| self.terminals.is_live(session))
+            .context("Its terminal can only be shown for sessions started with `styr` (or from the phone).")?;
+        self.terminals.watch_screen(&launch);
+        Ok(())
+    }
+
     /// From the phone: stop the current turn (Esc in the agent's terminal). The turn is
     /// marked as interrupted right away: Claude reports no end for an interrupted turn.
     pub fn interrupt(&self, session: &SessionId) -> Result<()> {
@@ -1300,12 +1316,27 @@ impl Daemon {
                     }
                     Some(crate::terminals::TerminalAction::End) => Ok(Response::EndSession),
                     Some(crate::terminals::TerminalAction::Interrupt) => Ok(Response::Interrupt),
+                    Some(crate::terminals::TerminalAction::WatchScreen) => {
+                        Ok(Response::WatchScreen)
+                    }
                     None => Err(anyhow::anyhow!("detached")),
                 }
             }
             Request::TerminalPrompt { launch_id, prompt } => self
                 .terminal_prompt(&launch_id, prompt)
                 .map(|()| Response::Ok),
+            Request::TerminalScreen {
+                launch_id,
+                text,
+                cols,
+            } => {
+                for id in self.terminals.sessions_of(&launch_id) {
+                    if self.summary(&id).ok().flatten().is_some_and(|s| s.shared) {
+                        let _ = self.bus.send(BusMsg::Screen(id, text.clone(), cols));
+                    }
+                }
+                Ok(Response::Ok)
+            }
             Request::TerminalPreview { launch_id, text } => {
                 // Only while it's working: a finished reply comes as a message.
                 for id in self.terminals.sessions_of(&launch_id) {

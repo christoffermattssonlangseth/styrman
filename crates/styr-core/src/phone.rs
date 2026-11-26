@@ -60,6 +60,11 @@ pub enum ClientMsg {
         parent: String,
         name: String,
     },
+    /// Show me this session's terminal for the next 20 s (sent again to keep it up):
+    /// the screen comes as `ServerMsg::Screen`. Only for sessions in `styr <agent>`.
+    WatchScreen {
+        session: SessionId,
+    },
     /// Start `agent` in `cwd` in a new cmux tab on the Mac, shared with the phone.
     StartSession {
         agent: AgentKind,
@@ -177,6 +182,13 @@ pub enum ServerMsg {
     /// A session started from the phone; it opens as soon as the agent runs.
     SessionStarting {
         session: SessionId,
+    },
+    /// The session's terminal as it looks now (plain text, `cols` wide), while a
+    /// phone watches it (`ClientMsg::WatchScreen`). Never stored.
+    Screen {
+        session: SessionId,
+        text: String,
+        cols: u16,
     },
     /// The reply the agent is writing right now, as its terminal shows it (only to
     /// phones viewing the session; never stored). `None`: no reply in progress.

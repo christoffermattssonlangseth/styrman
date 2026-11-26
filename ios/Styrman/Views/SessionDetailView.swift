@@ -10,6 +10,7 @@ struct SessionDetailView: View {
     @State private var baseline: String??
     @State private var showReadOnlyHelp = false
     @State private var confirmEnd = false
+    @State private var showTerminal = false
     /// How many of the latest rows to draw (more with "Show earlier").
     @State private var shown = 150
     @Environment(\.dismiss) private var dismiss
@@ -127,6 +128,16 @@ struct SessionDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         // The bar takes the agent's colour, so it's always clear who you're talking to.
         .toolbarBackground(Theme.color(for: agent).opacity(0.07), for: .navigationBar)
+        .sheet(isPresented: $showTerminal) { TerminalSheet(sessionId: sessionId, agent: agent) }
+        #if DEBUG
+        // Screenshots (simulator): STYR_SHOW=terminal opens the terminal of the opened session.
+        .task {
+            if ProcessInfo.processInfo.environment["STYR_SHOW"] == "terminal" {
+                try? await Task.sleep(for: .seconds(6))
+                showTerminal = true
+            }
+        }
+        #endif
         .confirmationDialog("End this session?", isPresented: $confirmEnd, titleVisibility: .visible) {
             Button("End session", role: .destructive) {
                 connection.endSession(sessionId)
@@ -191,6 +202,9 @@ struct SessionDetailView: View {
                             if !on { speaker.stop() }
                         })) {
                             Label("Read replies aloud", systemImage: "speaker.wave.2")
+                        }
+                        if summary.inTerminalWrapper {
+                            Button { showTerminal = true } label: { Label("Terminal", systemImage: "terminal") }
                         }
                         Divider()
                         if summary.canEnd {
@@ -1279,6 +1293,63 @@ struct LivePreviewRow: View {
         .accessibilityLabel("\(agent.displayName) is writing: \(text)")
         .onAppear {
             withAnimation(.easeInOut(duration: 0.55).repeatForever()) { on = false }
+        }
+    }
+}
+
+/// The agent's terminal on the Mac, live and read-only: what `styr` sees on screen.
+/// Sized to fit the width; pinch to zoom.
+struct TerminalSheet: View {
+    @Environment(DaemonConnection.self) private var connection
+    @Environment(\.dismiss) private var dismiss
+    let sessionId: String
+    let agent: AgentKind
+    @State private var zoom: CGFloat = 1
+    @GestureState private var pinch: CGFloat = 1
+
+    var body: some View {
+        NavigationStack {
+            GeometryReader { geo in
+                let screen = connection.screens[sessionId]
+                let cols = CGFloat(max(screen?.cols ?? 80, 20))
+                // A monospaced character is about 0.6 of the font size wide.
+                let fit = max(5, (geo.size.width - 16) / (cols * 0.6))
+                ScrollView([.vertical, .horizontal]) {
+                    Text(screen?.text.trimmingCharacters(in: .newlines) ?? "")
+                        .font(.system(size: fit * zoom * pinch, design: .monospaced))
+                        .foregroundStyle(Color(white: 0.9))
+                        .fixedSize()
+                        .padding(8)
+                        .textSelection(.enabled)
+                }
+                .defaultScrollAnchor(.bottomLeading)
+                .overlay {
+                    if screen == nil {
+                        ProgressView("Asking the Mac for the screen…").tint(.white).foregroundStyle(.white)
+                    }
+                }
+                .simultaneousGesture(
+                    MagnifyGesture()
+                        .updating($pinch) { v, s, _ in s = v.magnification }
+                        .onEnded { v in zoom = min(4, max(0.6, zoom * v.magnification)) }
+                )
+            }
+            .background(Color(red: 0.07, green: 0.07, blue: 0.08))
+            .navigationTitle("Terminal")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarColorScheme(.dark, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        // Dark inside the sheet only (preferredColorScheme would darken the app behind it).
+        .environment(\.colorScheme, .dark)
+        .tint(Theme.color(for: agent))
+        // Keep asking while it's open: the Mac stops sending 20 s after the last ask.
+        .task {
+            while !Task.isCancelled {
+                connection.watchScreen(sessionId)
+                try? await Task.sleep(for: .seconds(8))
+            }
         }
     }
 }

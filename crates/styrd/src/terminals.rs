@@ -38,6 +38,8 @@ pub enum TerminalAction {
     End,
     /// Stop the current turn (Esc).
     Interrupt,
+    /// Send the screen for a while (a phone is watching).
+    WatchScreen,
 }
 
 /// Permission modes the phone may ask for (Claude's names).
@@ -82,6 +84,8 @@ struct Inner {
     ends: std::collections::HashSet<String>,
     /// Launches asked to stop their turn, not yet told.
     interrupts: std::collections::HashSet<String>,
+    /// Launches asked for their screen, not yet told.
+    screens: std::collections::HashSet<String>,
     /// The permission mode the agent shows, per launch.
     modes: HashMap<String, String>,
     /// The permission menu currently on screen, per launch.
@@ -277,6 +281,8 @@ impl Terminals {
             let _ = tx.send(TerminalAction::End);
         } else if g.interrupts.remove(launch) {
             let _ = tx.send(TerminalAction::Interrupt);
+        } else if g.screens.remove(launch) {
+            let _ = tx.send(TerminalAction::WatchScreen);
         } else if let Some(i) = g.selects.remove(launch) {
             let _ = tx.send(TerminalAction::Select(i));
         } else if let Some(m) = g.mode_sets.remove(launch) {
@@ -353,6 +359,19 @@ impl Terminals {
             None => {
                 g.mode_sets.insert(launch.to_owned(), mode.to_owned());
             }
+        }
+    }
+
+    /// Ask the wrapper for its screen (for the next 20 s).
+    pub fn watch_screen(&self, launch: &str) {
+        let mut g = self.lock();
+        g.last_seen.insert(launch.to_owned(), Instant::now());
+        let sent = g
+            .attached
+            .remove(launch)
+            .is_some_and(|tx| tx.send(TerminalAction::WatchScreen).is_ok());
+        if !sent {
+            g.screens.insert(launch.to_owned());
         }
     }
 

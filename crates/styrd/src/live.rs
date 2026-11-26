@@ -149,7 +149,7 @@ pub async fn run(daemon: Arc<Daemon>, mut stop: tokio::sync::watch::Receiver<boo
         tokio::select! {
             _ = stop.wait_for(|v| *v) => return,
             m = bus.recv() => match m {
-                Ok(BusMsg::SessionChanged(_) | BusMsg::LiveTokens | BusMsg::Preview(..)) => {}
+                Ok(BusMsg::SessionChanged(_) | BusMsg::LiveTokens | BusMsg::Preview(..) | BusMsg::Screen(..)) => {}
                 Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(_) => return,
             },

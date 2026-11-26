@@ -77,6 +77,12 @@ pub enum Request {
         launch_id: String,
         prompt: Option<TerminalPrompt>,
     },
+    /// From a terminal wrapper: its screen, while a phone watches it.
+    TerminalScreen {
+        launch_id: String,
+        text: String,
+        cols: u16,
+    },
     /// From a terminal wrapper: the reply its agent is writing, read off the screen.
     TerminalPreview {
         launch_id: String,
@@ -223,6 +229,8 @@ pub enum Response {
     EndSession,
     /// Stop the agent's current turn (Esc in its terminal; see `Command::Interrupt`).
     Interrupt,
+    /// Send the screen for the next 20 s (a phone is watching).
+    WatchScreen,
     PromptAccepted {
         /// False: queued until the agent next stops.
         delivered: bool,

@@ -58,6 +58,8 @@ final class DaemonConnection {
     var requestedSession: String?
     /// The new-session picker's current folder listing.
     private(set) var folders: FolderListing?
+    /// Terminal screens being watched: session → (text, columns).
+    private(set) var screens: [String: (text: String, cols: Int)] = [:]
     /// The first message of a session being started, shown as pending once it opens.
     @ObservationIgnored private var startPrompt: String?
     /// APNs device token (hex), sent to the daemon on every connection.
@@ -256,6 +258,8 @@ final class DaemonConnection {
             usage = providers
         case .folders(let listing):
             folders = listing
+        case .screen(let sid, let text, let cols):
+            screens[sid] = (text, cols)
         case .preview(let sid, let text):
             timelines[sid]?.showPreview(text)
         case .sessionStarting(let sid):
@@ -346,6 +350,12 @@ final class DaemonConnection {
                   s.mode != mode.rawValue, self.lastError == nil else { return }
             self.lastError = "Claude didn't switch to \(mode.label). This version may not have that mode, or a dialog is open in its terminal."
         }
+    }
+
+    /// Ask for a session's terminal screen for the next 20 s (call again to keep it).
+    func watchScreen(_ session: String) {
+        guard state == .connected else { return }
+        send(.watchScreen(session: session))
     }
 
     /// Stop the agent's current turn (Esc in its terminal).

@@ -618,6 +618,11 @@ impl Connection {
                     }
                     Ok(BusMsg::SessionChanged(id)) => self.on_session_changed(&mut tx, id).await?,
                     Ok(BusMsg::LiveTokens) => {}
+                    Ok(BusMsg::Screen(session, text, cols)) => {
+                        if self.subs.contains_key(&session) {
+                            send(&mut tx, &ServerMsg::Screen { session, text, cols }).await?;
+                        }
+                    }
                     Ok(BusMsg::Preview(session, text)) => {
                         if self.subs.contains_key(&session) {
                             send(&mut tx, &ServerMsg::Preview { session, text }).await?;
@@ -884,6 +889,18 @@ impl Connection {
                     }
                 }
             }
+            ClientMsg::WatchScreen { session } => match self.daemon.watch_screen(&session) {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    send(
+                        tx,
+                        &ServerMsg::Error {
+                            message: format!("{e:#}"),
+                        },
+                    )
+                    .await
+                }
+            },
             ClientMsg::Command {
                 session,
                 command: styr_core::Command::Interrupt,

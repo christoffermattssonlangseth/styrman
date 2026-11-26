@@ -359,6 +359,15 @@ pub type PromptDetector = fn(&str) -> Option<TerminalPrompt>;
 pub static END_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// The agent's pid, once forked.
 static CHILD: AtomicI32 = AtomicI32::new(0);
+/// Send the screen until this time (ms since the epoch): a phone is watching.
+static SCREEN_UNTIL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
 
 /// Reads the agent's permission mode off its screen.
 pub type ModeReader = fn(&str) -> Option<&'static str>;
@@ -717,6 +726,8 @@ pub fn run(
     catch_styr: bool,
 ) -> Result<i32> {
     let mode_reader = readers.mode;
+    // Keep a screen copy (vt100) for whatever reads it: menus, mode, preview, phones.
+    let emulate_screen = detector.is_some() || readers.mode.is_some() || readers.preview.is_some();
     // Environment for the child (and, through it, the agent's hooks).
     for (k, v) in env {
         // SAFETY: still single-threaded here.
@@ -813,7 +824,7 @@ pub fn run(
         let mut r = master_read;
         let screen = screen.clone();
         let blocked = blocked.clone();
-        let emulate = detector.is_some() || mode_reader.is_some() || readers.preview.is_some();
+        let emulate = emulate_screen;
         std::thread::spawn(move || {
             let mut out = std::io::stdout();
             let mut buf = [0u8; 16384];
@@ -881,6 +892,39 @@ pub fn run(
                     });
                     last = now;
                 }
+            }
+        });
+    }
+    // The screen → daemon while a phone watches it (twice a second, when it changed).
+    if emulate_screen {
+        let (screen, done) = (screen.clone(), done.clone());
+        let launch_id = launch_id.to_owned();
+        std::thread::spawn(move || {
+            let client =
+                Client::new(Paths::resolve().socket).with_timeout(Some(Duration::from_secs(2)));
+            let mut last = String::new();
+            let mut sent_at = std::time::Instant::now();
+            while !done.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(500));
+                if now_ms() > SCREEN_UNTIL.load(Ordering::Relaxed) {
+                    last.clear();
+                    continue;
+                }
+                let (text, cols) = {
+                    let s = screen.lock().unwrap_or_else(|p| p.into_inner());
+                    (s.screen().contents(), s.screen().size().1.get())
+                };
+                // Unchanged: still send now and then, so a phone that just opened it gets it.
+                if text == last && sent_at.elapsed() < Duration::from_secs(3) {
+                    continue;
+                }
+                let _ = client.call(&Request::TerminalScreen {
+                    launch_id: launch_id.clone(),
+                    text: text.clone(),
+                    cols,
+                });
+                last = text;
+                sent_at = std::time::Instant::now();
             }
         });
     }
@@ -1166,6 +1210,9 @@ fn inject_loop(
                         std::thread::sleep(Duration::from_millis(60));
                     }
                 }
+            }
+            Ok(Response::WatchScreen) => {
+                SCREEN_UNTIL.store(now_ms() + 20_000, Ordering::Relaxed);
             }
             Ok(Response::Interrupt) => {
                 // Esc stops the turn in Claude Code and Codex.

@@ -389,10 +389,12 @@ enum ServerMsg: Decodable, Sendable {
     case sessionStarting(session: String)
     /// The reply being written right now (nil: none), read off the agent's terminal.
     case preview(session: String, text: String?)
+    /// The session's terminal screen, while this phone watches it.
+    case screen(session: String, text: String, cols: Int)
     case unknown(type: String)
 
     private enum K: String, CodingKey {
-        case type, `protocol`, host, sessions, session, id, events, event, message, text, position, warnings, listing
+        case type, `protocol`, host, sessions, session, id, events, event, message, text, position, warnings, listing, cols
         case providers, usageSupported = "usage_supported"
         case daemonVersion = "daemon_version", deviceId = "device_id", lastSeq = "last_seq"
     }
@@ -426,6 +428,9 @@ enum ServerMsg: Decodable, Sendable {
         case "error": self = .error(try c.decode(String.self, forKey: .message))
         case "folders": self = .folders(try c.decode(FolderListing.self, forKey: .listing))
         case "session_starting": self = .sessionStarting(session: try c.decode(String.self, forKey: .session))
+        case "screen": self = .screen(session: try c.decode(String.self, forKey: .session),
+                                      text: try c.decode(String.self, forKey: .text),
+                                      cols: try c.decode(Int.self, forKey: .cols))
         case "preview": self = .preview(session: try c.decode(String.self, forKey: .session),
                                         text: try c.decodeIfPresent(String.self, forKey: .text))
         default: self = .unknown(type: type)
@@ -451,6 +456,7 @@ enum ClientMsg: Encodable, Sendable {
     case setMode(session: String, mode: String)
     case endSession(session: String)
     case interrupt(session: String)
+    case watchScreen(session: String)
 
     private enum K: String, CodingKey { case type, kind, session, command, request, option, text, token, env, shared, path, agent, cwd, prompt, parent, name, mode, sinceSeq = "since_seq" }
 
@@ -471,6 +477,8 @@ enum ClientMsg: Encodable, Sendable {
             try cmd.encode("resolve_permission", forKey: .type)
             try cmd.encode(request, forKey: .request)
             try cmd.encode(option, forKey: .option)
+        case .watchScreen(let s):
+            try c.encode("watch_screen", forKey: .type); try c.encode(s, forKey: .session)
         case .interrupt(let s):
             try c.encode("command", forKey: .type); try c.encode(s, forKey: .session)
             var cmd = c.nestedContainer(keyedBy: K.self, forKey: .command)
