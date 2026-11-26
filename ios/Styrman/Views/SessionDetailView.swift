@@ -831,6 +831,7 @@ struct Composer: View {
     @State private var attachments: [Attachment] = []
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var pickingFiles = false
+    @State private var pickingPhotos = false
     @State private var sending = false
 
     private var canSend: Bool {
@@ -886,9 +887,9 @@ struct Composer: View {
             }
             HStack(alignment: .bottom, spacing: 8) {
                 Menu {
-                    PhotosPicker(selection: $photoItems, maxSelectionCount: 5, matching: .images) {
-                        Label("Photos", systemImage: "photo.on.rectangle")
-                    }
+                    // A PhotosPicker inside a Menu often never opens (the menu closes
+                    // first): open it from outside instead.
+                    Button { pickingPhotos = true } label: { Label("Photos", systemImage: "photo.on.rectangle") }
                     Button { pickingFiles = true } label: { Label("Files", systemImage: "folder") }
                 } label: {
                     Image(systemName: "paperclip.circle")
@@ -942,15 +943,20 @@ struct Composer: View {
             }
         }
         .onDisappear { dictation.stop() }
+        .photosPicker(isPresented: $pickingPhotos, selection: $photoItems, maxSelectionCount: 5, matching: .images)
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
             photoItems = []
             Task {
-                for (i, item) in items.enumerated() {
-                    guard let data = try? await item.loadTransferable(type: Data.self) else { continue }
-                    // HEIC isn't readable by every agent: send photos as JPEG.
-                    let jpeg = UIImage(data: data)?.jpegData(compressionQuality: 0.85) ?? data
-                    attachments.append(Attachment(name: "photo-\(attachments.count + i + 1).jpg", data: jpeg, isImage: true))
+                var failed = 0
+                for item in items {
+                    guard let data = try? await item.loadTransferable(type: Data.self),
+                          let jpeg = Self.photoJPEG(data) else { failed += 1; continue }
+                    attachments.append(Attachment(name: "photo-\(attachments.count + 1).jpg", data: jpeg, isImage: true))
+                }
+                if failed > 0 {
+                    connection.lastError = failed == 1 ? "Couldn't load that photo (is it still downloading from iCloud?)."
+                        : "Couldn't load \(failed) of the photos (are they still downloading from iCloud?)."
                 }
             }
         }
@@ -964,6 +970,24 @@ struct Composer: View {
                 attachments.append(Attachment(name: url.lastPathComponent, data: data, isImage: image))
             }
         }
+    }
+}
+
+extension Composer {
+    /// A photo as JPEG (HEIC isn't readable by every agent), at most 2048 px on its
+    /// longest side: plenty for an agent, and quick to send.
+    static func photoJPEG(_ data: Data) -> Data? {
+        guard let image = UIImage(data: data) else { return nil }
+        let longest = max(image.size.width, image.size.height) * image.scale
+        guard longest > 2048 else { return image.jpegData(compressionQuality: 0.85) }
+        let factor = 2048 / longest
+        let size = CGSize(width: image.size.width * image.scale * factor, height: image.size.height * image.scale * factor)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let scaled = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }
+        return scaled.jpegData(compressionQuality: 0.85)
     }
 }
 
