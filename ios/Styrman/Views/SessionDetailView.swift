@@ -144,10 +144,15 @@ struct SessionDetailView: View {
             // a reply or tool card arriving makes the view look scrolled up for a
             // moment, and must not stop it following.
             .onScrollGeometryChange(for: ScrollSpot.self) { g in
-                ScrollSpot(near: g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 120,
+                // The visible part ends above the input bar (the bottom inset); offsets
+                // alone leave out the space under the navigation bar.
+                ScrollSpot(near: g.visibleRect.maxY - g.contentInsets.bottom >= g.contentSize.height - 120,
                            height: g.contentSize.height)
             } action: { old, new in
-                if new.near || scrollPhase != .idle || new.height == old.height { atBottom = new.near }
+                // Your scrolling counts; the jump's own animation (passing through
+                // "not at the end") doesn't.
+                let yours = scrollPhase == .interacting || scrollPhase == .decelerating
+                if new.near || yours || (scrollPhase == .idle && new.height == old.height) { atBottom = new.near }
             }
             // Following: keep the end in view whenever the content grows.
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { old, new in
