@@ -126,6 +126,23 @@ final class SessionTimeline {
 
     init(sessionId: String) { self.sessionId = sessionId }
 
+    /// What an edit approval would change. Codex approvals read off the terminal carry
+    /// only the path, so they borrow the patch from the latest edit step for that file.
+    func diffs(for permission: PermissionItem) -> [FileDiff]? {
+        guard permission.tool.kind == .edit else { return nil }
+        if let d = FileDiff.from(permission.tool) { return d }
+        let paths = Set(permission.tool.locations ?? []).union([permission.tool.input["path"]?.string].compactMap { $0 })
+        for item in items.reversed() {
+            guard case .tool(_, let t) = item, t.tool.kind == .edit,
+                  let d = FileDiff.from(t.tool) else { continue }
+            let mine = Set(d.map(\.path)).union(t.tool.locations ?? [])
+            if paths.isEmpty || !mine.isDisjoint(with: paths) || mine.contains(where: { m in paths.contains { $0.hasSuffix(m) || m.hasSuffix($0) } }) {
+                return d
+            }
+        }
+        return nil
+    }
+
     /// Anything beyond start/share markers.
     var hasContent: Bool {
         items.contains { if case .divider = $0 { false } else { true } }

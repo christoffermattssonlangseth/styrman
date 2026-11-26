@@ -40,6 +40,7 @@ fn codex_tool(name: &str, input: Value) -> ToolInfo {
             let patch = input["patch"]
                 .as_str()
                 .or(input["input"].as_str())
+                .or(input["command"].as_str())
                 .or(input.as_str())
                 .unwrap_or("");
             let files: Vec<String> = patch

@@ -103,6 +103,10 @@ struct SessionListView: View {
             .refreshable { connection.retryNow() }
             .onChange(of: connection.requestedSession, initial: true) { _, id in
                 if let id {
+                    // From a notification, the Live Activity or the widget: on top of everything.
+                    showSettings = false
+                    showUsage = false
+                    showNewSession = false
                     path = [id]
                     connection.requestedSession = nil
                 }
@@ -155,7 +159,7 @@ struct SessionListView: View {
             .buttonStyle(CardPressStyle())
             if s.status == .needsApproval, timeline.isLive,
                let permission = timeline.openPermissions.last {
-                SessionQuickApproval(session: s.id, permission: permission)
+                SessionQuickApproval(session: s.id, cwd: s.cwd, permission: permission)
                     .id(permission.request)
             }
         }
@@ -176,16 +180,21 @@ struct SessionListView: View {
 private struct SessionQuickApproval: View {
     @Environment(DaemonConnection.self) private var connection
     let session: String
+    var cwd: String?
     let permission: PermissionItem
     @State private var answering = false
 
     var body: some View {
         if let allow = permission.options.first(where: { $0.kind == .allowOnce }) {
             VStack(alignment: .leading, spacing: 8) {
-                Text(displayTitle(permission.tool, cwd: nil))
-                    .font(permission.tool.kind == .execute ? Theme.mono : .callout)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
+                if let diffs = connection.timeline(for: session).diffs(for: permission) {
+                    DiffPreview(diffs: diffs, cwd: cwd, maxLines: 6)
+                } else {
+                    Text(displayTitle(permission.tool, cwd: cwd))
+                        .font(permission.tool.kind == .execute ? Theme.mono : .callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
                 if let reason = permission.reason, !reason.isEmpty {
                     Text(reason).font(.footnote).foregroundStyle(.secondary)
                 }

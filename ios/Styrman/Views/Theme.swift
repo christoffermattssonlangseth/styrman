@@ -12,6 +12,9 @@ enum Theme {
     static let solid = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0xF2F2F4) : UIColor(hex: 0x15181C) })
     static let onSolid = Color(UIColor { $0.userInterfaceStyle == .dark ? UIColor(hex: 0x15181C) : .white })
     static let mono = Font.system(.callout, design: .monospaced)
+    /// Diff lines: green added, red removed, legible as text in both modes.
+    static let diffAdded = Color(UIColor { UIColor(hex: $0.userInterfaceStyle == .dark ? 0x56D364 : 0x1A7F37) })
+    static let diffRemoved = Color(UIColor { UIColor(hex: $0.userInterfaceStyle == .dark ? 0xF47067 : 0xCF222E) })
 
     static func color(for status: SessionStatus) -> Color {
         switch status {

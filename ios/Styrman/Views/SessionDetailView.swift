@@ -192,7 +192,7 @@ struct SessionDetailView: View {
                         .frame(maxWidth: .infinity).padding(10).background(.bar)
                 } else if let summary {
                     if let p = openPermission(timeline) {
-                        PermissionCard(item: p, title: displayTitle(p.tool, cwd: summary.cwd), sessionId: sessionId, pinned: true)
+                        PermissionCard(item: p, title: displayTitle(p.tool, cwd: summary.cwd), sessionId: sessionId, cwd: summary.cwd, pinned: true)
                             .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 4)
                             .frame(maxWidth: .infinity)
                             .background(.bar)
@@ -308,7 +308,7 @@ struct TimelineRow: View {
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .background(Theme.attention.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
         case .permission(_, let p):
-            PermissionCard(item: p, title: displayTitle(p.tool, cwd: cwd), sessionId: sessionId)
+            PermissionCard(item: p, title: displayTitle(p.tool, cwd: cwd), sessionId: sessionId, cwd: cwd)
         case .plan(_, let entries):
             PlanCard(entries: entries)
         case .notice(_, let text, let warning):
@@ -428,6 +428,7 @@ struct ToolCallRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 4)
+                if item.tool.kind == .edit, let diffs = FileDiff.from(item.tool) { DiffCounts(diffs: diffs) }
                 statusIcon
             }
             .padding(.horizontal, 10).padding(.vertical, bare ? 7 : 6)
@@ -457,6 +458,7 @@ struct PermissionCard: View {
     let item: PermissionItem
     let title: String
     let sessionId: String
+    var cwd: String? = nil
     /// Pinned above the message box: tighter, so the conversation stays visible.
     var pinned = false
     @State private var sent: String?
@@ -484,7 +486,10 @@ struct PermissionCard: View {
                 }
             }
 
-            // What it's about, compact: commands in a small monospaced box.
+            // What it's about, compact: commands in a small monospaced box, edits as a diff.
+            if let diffs = connection.timeline(for: sessionId).diffs(for: item) {
+                DiffPreview(diffs: diffs, cwd: cwd, maxLines: pinned ? 8 : 24)
+            } else {
             Group {
                 if item.tool.kind == .execute {
                     Text(title)
@@ -500,6 +505,7 @@ struct PermissionCard: View {
             .textSelection(.enabled)
             if !showAll, title.count > (pinned ? 120 : 240) || title.split(separator: "\n").count > (pinned ? 3 : 6) {
                 Button("Show all") { showAll = true }.font(.caption).buttonStyle(.borderless)
+            }
             }
             if let reason { Text(reason).font(.footnote).foregroundStyle(.secondary) }
 
@@ -663,6 +669,10 @@ struct ToolDetailView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(12)
                         .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+                    if item.tool.kind == .edit, let diffs = FileDiff.from(item.tool) {
+                        Text("Changes").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                        DiffPreview(diffs: diffs)
+                    }
                     Text("Output").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
                     ScrollView(.horizontal) {
                         Text(outputText)
