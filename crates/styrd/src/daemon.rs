@@ -494,6 +494,7 @@ impl Daemon {
             accepts_prompts: false,
             activity,
             mode: None,
+            outdated: false,
         }
     }
 
@@ -503,6 +504,11 @@ impl Daemon {
             .in_terminal_wrapper
             .then(|| self.terminals.mode_of(&s.id))
             .flatten();
+        s.outdated = s.in_terminal_wrapper
+            && self
+                .terminals
+                .launch_of(&s.id)
+                .is_some_and(|l| self.terminals.level_of(&l) < styr_core::ipc::WRAPPER_LEVEL);
         // Claude can also take prompts through its background Stop hook.
         s.accepts_prompts = s.in_terminal_wrapper || s.agent == AgentKind::Claude;
         s

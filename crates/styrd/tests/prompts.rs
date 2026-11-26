@@ -350,6 +350,22 @@ async fn stop_reaches_the_terminal_only_if_its_wrapper_knows_it() {
     // pretend the turn stopped.
     let _old = attach_at(&d, l, 0);
     settle().await;
+    let outdated = |r: Response| match r {
+        Response::Sessions { sessions } => {
+            sessions
+                .iter()
+                .find(|s| s.native_id == "t1")
+                .unwrap()
+                .outdated
+        }
+        r => panic!("{r:?}"),
+    };
+    assert!(outdated(
+        d.call(Request::ListSessions {
+            include_unshared: true
+        })
+        .await
+    ));
     send(&mut ws, stop.clone()).await;
     loop {
         match recv(&mut ws).await {
@@ -371,6 +387,12 @@ async fn stop_reaches_the_terminal_only_if_its_wrapper_knows_it() {
     // A current wrapper gets the Esc.
     let wrapper = attach(&d, l);
     settle().await;
+    assert!(!outdated(
+        d.call(Request::ListSessions {
+            include_unshared: true
+        })
+        .await
+    ));
     send(&mut ws, stop).await;
     let got = tokio::time::timeout(Duration::from_secs(5), wrapper)
         .await

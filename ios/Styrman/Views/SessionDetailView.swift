@@ -251,8 +251,20 @@ struct SessionDetailView: View {
                     if summary.cwd != nil {
                         Button { showChanges = true } label: { Label("Changes", systemImage: "plusminus") }
                     }
-                    if summary.inTerminalWrapper {
+                    if summary.hasLiveControls {
                         Button { showTerminal = true } label: { Label("Terminal", systemImage: "terminal") }
+                    }
+                    if summary.outdated && summary.inTerminalWrapper {
+                        // Explains why Stop and Terminal are missing here.
+                        Button {} label: {
+                            Label {
+                                Text("Started before an update")
+                                Text("End it and start it again for Stop and Terminal.")
+                            } icon: {
+                                Image(systemName: "arrow.clockwise.circle")
+                            }
+                        }
+                        .disabled(true)
                     }
                     Divider()
                     if summary.canEnd {
@@ -295,7 +307,7 @@ struct SessionDetailView: View {
                 }
                 if summary.acceptsPrompts {
                     Composer(sessionId: sessionId, status: summary.status, agent: summary.agent.displayName,
-                             canStop: summary.inTerminalWrapper)
+                             canStop: summary.hasLiveControls)
                         .onChange(of: speaker.autoRead) { _, on in
                             // Turning it on reads the latest reply, so you hear where things are.
                             if on, let r = latestReply(timeline) { speaker.speak(r.text, id: r.id, agent: summary.agent) }

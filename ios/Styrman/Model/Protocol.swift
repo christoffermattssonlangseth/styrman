@@ -103,12 +103,14 @@ struct SessionSummary: Codable, Identifiable, Hashable, Sendable {
     var activity: String? = nil
     /// The agent's permission mode, when its terminal shows it (`styr claude`).
     var mode: String? = nil
+    /// Started before Styrman was updated: no Stop or Terminal until it's started again.
+    var outdated: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case id, agent, cwd, title, model, shared, status
         case nativeId = "native_id", createdMs = "created_ms", updatedMs = "updated_ms", lastSeq = "last_seq"
         case inTerminalWrapper = "in_terminal_wrapper", acceptsPrompts = "accepts_prompts"
-        case activity, mode
+        case activity, mode, outdated
     }
 
     init(from decoder: Decoder) throws {
@@ -129,10 +131,14 @@ struct SessionSummary: Codable, Identifiable, Hashable, Sendable {
         acceptsPrompts = (try? c.decodeIfPresent(Bool.self, forKey: .acceptsPrompts)) ?? true
         activity = (try? c.decodeIfPresent(String.self, forKey: .activity)) ?? nil
         mode = (try? c.decodeIfPresent(String.self, forKey: .mode)) ?? nil
+        outdated = (try? c.decodeIfPresent(Bool.self, forKey: .outdated)) ?? false
     }
 
     /// Can be ended from the phone: running in `styr <agent>` (or already over).
     var canEnd: Bool { inTerminalWrapper && status != .done }
+
+    /// Stop a turn and show the terminal: needs a current wrapper.
+    var hasLiveControls: Bool { inTerminalWrapper && !outdated }
 
     /// Repository / folder name for the list.
     var repoName: String {

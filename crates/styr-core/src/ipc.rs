@@ -316,6 +316,10 @@ pub struct SessionSummary {
     /// "plan", "auto", "bypassPermissions"); known only inside `styr <agent>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// Its wrapper was started before Styrman was updated and lacks newer actions
+    /// (stop, terminal): starting the session again brings them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub outdated: bool,
 }
 
 /// An exit code plus stderr text for `styr hook` to finish with.
