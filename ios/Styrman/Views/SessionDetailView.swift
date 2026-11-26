@@ -1395,36 +1395,57 @@ struct LivePreviewRow: View {
         // Like the Claude app: the terminal's text arrives in chunks, about twice a
         // second, but shows at a steady pace, newest words dimmed. A chunk shown all
         // at once is a jump; spread out, it reads as writing.
-        let shown = String(text.prefix(reduceMotion ? text.count : revealed))
+        let full = Self.formatted(text)
+        let count = full.characters.count
         Group {
             if hasTable {
-                ReplyText(raw: shown)
+                ReplyText(raw: String(text.prefix(reduceMotion ? text.count : revealed)))
             } else {
-                let (settled, fresh) = Self.split(shown)
-                Text("\(Text(settled))\(Text(fresh).foregroundStyle(.secondary))")
+                Text(Self.reveal(full, upTo: reduceMotion ? count : revealed))
             }
         }
         .foregroundStyle(.primary.opacity(0.85))
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentTransition(.identity)
-        .accessibilityLabel("\(agent.displayName) is writing: \(text)")
+        .accessibilityLabel("\(agent.displayName) is writing: \(String(full.characters))")
         .onChange(of: text, initial: true) { old, new in
             // A different reading (not just more): keep only what still matches.
-            if !new.hasPrefix(old) || revealed > new.count {
-                revealed = min(revealed, old.commonPrefix(with: new).count)
+            let (was, now) = (Self.plain(old), Self.plain(new))
+            if !now.hasPrefix(was) || revealed > now.count {
+                revealed = min(revealed, was.commonPrefix(with: now).count)
             }
         }
         .task(id: text) { await flow() }
+    }
+
+    /// The preview's Markdown (bold, italic, code: what the Mac read off the
+    /// terminal's formatting), or the text as it is.
+    static func formatted(_ text: String) -> AttributedString {
+        (try? AttributedString(markdown: text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(text)
+    }
+
+    static func plain(_ text: String) -> String { String(formatted(text).characters) }
+
+    /// The first `n` characters of `full`, its last few words dimmed.
+    static func reveal(_ full: AttributedString, upTo n: Int) -> AttributedString {
+        let end = full.characters.index(full.startIndex, offsetBy: min(n, full.characters.count))
+        var shown = AttributedString(full[full.startIndex..<end])
+        let fresh = split(String(shown.characters)).1.count
+        let from = shown.characters.index(shown.endIndex, offsetBy: -fresh)
+        shown[from..<shown.endIndex].foregroundColor = .secondary
+        return shown
     }
 
     /// Reveal the rest at a pace that catches up in about half a second (the time
     /// to the next chunk), never slower than a quick reader.
     private func flow() async {
         let tick = 1.0 / 30
-        while !Task.isCancelled, revealed < text.count {
-            let behind = Double(text.count - revealed)
+        let total = hasTable ? text.count : Self.plain(text).count
+        while !Task.isCancelled, revealed < total {
+            let behind = Double(total - revealed)
             let step = max(1, Int((max(60, behind / 0.5) * tick).rounded()))
-            revealed = min(text.count, revealed + step)
+            revealed = min(total, revealed + step)
             try? await Task.sleep(for: .seconds(tick))
         }
     }

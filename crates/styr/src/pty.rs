@@ -552,6 +552,97 @@ fn table_line(l: String) -> Option<String> {
     Some(l)
 }
 
+/// The screen's rows, one per line (trailing blanks trimmed). With `styled`, its
+/// formatting goes back to Markdown: bold as `**…**`, italic as `*…*`, and inline
+/// code (text in a colour of its own on a line of plain text) as `` `…` ``, so the
+/// phone can show a reply formatted while it's written.
+pub fn screen_lines(screen: &vt100::Screen, styled: bool) -> String {
+    let (rows, cols) = screen.size();
+    let (rows, cols) = (rows.get(), cols.get());
+    let gray = |c: vt100::Color| match c {
+        vt100::Color::Rgb(r, g, b) => r.max(g).max(b) - r.min(g).min(b) < 24,
+        vt100::Color::Idx(i) => matches!(i, 0 | 7 | 8 | 15) || i >= 232,
+        vt100::Color::Default => true,
+    };
+    let mut out = String::new();
+    for r in 0..rows {
+        let cells: Vec<&vt100::Cell> = (0..cols)
+            .filter_map(|c| screen.cell(r, c))
+            .filter(|c| !c.is_wide_continuation())
+            .collect();
+        // The line's own text colour: what most of its letters are written in.
+        let mut counts: Vec<(vt100::Color, usize)> = vec![];
+        for c in &cells {
+            if c.contents().chars().any(char::is_alphanumeric) {
+                match counts.iter_mut().find(|(k, _)| *k == c.fgcolor()) {
+                    Some((_, n)) => *n += 1,
+                    None => counts.push((c.fgcolor(), 1)),
+                }
+            }
+        }
+        let base = counts.iter().max_by_key(|(_, n)| *n).map(|(k, _)| *k);
+        let style = |c: &vt100::Cell| -> (bool, bool, bool) {
+            if !styled {
+                return (false, false, false);
+            }
+            let code = c.fgcolor() != vt100::Color::Default
+                && Some(c.fgcolor()) != base
+                && !gray(c.fgcolor());
+            (c.bold() && !code, c.italic() && !code, code)
+        };
+        // Runs of one style; markers go tight around the words, not the spaces.
+        let mut line = String::new();
+        let mut i = 0;
+        while i < cells.len() {
+            let st = style(cells[i]);
+            let mut text = String::new();
+            while i < cells.len() && style(cells[i]) == st {
+                let t = cells[i].contents();
+                text.push_str(if t.is_empty() { " " } else { t });
+                i += 1;
+            }
+            let (b, it, code) = st;
+            if !(b || it || code) || !text.chars().any(char::is_alphanumeric) {
+                line.push_str(&text);
+                continue;
+            }
+            let lead = text.len() - text.trim_start().len();
+            let core = text.trim();
+            let mark = if code {
+                "`"
+            } else if b {
+                "**"
+            } else {
+                "*"
+            };
+            let (open, close) = if b && it && !code {
+                ("***", "***")
+            } else {
+                (mark, mark)
+            };
+            line.push_str(&text[..lead]);
+            line.push_str(open);
+            line.push_str(core);
+            line.push_str(close);
+            line.push_str(&text[lead + core.len()..]);
+        }
+        out.push_str(line.trim_end());
+        out.push('\n');
+    }
+    out
+}
+
+/// `read` on the formatted screen when it says the same as on the plain one
+/// (markers aside); the plain reading otherwise.
+pub fn styled_preview(read: PreviewReader, screen: &vt100::Screen) -> Option<String> {
+    let plain = read(&screen_lines(screen, false))?;
+    let strip = |s: &str| s.replace(['*', '`'], "");
+    match read(&screen_lines(screen, true)) {
+        Some(styled) if strip(&styled) == strip(&plain) => Some(styled),
+        _ => Some(plain),
+    }
+}
+
 /// While a long reply is written, its start scrolls off the agent's screen: keep
 /// what was already read and add what's new, so the preview only grows. `seen` is
 /// the preview so far, `now` what the screen shows ("…" first when scrolled).
@@ -1147,13 +1238,12 @@ pub fn run(
             let mut last: Option<String> = None;
             while !done.load(Ordering::Relaxed) {
                 std::thread::sleep(Duration::from_millis(300));
-                let contents = screen
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .screen()
-                    .contents();
+                let read_now = styled_preview(
+                    read,
+                    screen.lock().unwrap_or_else(|p| p.into_inner()).screen(),
+                );
                 // Past a screenful, add to what was read rather than show the tail.
-                let now = read(&contents).map(|n| match &last {
+                let now = read_now.map(|n| match &last {
                     Some(seen) => grow_preview(seen, &n),
                     None => n,
                 });
@@ -2110,5 +2200,63 @@ mod tests {
             seen += 1;
         }
         assert!(seen >= 4);
+    }
+}
+
+#[cfg(test)]
+mod styled_tests {
+    use super::*;
+
+    fn screen(bytes: &str) -> vt100::Parser {
+        let n = |v| std::num::NonZeroU16::new(v).unwrap();
+        let mut p = vt100::Parser::new(n(12), n(90), 0);
+        p.process(bytes.as_bytes());
+        p
+    }
+
+    // As Claude Code draws it: a white ⏺, code in a colour of its own, bold and
+    // italic in the default colour, then its input box.
+    const CODE: &str = "\x1b[38;2;177;185;249m";
+    const WHITE: &str = "\x1b[38;2;255;255;255m";
+    const GRAY: &str = "\x1b[38;2;136;136;136m";
+
+    fn reply() -> String {
+        let rule = format!("{GRAY}{}\x1b[39m", "─".repeat(60));
+        [
+            format!("{WHITE}⏺\x1b[39m First check {CODE}git status\x1b[39m so you know a \x1b[1mclean baseline\x1b[22m."),
+            String::new(),
+            "  1. \x1b[1mRead\x1b[22m the failure output.".into(),
+            "  2. \x1b[1mIsolate\x1b[22m the \x1b[3mlast\x1b[23m change.".into(),
+            String::new(),
+            rule.clone(),
+            "❯ ".into(),
+            rule,
+        ]
+        .join("\r\n")
+    }
+
+    #[test]
+    fn a_reply_keeps_its_formatting() {
+        let p = screen(&reply());
+        assert_eq!(
+            styled_preview(claude_preview, p.screen()).unwrap(),
+            "First check `git status` so you know a **clean baseline**.\n\n1. **Read** the failure output.\n2. **Isolate** the *last* change."
+        );
+        // Plain, as before.
+        assert_eq!(
+            claude_preview(&screen_lines(p.screen(), false)).unwrap(),
+            "First check git status so you know a clean baseline.\n\n1. Read the failure output.\n2. Isolate the last change."
+        );
+    }
+
+    #[test]
+    fn a_line_all_in_one_colour_is_text_not_code() {
+        let p = screen(&format!(
+            "{WHITE}⏺ Everything here is white text.\x1b[39m\r\n"
+        ));
+        assert_eq!(
+            screen_lines(p.screen(), true).lines().next().unwrap(),
+            "⏺ Everything here is white text."
+        );
     }
 }

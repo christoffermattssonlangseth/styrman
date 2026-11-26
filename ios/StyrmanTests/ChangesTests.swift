@@ -127,3 +127,14 @@ struct FlowingPreviewTests {
         #expect(LivePreviewRow.split("") == ("", ""))
     }
 }
+
+struct FormattedPreviewTests {
+    @Test func markersNeverShowWhileRevealing() {
+        let full = LivePreviewRow.formatted("Run `git status` for a **clean baseline** first.")
+        #expect(String(full.characters) == "Run git status for a clean baseline first.")
+        // Half-way through the bold words: no stray `**`.
+        let half = LivePreviewRow.reveal(full, upTo: 28)
+        #expect(String(half.characters) == "Run git status for a clean b")
+        #expect(LivePreviewRow.plain("a **b") == "a **b") // unclosed: as it is
+    }
+}
