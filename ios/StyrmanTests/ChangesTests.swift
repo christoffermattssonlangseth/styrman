@@ -138,3 +138,14 @@ struct FormattedPreviewTests {
         #expect(LivePreviewRow.plain("a **b") == "a **b") // unclosed: as it is
     }
 }
+
+struct PreviewResumeTests {
+    @Test @MainActor func theSameReplyCarriesOnAndANewOneStartsOver() {
+        let before = (text: "Keeping a git history tidy starts with small commits.", count: 40)
+        #expect(LivePreviewRow.resume(before, now: "Keeping a git history tidy starts with small commits. Then") == 40)
+        #expect(LivePreviewRow.resume(before, now: "All five commands ran one at a time.") == 0)
+        #expect(LivePreviewRow.resume(nil, now: "Anything") == 0)
+        // Shorter now (a reading that missed the end): no further than it goes.
+        #expect(LivePreviewRow.resume(before, now: "Keeping a git history tidy") == 26)
+    }
+}

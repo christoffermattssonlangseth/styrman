@@ -220,7 +220,7 @@ struct SessionDetailView: View {
                 }
                 if summary?.status == .working, timeline.pending.isEmpty || timeline.preview != nil {
                     if let text = timeline.preview {
-                        LivePreviewRow(text: text, agent: agent).id("preview")
+                        LivePreviewRow(text: text, agent: agent, sessionId: sessionId).id("preview")
                     } else {
                         WorkingRow(agent: agent).id("preview")
                     }
@@ -1387,6 +1387,7 @@ struct SessionBackground: View {
 struct LivePreviewRow: View {
     let text: String
     let agent: AgentKind
+    var sessionId = ""
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// How many characters of `text` show so far.
     @State private var revealed = 0
@@ -1408,14 +1409,29 @@ struct LivePreviewRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentTransition(.identity)
         .accessibilityLabel("\(agent.displayName) is writing: \(String(full.characters))")
-        .onChange(of: text, initial: true) { old, new in
-            // A different reading (not just more): keep only what still matches.
-            let (was, now) = (Self.plain(old), Self.plain(new))
-            if !now.hasPrefix(was) || revealed > now.count {
-                revealed = min(revealed, was.commonPrefix(with: now).count)
-            }
+        .onAppear {
+            // Back after a moment away (a tool step, a reading that missed): carry on
+            // where it was, rather than write the whole reply out again.
+            revealed = Self.resume(Self.shown[sessionId], now: Self.plain(text))
         }
+        .onChange(of: text) { _, new in
+            // Earlier text read differently (Claude bolds a word once its closing
+            // `**` arrives): it changes in place; the reveal keeps its place.
+            revealed = min(revealed, Self.plain(new).count)
+        }
+        .onChange(of: revealed) { _, n in Self.shown[sessionId] = (Self.plain(text), n) }
         .task(id: text) { await flow() }
+    }
+
+    /// How far each session's preview got: (its text, characters shown).
+    static var shown: [String: (text: String, count: Int)] = [:]
+
+    /// Where to pick up `now` after showing `before`: as far as before if it's the
+    /// same reply (its opening matches), from the start if it's another one.
+    static func resume(_ before: (text: String, count: Int)?, now: String) -> Int {
+        guard let before else { return 0 }
+        let same = before.text.commonPrefix(with: now).count
+        return same >= min(20, now.count, before.text.count) && same > 0 ? min(before.count, now.count) : 0
     }
 
     /// The preview's Markdown (bold, italic, code: what the Mac read off the
