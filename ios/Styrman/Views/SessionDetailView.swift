@@ -374,6 +374,8 @@ struct ReplyView: View {
     var isLatest = true
     @State private var speaker = Speaker.shared
     @State private var copied = false
+    /// The reply in a sheet where any part of it can be selected.
+    @State private var selecting = false
 
     var body: some View {
         let playing = speaker.speakingId == id
@@ -391,6 +393,9 @@ struct ReplyView: View {
                     UIPasteboard.general.string = raw
                     copied = true
                     Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
+                }
+                ActionIcon(symbol: "text.cursor", label: "Select text", tint: .secondary) {
+                    selecting = true
                 }
                 ActionIcon(
                     symbol: playing ? "stop.fill" : "speaker.wave.2",
@@ -411,12 +416,87 @@ struct ReplyView: View {
         }
         .contextMenu {
             Button { UIPasteboard.general.string = raw } label: { Label("Copy", systemImage: "doc.on.doc") }
+            Button { selecting = true } label: { Label("Select text", systemImage: "text.cursor") }
             Button { speaker.toggle(raw, id: id, agent: agent) } label: {
                 Label(playing ? "Stop reading" : "Read aloud", systemImage: playing ? "stop.fill" : "speaker.wave.2")
             }
         }
         .animation(.easeOut(duration: 0.2), value: playing)
         .sensoryFeedback(.selection, trigger: playing)
+        .sheet(isPresented: $selecting) { SelectTextSheet(text: text, raw: raw, agent: agent) }
+    }
+}
+
+/// A reply where any part can be selected and copied (SwiftUI's Text only copies
+/// all of it on iOS).
+struct SelectTextSheet: View {
+    let text: AttributedString
+    let raw: String
+    let agent: AgentKind
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            SelectableText(text: text)
+                .navigationTitle("Select text")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Copy all") {
+                            UIPasteboard.general.string = raw
+                            dismiss()
+                        }
+                    }
+                }
+        }
+        .tint(Theme.color(for: agent))
+        .presentationDragIndicator(.visible)
+    }
+}
+
+/// A read-only UITextView: drag the handles to select, then Copy / Look Up / Share.
+struct SelectableText: UIViewRepresentable {
+    let text: AttributedString
+
+    func makeUIView(context: Context) -> UITextView {
+        let v = UITextView()
+        v.isEditable = false
+        v.isSelectable = true
+        v.backgroundColor = .clear
+        v.adjustsFontForContentSizeCategory = true
+        v.textContainerInset = UIEdgeInsets(top: 16, left: 12, bottom: 32, right: 12)
+        v.dataDetectorTypes = [.link]
+        v.attributedText = Self.render(text)
+        return v
+    }
+
+    func updateUIView(_ v: UITextView, context: Context) {}
+
+    /// Markdown's inline styles (bold, italic, code, links) as UIKit attributes.
+    static func render(_ text: AttributedString) -> NSAttributedString {
+        let body = UIFont.preferredFont(forTextStyle: .body)
+        let out = NSMutableAttributedString()
+        for run in text.runs {
+            let piece = String(text[run.range].characters)
+            var font = body
+            let intent = run.inlinePresentationIntent ?? []
+            if intent.contains(.code) {
+                font = UIFont.monospacedSystemFont(ofSize: body.pointSize * 0.92, weight: .regular)
+            } else {
+                var traits: UIFontDescriptor.SymbolicTraits = []
+                if intent.contains(.stronglyEmphasized) { traits.insert(.traitBold) }
+                if intent.contains(.emphasized) { traits.insert(.traitItalic) }
+                if !traits.isEmpty, let d = body.fontDescriptor.withSymbolicTraits(traits) {
+                    font = UIFont(descriptor: d, size: 0)
+                }
+            }
+            var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor.label]
+            if intent.contains(.code) { attrs[.backgroundColor] = UIColor.secondarySystemFill }
+            if let link = run.link { attrs[.link] = link }
+            out.append(NSAttributedString(string: piece, attributes: attrs))
+        }
+        return out
     }
 }
 
