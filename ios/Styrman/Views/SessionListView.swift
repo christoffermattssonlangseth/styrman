@@ -15,131 +15,141 @@ struct SessionListView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            List {
-                SummaryHeader()
-                    .plainRow(top: 2, bottom: 4)
-                if connection.state == .unauthorized {
-                    UnpairedCard().plainRow()
+            list
+                .alert("Styrman", isPresented: errorShown) {
+                    Button("OK") { connection.lastError = nil }
+                } message: {
+                    Text(connection.lastError ?? "")
                 }
-                ForEach(connection.warnings, id: \.self) { w in
-                    Label(w, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange).plainRow()
-                }
-                group("Needs you", needsYou)
-                group("Working", working)
-                if !done.isEmpty {
-                    Button {
-                        withAnimation(.snappy) { showDone.toggle() }
-                    } label: {
-                        HStack {
-                            SectionTitle(title: "Done", count: done.count)
-                            Spacer()
-                            Image(systemName: "chevron.right")
-                                .font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
-                                .rotationEffect(.degrees(showDone ? 90 : 0))
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .plainRow(top: 14, bottom: 2)
-                    if showDone {
-                        ForEach(done) { s in
-                            card(s, compact: true)
-                        }
+                .navigationTitle("Styrman")
+                .toolbar { toolbar }
+                .navigationDestination(for: String.self) { id in SessionDetailView(sessionId: id) }
+                .sheet(isPresented: $showUsage) { UsageView() }
+                .sheet(isPresented: $showSettings) { SettingsView() }
+                .sheet(isPresented: $showNewSession) { NewSessionView() }
+                .refreshable { connection.retryNow() }
+                .onChange(of: connection.requestedSession, initial: true) { _, id in open(id) }
+                .task { await AppDelegate.enablePush() }
+                // Fetch the active sessions' conversations ahead, so opening one is instant.
+                .onChange(of: activeIds, initial: true) { _, ids in connection.preload(ids) }
+                #if DEBUG
+                // UI automation (simulator): STYR_OPEN_FIRST=1 opens the first session once it appears.
+                .onChange(of: connection.sessions.first?.id) { _, id in
+                    if let id, path.isEmpty, ProcessInfo.processInfo.environment["STYR_OPEN_FIRST"] == "1" {
+                        path = [id]
                     }
                 }
-            }
-            .listStyle(.plain)
-            .scrollContentBackground(.hidden)
-            .background(HomeBackground())
-            .animation(.snappy, value: connection.sessions.map { "\($0.id)\($0.status)" })
-            .overlay {
-                if connection.sessions.isEmpty && connection.state == .connected && connection.sessionsLoaded {
-                    ContentUnavailableView {
-                        Label { Text("No shared sessions") } icon: { WheelMark(size: 56) }
-                    } description: {
-                        Text("Type **/styr** in Claude Code, Codex or agy on \(connection.host), or start one with **+**.")
+                // Screenshots (simulator): STYR_OPEN=<part of a session's native id> opens it;
+                // STYR_SHOW=new|usage|settings opens that sheet.
+                .onChange(of: connection.sessions.count) { _, _ in
+                    let env = ProcessInfo.processInfo.environment
+                    if let want = env["STYR_OPEN"], path.isEmpty,
+                       let s = connection.sessions.first(where: { $0.nativeId.contains(want) }) {
+                        path = [s.id]
                     }
-                    .padding(.top, 120)
+                    switch env["STYR_SHOW"] {
+                    case "new": showNewSession = true
+                    case "usage": showUsage = true
+                    case "settings": showSettings = true
+                    default: break
+                    }
                 }
-            }
-            // Only a connection that stays down gets a word; quick reconnects (coming
-            // back to the app) don't.
-            .overlay(alignment: .bottom) {
-                if connection.troubled, connection.state != .unauthorized {
-                    ConnectionPill().padding(.bottom, 12)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
-            }
-            .animation(.snappy, value: connection.troubled)
-            .alert("Styrman", isPresented: Binding(
-                get: { connection.lastError != nil && path.isEmpty },
-                set: { if !$0 { connection.lastError = nil } }
-            )) {
-                Button("OK") { connection.lastError = nil }
-            } message: {
-                Text(connection.lastError ?? "")
-            }
-            .navigationTitle("Styrman")
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) { WheelMark(size: 26) }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showUsage = true } label: { Image(systemName: "chart.bar") }
-                        .accessibilityLabel("Usage")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showSettings = true } label: { Image(systemName: "gearshape") }
-                        .accessibilityLabel("Settings")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button { showNewSession = true } label: { Image(systemName: "plus") }
-                        .accessibilityLabel("New session")
-                        .disabled(connection.state != .connected)
-                }
-            }
-            .navigationDestination(for: String.self) { id in SessionDetailView(sessionId: id) }
-            .sheet(isPresented: $showUsage) { UsageView() }
-            .sheet(isPresented: $showSettings) { SettingsView() }
-            .sheet(isPresented: $showNewSession) { NewSessionView() }
-            .refreshable { connection.retryNow() }
-            .onChange(of: connection.requestedSession, initial: true) { _, id in
-                if let id {
-                    // From a notification, the Live Activity or the widget: on top of everything.
-                    showSettings = false
-                    showUsage = false
-                    showNewSession = false
-                    path = [id]
-                    connection.requestedSession = nil
-                }
-            }
-            .task { await AppDelegate.enablePush() }
-            // Fetch the active sessions' conversations ahead, so opening one is instant.
-            .onChange(of: (needsYou + working).prefix(8).map(\.id), initial: true) { _, ids in
-                connection.preload(ids)
-            }
-            #if DEBUG
-            // UI automation (simulator): STYR_OPEN_FIRST=1 opens the first session once it appears.
-            .onChange(of: connection.sessions.first?.id) { _, id in
-                if let id, path.isEmpty, ProcessInfo.processInfo.environment["STYR_OPEN_FIRST"] == "1" {
-                    path = [id]
-                }
-            }
-            // Screenshots (simulator): STYR_OPEN=<part of a session's native id> opens it;
-            // STYR_SHOW=new|usage|settings opens that sheet.
-            .onChange(of: connection.sessions.count) { _, _ in
-                let env = ProcessInfo.processInfo.environment
-                if let want = env["STYR_OPEN"], path.isEmpty,
-                   let s = connection.sessions.first(where: { $0.nativeId.contains(want) }) {
-                    path = [s.id]
-                }
-                switch env["STYR_SHOW"] {
-                case "new": showNewSession = true
-                case "usage": showUsage = true
-                case "settings": showSettings = true
-                default: break
-                }
-            }
-            #endif
+                #endif
         }
+    }
+
+    // Kept apart from `body`: in one expression it's too much for the type checker.
+    private var list: some View {
+        List {
+            SummaryHeader()
+                .plainRow(top: 2, bottom: 4)
+            if connection.state == .unauthorized {
+                UnpairedCard().plainRow()
+            }
+            ForEach(connection.warnings, id: \.self) { w in
+                Label(w, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange).plainRow()
+            }
+            group("Needs you", needsYou)
+            group("Working", working)
+            if !done.isEmpty {
+                Button {
+                    withAnimation(.snappy) { showDone.toggle() }
+                } label: {
+                    HStack {
+                        SectionTitle(title: "Done", count: done.count)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                            .rotationEffect(.degrees(showDone ? 90 : 0))
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .plainRow(top: 14, bottom: 2)
+                if showDone {
+                    ForEach(done) { s in
+                        card(s, compact: true)
+                    }
+                }
+            }
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(HomeBackground())
+        .animation(.snappy, value: connection.sessions.map { "\($0.id)\($0.status)" })
+        .overlay {
+            if connection.sessions.isEmpty && connection.state == .connected && connection.sessionsLoaded {
+                ContentUnavailableView {
+                    Label { Text("No shared sessions") } icon: { WheelMark(size: 56) }
+                } description: {
+                    Text("Type **/styr** in Claude Code, Codex or agy on \(connection.host), or start one with **+**.")
+                }
+                .padding(.top, 120)
+            }
+        }
+        // Only a connection that stays down gets a word; quick reconnects (coming
+        // back to the app) don't.
+        .overlay(alignment: .bottom) {
+            if connection.troubled, connection.state != .unauthorized {
+                ConnectionPill().padding(.bottom, 12)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.snappy, value: connection.troubled)
+    }
+
+    @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) { WheelMark(size: 26) }
+        ToolbarItem(placement: .topBarTrailing) {
+            Button { showUsage = true } label: { Image(systemName: "chart.bar") }
+                .accessibilityLabel("Usage")
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            Button { showSettings = true } label: { Image(systemName: "gearshape") }
+                .accessibilityLabel("Settings")
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            Button { showNewSession = true } label: { Image(systemName: "plus") }
+                .accessibilityLabel("New session")
+                .disabled(connection.state != .connected)
+        }
+    }
+
+    private var errorShown: Binding<Bool> {
+        Binding(get: { connection.lastError != nil && path.isEmpty },
+                set: { if !$0 { connection.lastError = nil } })
+    }
+
+    private var activeIds: [String] { (needsYou + working).prefix(8).map(\.id) }
+
+    /// From a notification, the Live Activity or the widget: on top of everything.
+    private func open(_ id: String?) {
+        guard let id else { return }
+        showSettings = false
+        showUsage = false
+        showNewSession = false
+        path = [id]
+        connection.requestedSession = nil
     }
 
     @ViewBuilder
