@@ -59,7 +59,11 @@ final class DaemonConnection {
     /// The new-session picker's current folder listing.
     private(set) var folders: FolderListing?
     /// Uncommitted changes asked for, per session.
-    private(set) var changes: [String: (branch: String?, files: [FileDiff], truncated: Bool)] = [:]
+    private(set) var changes: [String: (branch: String?, files: [FileDiff], truncated: Bool, ahead: Int?)] = [:]
+    /// Sessions with a commit or push on its way.
+    private(set) var committing: Set<String> = []
+    /// What the last commit or push from the phone did, per session ("Committed abc1234 Fix · pushed").
+    var commitResult: [String: String] = [:]
     /// Terminal screens being watched: session → (text, columns).
     private(set) var screens: [String: (text: String, cols: Int)] = [:]
     /// The first message of a session being started, shown as pending once it opens.
@@ -260,8 +264,11 @@ final class DaemonConnection {
             usage = providers
         case .folders(let listing):
             folders = listing
-        case .changes(let sid, let branch, let diff, let truncated):
-            changes[sid] = (branch, GitChanges.files(diff), truncated)
+        case .changes(let sid, let branch, let diff, let truncated, let ahead):
+            changes[sid] = (branch, GitChanges.files(diff), truncated, ahead)
+        case .committed(let sid, let commit, let pushed):
+            committing.remove(sid)
+            commitResult[sid] = CommitText.result(commit: commit, pushed: pushed)
         case .screen(let sid, let text, let cols):
             screens[sid] = (text, cols)
         case .preview(let sid, let text):
@@ -273,6 +280,7 @@ final class DaemonConnection {
             send(.listSessions)
         case .error(let message):
             lastError = message
+            committing.removeAll()
         case .unknown:
             break
         }
@@ -361,6 +369,15 @@ final class DaemonConnection {
         guard state == .connected else { return }
         changes[session] = nil
         send(.getChanges(session: session))
+    }
+
+    /// Commit everything in the session's folder (skipped if `message` is empty), then
+    /// push if asked. Fresh changes follow.
+    func commit(_ session: String, message: String, push: Bool) {
+        guard state == .connected else { lastError = "Not connected to your Mac."; return }
+        committing.insert(session)
+        commitResult[session] = nil
+        send(.commit(session: session, message: message, push: push))
     }
 
     /// Ask for a session's terminal screen for the next 20 s (call again to keep it).

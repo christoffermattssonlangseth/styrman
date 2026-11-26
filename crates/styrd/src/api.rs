@@ -914,6 +914,7 @@ impl Connection {
                                 branch: c.branch,
                                 diff: c.diff,
                                 truncated: c.truncated,
+                                ahead: c.ahead,
                             },
                         )
                         .await
@@ -928,6 +929,63 @@ impl Connection {
                         .await
                     }
                     Err(e) => Err(e.into()),
+                }
+            }
+            ClientMsg::Commit {
+                session,
+                message,
+                push,
+            } => {
+                let summary = self.daemon.summary(&session)?.filter(|s| s.shared);
+                let fail = |message: String| ServerMsg::Error { message };
+                let Some(cwd) = summary.as_ref().and_then(|s| s.cwd.clone()) else {
+                    return send(tx, &fail("This session has no folder to commit in.".into()))
+                        .await;
+                };
+                if summary.is_some_and(|s| s.status == styr_core::SessionStatus::Working) {
+                    // It may be halfway through an edit.
+                    return send(
+                        tx,
+                        &fail("It's still working: commit once it's done.".into()),
+                    )
+                    .await;
+                }
+                tracing::info!(%session, push, "commit from the phone");
+                let done = tokio::task::spawn_blocking(move || {
+                    let r = crate::changes::commit(&cwd, &message, push);
+                    (r, crate::changes::read(&cwd))
+                })
+                .await?;
+                match done.0 {
+                    Ok(c) => {
+                        send(
+                            tx,
+                            &ServerMsg::Committed {
+                                session: session.clone(),
+                                commit: c.commit,
+                                pushed: c.pushed,
+                            },
+                        )
+                        .await?
+                    }
+                    Err(e) => send(tx, &fail(format!("{e:#}"))).await?,
+                }
+                // What's left (or the error's state) either way.
+                match done.1 {
+                    Ok(c) => {
+                        send(
+                            tx,
+                            &ServerMsg::Changes {
+                                session,
+                                branch: c.branch,
+                                diff: c.diff,
+                                truncated: c.truncated,
+                                ahead: c.ahead,
+                            },
+                        )
+                        .await
+                    }
+                    Err(_) => Ok(()),
                 }
             }
             ClientMsg::WatchScreen { session } => match self.daemon.watch_screen(&session) {

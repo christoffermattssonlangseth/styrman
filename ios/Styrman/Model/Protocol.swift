@@ -398,11 +398,13 @@ enum ServerMsg: Decodable, Sendable {
     /// The session's terminal screen, while this phone watches it.
     case screen(session: String, text: String, cols: Int)
     /// The session folder's uncommitted changes (a unified diff).
-    case changes(session: String, branch: String?, diff: String, truncated: Bool)
+    case changes(session: String, branch: String?, diff: String, truncated: Bool, ahead: Int?)
+    /// A commit from the phone went through ("abc1234 Subject"), maybe pushed.
+    case committed(session: String, commit: String?, pushed: Bool)
     case unknown(type: String)
 
     private enum K: String, CodingKey {
-        case type, `protocol`, host, sessions, session, id, events, event, message, text, position, warnings, listing, cols, branch, diff, truncated
+        case type, `protocol`, host, sessions, session, id, events, event, message, text, position, warnings, listing, cols, branch, diff, truncated, ahead, commit, pushed
         case providers, usageSupported = "usage_supported"
         case daemonVersion = "daemon_version", deviceId = "device_id", lastSeq = "last_seq"
     }
@@ -439,7 +441,11 @@ enum ServerMsg: Decodable, Sendable {
         case "changes": self = .changes(session: try c.decode(String.self, forKey: .session),
                                         branch: try c.decodeIfPresent(String.self, forKey: .branch),
                                         diff: try c.decode(String.self, forKey: .diff),
-                                        truncated: (try? c.decode(Bool.self, forKey: .truncated)) ?? false)
+                                        truncated: (try? c.decode(Bool.self, forKey: .truncated)) ?? false,
+                                        ahead: try? c.decodeIfPresent(Int.self, forKey: .ahead))
+        case "committed": self = .committed(session: try c.decode(String.self, forKey: .session),
+                                            commit: try? c.decodeIfPresent(String.self, forKey: .commit),
+                                            pushed: (try? c.decode(Bool.self, forKey: .pushed)) ?? false)
         case "screen": self = .screen(session: try c.decode(String.self, forKey: .session),
                                       text: try c.decode(String.self, forKey: .text),
                                       cols: try c.decode(Int.self, forKey: .cols))
@@ -470,8 +476,9 @@ enum ClientMsg: Encodable, Sendable {
     case interrupt(session: String)
     case watchScreen(session: String)
     case getChanges(session: String)
+    case commit(session: String, message: String, push: Bool)
 
-    private enum K: String, CodingKey { case type, kind, session, command, request, option, text, token, env, shared, path, agent, cwd, prompt, parent, name, mode, sinceSeq = "since_seq" }
+    private enum K: String, CodingKey { case type, kind, session, command, request, option, text, token, env, shared, path, agent, cwd, prompt, parent, name, mode, message, push, sinceSeq = "since_seq" }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: K.self)
@@ -492,6 +499,9 @@ enum ClientMsg: Encodable, Sendable {
             try cmd.encode(option, forKey: .option)
         case .getChanges(let s):
             try c.encode("get_changes", forKey: .type); try c.encode(s, forKey: .session)
+        case .commit(let s, let message, let push):
+            try c.encode("commit", forKey: .type); try c.encode(s, forKey: .session)
+            try c.encode(message, forKey: .message); try c.encode(push, forKey: .push)
         case .watchScreen(let s):
             try c.encode("watch_screen", forKey: .type); try c.encode(s, forKey: .session)
         case .interrupt(let s):

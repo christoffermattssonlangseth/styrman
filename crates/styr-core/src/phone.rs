@@ -64,6 +64,15 @@ pub enum ClientMsg {
     GetChanges {
         session: SessionId,
     },
+    /// Commit everything in the session's folder with `message` (skipped if empty),
+    /// then push if `push`. Answered with `Committed` and fresh `Changes`, or `Error`.
+    Commit {
+        session: SessionId,
+        #[serde(default)]
+        message: String,
+        #[serde(default)]
+        push: bool,
+    },
     /// Show me this session's terminal for the next 20 s (sent again to keep it up):
     /// the screen comes as `ServerMsg::Screen`. Only for sessions in `styr <agent>`.
     WatchScreen {
@@ -196,6 +205,17 @@ pub enum ServerMsg {
         diff: String,
         #[serde(default)]
         truncated: bool,
+        /// Commits not yet pushed; absent when the branch has no upstream.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ahead: Option<u32>,
+    },
+    /// A `Commit` went through: the new commit ("abc1234 Subject"), and whether it
+    /// was pushed.
+    Committed {
+        session: SessionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        commit: Option<String>,
+        pushed: bool,
     },
     /// The session's terminal as it looks now (plain text, `cols` wide), while a
     /// phone watches it (`ClientMsg::WatchScreen`). Never stored.
@@ -259,6 +279,36 @@ mod tests {
         assert_eq!(
             pair_link("ws://100.1.2.3:4719", "AB CD", "Mac mini"),
             "styrman://pair?v=1&url=ws%3A%2F%2F100.1.2.3%3A4719&code=AB%20CD&name=Mac%20mini"
+        );
+    }
+
+    #[test]
+    fn commit_shapes() {
+        let m: ClientMsg = serde_json::from_str(
+            r#"{"type":"commit","session":"S","message":"Fix it","push":true}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            m,
+            ClientMsg::Commit {
+                session: "S".into(),
+                message: "Fix it".into(),
+                push: true
+            }
+        );
+        let push_only: ClientMsg =
+            serde_json::from_str(r#"{"type":"commit","session":"S","push":true}"#).unwrap();
+        assert!(
+            matches!(push_only, ClientMsg::Commit { message, push: true, .. } if message.is_empty())
+        );
+        assert_eq!(
+            serde_json::to_value(ServerMsg::Committed {
+                session: "S".into(),
+                commit: Some("abc Fix".into()),
+                pushed: false
+            })
+            .unwrap(),
+            serde_json::json!({"type": "committed", "session": "S", "commit": "abc Fix", "pushed": false})
         );
     }
 

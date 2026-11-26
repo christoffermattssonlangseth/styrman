@@ -333,6 +333,25 @@ private func event(_ seq: UInt64, _ kind: String) -> String {
 }
 
 @Suite struct AgentMessageTests {
+    @Test func commitRoundTrip() throws {
+        let sent = String(data: try JSONEncoder().encode(ClientMsg.commit(session: "S", message: "Fix it", push: true)), encoding: .utf8)!
+        let back = try JSONSerialization.jsonObject(with: Data(sent.utf8)) as! [String: Any]
+        #expect(back["type"] as? String == "commit")
+        #expect(back["message"] as? String == "Fix it")
+        #expect(back["push"] as? Bool == true)
+
+        let done = try decode(ServerMsg.self, #"{"type":"committed","session":"S","commit":"abc1234 Fix it","pushed":true}"#)
+        guard case .committed(_, let c, let pushed) = done else { Issue.record("\(done)"); return }
+        #expect(c == "abc1234 Fix it" && pushed)
+        #expect(CommitText.result(commit: c, pushed: pushed) == "Committed abc1234 Fix it and pushed")
+
+        let ch = try decode(ServerMsg.self, #"{"type":"changes","session":"S","diff":"","ahead":2}"#)
+        guard case .changes(_, _, _, _, let ahead) = ch else { Issue.record("\(ch)"); return }
+        #expect(ahead == 2)
+        let none = try decode(ServerMsg.self, #"{"type":"changes","session":"S","diff":""}"#)
+        guard case .changes(_, _, _, _, nil) = none else { Issue.record("no upstream: \(none)"); return }
+    }
+
     @Test func agentMessagesAreRecognised() {
         let text = "Message from Claude (styrman), sent through Styrman:\n\nwhat does the parser do with tabs?\n\n(Reply as you normally would; your reply goes back to Claude.)"
         let m = AgentMessage(text)

@@ -32,6 +32,21 @@ enum ReviewMessage {
     }
 }
 
+enum CommitText {
+    /// "Committed abc1234 Fix the parser and pushed", "Pushed".
+    static func result(commit: String?, pushed: Bool) -> String {
+        switch (commit, pushed) {
+        case (let c?, true): return "Committed \(c) and pushed"
+        case (let c?, false): return "Committed \(c)"
+        default: return "Pushed"
+        }
+    }
+
+    static func push(_ ahead: Int) -> String {
+        "Push \(ahead) commit\(ahead == 1 ? "" : "s")"
+    }
+}
+
 struct ChangesSheet: View {
     @Environment(DaemonConnection.self) private var connection
     @Environment(\.dismiss) private var dismiss
@@ -39,6 +54,7 @@ struct ChangesSheet: View {
     let agent: AgentKind
     let cwd: String?
     @State private var comments: [ReviewComment] = []
+    @State private var showCommit = false
 
     var body: some View {
         NavigationStack {
@@ -46,7 +62,7 @@ struct ChangesSheet: View {
                 if let c = connection.changes[sessionId] {
                     if c.files.isEmpty {
                         ContentUnavailableView("No changes", systemImage: "checkmark.circle",
-                                               description: Text("Nothing uncommitted in this folder."))
+                                               description: Text(connection.commitResult[sessionId] ?? "Nothing uncommitted in this folder."))
                     } else {
                         List {
                             Section {
@@ -72,7 +88,12 @@ struct ChangesSheet: View {
                                     }
                                 }
                             } header: {
-                                Text("\(c.files.count) changed file\(c.files.count == 1 ? "" : "s")" + (c.branch.map { " on \($0)" } ?? ""))
+                                VStack(alignment: .leading, spacing: 4) {
+                                    if let done = connection.commitResult[sessionId] {
+                                        Label(done, systemImage: "checkmark.circle").textCase(nil)
+                                    }
+                                    Text("\(c.files.count) changed file\(c.files.count == 1 ? "" : "s")" + (c.branch.map { " on \($0)" } ?? ""))
+                                }
                             } footer: {
                                 if c.truncated { Text("Long diff: only the first part is shown.") }
                                 else { Text("Tap a line in a file to comment on it. Comments go to the agent together.") }
@@ -92,26 +113,86 @@ struct ChangesSheet: View {
                         .accessibilityLabel("Refresh")
                 }
             }
-            .safeAreaInset(edge: .bottom) {
-                if !comments.isEmpty {
-                    Button {
-                        if connection.sendPrompt(session: sessionId, text: ReviewMessage.compose(comments)) {
-                            comments = []
-                            dismiss()
-                        }
-                    } label: {
-                        Text("Send \(comments.count) comment\(comments.count == 1 ? "" : "s") to \(agent.displayName)")
-                            .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Theme.color(for: agent))
-                    .padding(.horizontal, 16).padding(.vertical, 8)
-                    .background(.bar)
+            .safeAreaInset(edge: .bottom) { bottomBar }
+            .sheet(isPresented: $showCommit) {
+                CommitSheet(branch: connection.changes[sessionId]?.branch, agent: agent) { message, push in
+                    connection.commit(sessionId, message: message, push: push)
                 }
+                .presentationDetents([.medium])
             }
         }
         .tint(Theme.color(for: agent))
         .onAppear { connection.getChanges(sessionId) }
+    }
+
+    /// Send the comments if there are any; otherwise commit (or push what's committed).
+    @ViewBuilder private var bottomBar: some View {
+        let c = connection.changes[sessionId]
+        if !comments.isEmpty {
+            barButton("Send \(comments.count) comment\(comments.count == 1 ? "" : "s") to \(agent.displayName)") {
+                if connection.sendPrompt(session: sessionId, text: ReviewMessage.compose(comments)) {
+                    comments = []
+                    dismiss()
+                }
+            }
+        } else if connection.committing.contains(sessionId) {
+            ProgressView("Committing…")
+                .frame(maxWidth: .infinity).padding(.vertical, 14).background(.bar)
+        } else if let c, !c.files.isEmpty {
+            barButton("Commit…") { showCommit = true }
+        } else if let ahead = c?.ahead, ahead > 0 {
+            barButton(CommitText.push(ahead)) { connection.commit(sessionId, message: "", push: true) }
+        }
+    }
+
+    private func barButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(Theme.color(for: agent))
+        .padding(.horizontal, 16).padding(.vertical, 8)
+        .background(.bar)
+    }
+}
+
+/// A commit message, and whether to push as well.
+private struct CommitSheet: View {
+    let branch: String?
+    let agent: AgentKind
+    let commit: (String, Bool) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var message = ""
+    @AppStorage("commitAlsoPushes") private var push = true
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("What changed", text: $message, axis: .vertical)
+                        .lineLimit(3...8)
+                        .focused($focused)
+                } footer: {
+                    Text("Commits every change in the folder (as `git add -A`), with the Mac's git name and hooks.")
+                }
+                Toggle(branch.map { "Push \($0)" } ?? "Push", isOn: $push)
+            }
+            .navigationTitle("Commit")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(push ? "Commit & Push" : "Commit") {
+                        commit(message, push)
+                        dismiss()
+                    }
+                    .disabled(message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .onAppear { focused = true }
+        }
+        .tint(Theme.color(for: agent))
     }
 }
 

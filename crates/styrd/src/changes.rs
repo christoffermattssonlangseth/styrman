@@ -1,6 +1,7 @@
 //! A session folder's uncommitted changes, for the phone's Changes view: `git diff
-//! HEAD` (staged and unstaged) plus new, untracked files as additions. Read-only:
-//! nothing here changes the repository (no `git add -N`, no index writes).
+//! HEAD` (staged and unstaged) plus new, untracked files as additions. Reading is
+//! read-only (no `git add -N`, no index writes); only `commit`, which the phone asks
+//! for explicitly, changes the repository.
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
@@ -22,15 +23,22 @@ pub struct Changes {
     pub diff: String,
     /// The diff was too long and was cut.
     pub truncated: bool,
+    /// Commits not yet pushed to the branch's upstream (`None`: no upstream).
+    pub ahead: Option<u32>,
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<String> {
+    git_for(dir, args, Duration::from_secs(10))
+}
+
+fn git_for(dir: &Path, args: &[&str], limit: Duration) -> Result<String> {
     let mut child = Command::new("git")
         .arg("-C")
         .arg(dir)
         .args(["-c", "core.quotepath=off", "--no-pager"])
         .args(args)
-        .env("GIT_OPTIONAL_LOCKS", "0") // read-only: don't even refresh the index
+        .env("GIT_OPTIONAL_LOCKS", "0") // reading: don't even refresh the index
+        .env("GIT_TERMINAL_PROMPT", "0") // no one is there to type a password
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -42,7 +50,7 @@ fn git(dir: &Path, args: &[&str]) -> Result<String> {
         if child.try_wait()?.is_some() {
             break;
         }
-        if started.elapsed() > Duration::from_secs(10) {
+        if started.elapsed() > limit {
             let _ = child.kill();
             bail!("git took too long");
         }
@@ -95,7 +103,68 @@ pub fn read(dir: &Path) -> Result<Changes> {
         branch,
         diff,
         truncated,
+        ahead: ahead(dir),
     })
+}
+
+fn ahead(dir: &Path) -> Option<u32> {
+    git(dir, &["rev-list", "--count", "@{upstream}..HEAD"])
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// What `commit` did.
+#[derive(Debug, PartialEq)]
+pub struct Committed {
+    /// "abc1234 Subject" of the new commit, if one was made.
+    pub commit: Option<String>,
+    pub pushed: bool,
+}
+
+/// Commit everything in `dir` (as `git add -A`, so .gitignore holds) with `message`,
+/// if it's not empty; then push if asked, setting the upstream on a first push.
+/// The repository's own identity, hooks and credentials apply.
+pub fn commit(dir: &Path, message: &str, push: bool) -> Result<Committed> {
+    git(dir, &["rev-parse", "--is-inside-work-tree"])
+        .map_err(|_| anyhow::anyhow!("This folder isn't a git repository."))?;
+    let message = message.trim();
+    let mut commit = None;
+    if !message.is_empty() {
+        git(dir, &["add", "-A"])?;
+        // Hooks (pre-commit) may take a while.
+        git_for(
+            dir,
+            &["commit", "-q", "-m", message],
+            Duration::from_secs(120),
+        )
+        .map_err(|e| anyhow::anyhow!("Commit failed: {e}"))?;
+        commit = Some(
+            git(dir, &["log", "-1", "--format=%h %s"])?
+                .trim()
+                .to_owned(),
+        );
+    }
+    let pushed = if push {
+        let args: &[&str] = if git(dir, &["rev-parse", "--abbrev-ref", "@{upstream}"]).is_ok() {
+            &["push", "-q"]
+        } else {
+            &["push", "-q", "-u", "origin", "HEAD"]
+        };
+        git_for(dir, args, Duration::from_secs(120)).map_err(|e| match &commit {
+            Some(c) => anyhow::anyhow!("Committed {c}, but the push failed: {e}"),
+            None => anyhow::anyhow!("Push failed: {e}"),
+        })?;
+        true
+    } else {
+        false
+    };
+    anyhow::ensure!(
+        commit.is_some() || pushed,
+        "Nothing to do: give a message to commit."
+    );
+    Ok(Committed { commit, pushed })
 }
 
 /// An untracked file as a diff that adds it (text files up to `MAX_NEW_FILE`).
@@ -178,6 +247,51 @@ mod tests {
             index_before,
             "read-only"
         );
+    }
+
+    #[test]
+    fn commit_then_push_to_a_new_upstream() {
+        let remote = tempfile::tempdir().unwrap();
+        run(remote.path(), &["init", "-q", "--bare", "-b", "main"]);
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        run(d, &["init", "-q", "-b", "main"]);
+        for (k, v) in [("user.name", "t"), ("user.email", "t@example.com")] {
+            run(d, &["config", k, v]);
+        }
+        run(
+            d,
+            &["remote", "add", "origin", remote.path().to_str().unwrap()],
+        );
+        std::fs::write(d.join("a.txt"), "one\n").unwrap();
+        std::fs::write(d.join(".gitignore"), "secret\n").unwrap();
+        std::fs::write(d.join("secret"), "x\n").unwrap();
+
+        assert!(commit(d, "  ", false).is_err(), "nothing to do");
+        let c = commit(d, "First things", false).unwrap();
+        assert!(c.commit.unwrap().ends_with(" First things"));
+        assert!(!c.pushed);
+        let tracked = git(d, &["ls-files"]).unwrap();
+        assert!(
+            tracked.contains("a.txt") && !tracked.contains("secret"),
+            "{tracked}"
+        );
+        assert_eq!(read(d).unwrap().ahead, None, "no upstream yet");
+
+        let p = commit(d, "", true).unwrap();
+        assert_eq!(
+            p,
+            Committed {
+                commit: None,
+                pushed: true
+            }
+        );
+        assert_eq!(read(d).unwrap().ahead, Some(0));
+        std::fs::write(d.join("a.txt"), "two\n").unwrap();
+        commit(d, "Second", false).unwrap();
+        assert_eq!(read(d).unwrap().ahead, Some(1));
+        assert!(commit(d, "", true).unwrap().pushed);
+        assert_eq!(read(d).unwrap().ahead, Some(0));
     }
 
     #[test]
