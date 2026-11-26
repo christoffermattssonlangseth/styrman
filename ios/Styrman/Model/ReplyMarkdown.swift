@@ -27,6 +27,43 @@ enum ReplyMarkdown {
         return out.joined(separator: "\n")
     }
 
+    /// A reply split into text and tables, to draw tables as tables.
+    enum Block: Equatable {
+        case text(String)
+        case table(header: [String], rows: [[String]])
+    }
+
+    static func blocks(_ text: String) -> [Block] {
+        let lines = text.components(separatedBy: "\n")
+        var out: [Block] = []
+        var plain: [String] = []
+        func flush() {
+            let t = plain.joined(separator: "\n").trimmingCharacters(in: .newlines)
+            if !t.isEmpty { out.append(.text(t)) }
+            plain = []
+        }
+        var i = 0
+        while i < lines.count {
+            var j = i
+            while j < lines.count, isRow(lines[j]) { j += 1 }
+            var rows = lines[i..<j].map(cells).filter { !isDivider($0) }
+            if j - i >= 2, !rows.isEmpty {
+                let header = rows.removeFirst()
+                // Every row as wide as the widest.
+                let width = ([header] + rows).map(\.count).max() ?? 0
+                let pad = { (r: [String]) in r + Array(repeating: "", count: max(0, width - r.count)) }
+                flush()
+                out.append(.table(header: pad(header), rows: rows.map(pad)))
+                i = j
+            } else {
+                plain.append(lines[i])
+                i += 1
+            }
+        }
+        flush()
+        return out
+    }
+
     private static func isRow(_ line: String) -> Bool {
         let t = line.trimmingCharacters(in: .whitespaces)
         return t.count >= 3 && t.hasPrefix("|") && t.hasSuffix("|")

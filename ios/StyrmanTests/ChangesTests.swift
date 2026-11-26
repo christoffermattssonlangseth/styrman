@@ -83,3 +83,16 @@ import Testing
         #expect(ReplyMarkdown.readable(plain) == plain)
     }
 }
+
+@Suite struct ReplyBlockTests {
+    @Test func tablesSplitOutOfText() {
+        let reply = "Intro\n\n| A | B |\n|---|---|\n| 1 | 2 |\n| 3 |\n\nAfter"
+        #expect(ReplyMarkdown.blocks(reply) == [
+            .text("Intro"),
+            .table(header: ["A", "B"], rows: [["1", "2"], ["3", ""]]),
+            .text("After"),
+        ])
+        // Only dividers: not a table, and no crash.
+        #expect(ReplyMarkdown.blocks("|---|\n|---|") == [.text("|---|\n|---|")])
+    }
+}

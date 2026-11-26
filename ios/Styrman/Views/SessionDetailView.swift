@@ -133,8 +133,10 @@ struct SessionDetailView: View {
                 .transition(.opacity)
                 }
             }
-            // Open at the end; when content grows, don't move what you're reading.
+            // Open at the end. As content grows: at the end, stay at the end (smoothly,
+            // no jump per update); scrolled up, don't move what you're reading.
             .defaultScrollAnchor(.bottom, for: .initialOffset)
+            .defaultScrollAnchor(atBottom ? .bottom : .top, for: .sizeChanges)
             .onScrollGeometryChange(for: Bool.self) { g in
                 g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 120
             } action: { _, near in
@@ -165,18 +167,10 @@ struct SessionDetailView: View {
             .simultaneousGesture(TapGesture().onEnded {
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             })
-            .onChange(of: timeline.items.count) {
-                guard atBottom else { return }
-                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
-            }
             // A message you send always brings you to the end.
             .onChange(of: timeline.pending.count) { old, new in
                 guard new > old else { return }
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
-            }
-            // Follow the reply as it's written.
-            .onChange(of: timeline.preview?.count ?? 0) {
-                if atBottom { proxy.scrollTo("bottom", anchor: .bottom) }
             }
             // Land on the latest message when it opens and when the history arrives.
             .onChange(of: timeline.loaded, initial: true) { _, loaded in
@@ -474,7 +468,7 @@ struct ReplyView: View {
         let playing = speaker.speakingId == id
         let tint = Theme.color(for: agent)
         VStack(alignment: .leading, spacing: 6) {
-            Text(text).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+            ReplyText(raw: raw).textSelection(.enabled)
             // Actions under the latest reply only (and the one being read); long-press any reply for them.
             if isLatest || playing {
             HStack(spacing: 2) {
@@ -1355,11 +1349,18 @@ struct LivePreviewRow: View {
     @State private var on = true
 
     var body: some View {
-        HStack(alignment: .lastTextBaseline, spacing: 0) {
-            Text("\(rendered) \(Text("▍").foregroundStyle(Theme.color(for: agent).opacity(on ? 1 : 0.15)))")
-                .foregroundStyle(.primary.opacity(0.85))
-                .frame(maxWidth: .infinity, alignment: .leading)
+        Group {
+            if hasTable {
+                VStack(alignment: .leading, spacing: 4) {
+                    ReplyText(raw: text)
+                    cursor
+                }
+            } else {
+                Text("\(AttributedString(text)) \(cursor)")
+            }
         }
+        .foregroundStyle(.primary.opacity(0.85))
+        .frame(maxWidth: .infinity, alignment: .leading)
         .contentTransition(.identity)
         .accessibilityLabel("\(agent.displayName) is writing: \(text)")
         .onAppear {
@@ -1367,13 +1368,13 @@ struct LivePreviewRow: View {
         }
     }
 
-    /// Tables the terminal drew, as readable rows (the rest is plain text: the
-    /// terminal already showed any formatting as such).
-    private var rendered: AttributedString {
-        let readable = ReplyMarkdown.readable(text)
-        guard readable != text else { return AttributedString(text) }
-        return (try? AttributedString(markdown: readable, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(readable)
+    private var cursor: Text {
+        Text("▍").foregroundStyle(Theme.color(for: agent).opacity(on ? 1 : 0.15))
+    }
+
+    /// Tables the terminal drew come as `| a | b |` rows: drawn as a table.
+    private var hasTable: Bool {
+        ReplyMarkdown.blocks(text).contains { if case .table = $0 { true } else { false } }
     }
 }
 
