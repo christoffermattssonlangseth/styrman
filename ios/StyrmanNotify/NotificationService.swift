@@ -1,7 +1,8 @@
-// When an approval notification arrives, ask the Mac (directly, over Tailscale) what
-// it's about, and show the actual command with Allow / Deny. The push itself never
-// carries the command. If the Mac can't be reached in time, the notification stays
-// as it was ("needs your approval") and tapping it opens the session.
+// When a notification arrives, ask the Mac (directly, over Tailscale) which session
+// it's about and what it said: the subtitle becomes your latest message to that
+// session, the body the command it wants to run (with Allow / Deny) or the first
+// line of its reply. The push itself never carries any of that. If the Mac can't be
+// reached in time, the notification stays as it was and tapping it opens the session.
 
 import Foundation
 import UserNotifications
@@ -27,14 +28,16 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
         let req = info["request"] as? String
         Task.detached {
             async let refresh: Void = Self.refreshWidget(creds)
+            async let brief = try? QuickAnswer.brief(creds, session: session)
             let details: QuickAnswer.Details?
             if let req {
                 details = try? await QuickAnswer.details(creds, session: session, request: req)
             } else {
                 details = nil
             }
+            let b = await brief
             await refresh
-            box.finish(with: details)
+            box.finish(with: details, brief: b)
         }
     }
 
@@ -67,17 +70,33 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
             self.unchanged = unchanged
         }
 
-        func finish(with d: QuickAnswer.Details?) {
-            guard let d, d.open, let allow = d.allowOnce, let deny = d.deny else {
-                service.finish(unchanged)
-                return
+        func finish(with d: QuickAnswer.Details?, brief b: QuickAnswer.Brief?) {
+            var changed = false
+            if let b {
+                content.title = "\(b.agent) · \(b.repo)"
+                if let asked = b.asked { content.subtitle = "“\(asked)”" }
+                changed = true
             }
-            content.subtitle = "Needs your approval"
-            content.body = d.text.count > 400 ? String(d.text.prefix(399)) + "…" : d.text
-            content.categoryIdentifier = "PERMISSION_ACT"
-            content.userInfo["allow"] = allow.id
-            content.userInfo["deny"] = deny.id
-            service.finish(content)
+            switch unchanged.categoryIdentifier {
+            case "PERMISSION":
+                if let d, d.open, let allow = d.allowOnce, let deny = d.deny {
+                    if b?.asked == nil { content.subtitle = "Needs your approval" }
+                    let text = d.text.count > 400 ? String(d.text.prefix(399)) + "…" : d.text
+                    content.body = b?.asked == nil ? text : "Needs approval: \(text)"
+                    content.categoryIdentifier = "PERMISSION_ACT"
+                    content.userInfo["allow"] = allow.id
+                    content.userInfo["deny"] = deny.id
+                    changed = true
+                }
+            case "TURN":
+                // Still waiting for you: its reply's first line says what it finished.
+                if let b, b.status == "waiting", let line = b.line {
+                    content.body = line
+                }
+            default:
+                break
+            }
+            service.finish(changed ? content : unchanged)
         }
     }
 

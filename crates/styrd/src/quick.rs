@@ -21,6 +21,29 @@ pub struct PermissionDetails {
     pub options: Vec<PermissionOption>,
 }
 
+/// A session in a few words, for a notification the phone rewrites when it arrives
+/// (`GET /v1/brief/{session}`, over the tailnet: the push itself stays generic).
+#[derive(Debug, Serialize, PartialEq)]
+pub struct SessionBrief {
+    pub agent: String,
+    pub repo: String,
+    /// Which session: your latest message to it, first line (slash commands skipped).
+    pub asked: Option<String>,
+    /// What it's doing or last said, first line.
+    pub line: Option<String>,
+    pub status: styr_core::SessionStatus,
+}
+
+/// One line, at most `max` characters.
+fn one_line(text: &str, max: usize) -> Option<String> {
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    let mut out: String = line.chars().take(max).collect();
+    if line.chars().count() > max {
+        out.push('…');
+    }
+    Some(out)
+}
+
 #[derive(Debug, Deserialize)]
 pub struct AnswerBody {
     pub option: String,
@@ -71,6 +94,44 @@ impl Daemon {
                 .unwrap_or_else(|| "session".into()),
             text,
             options,
+        }))
+    }
+
+    /// A shared session in a few words (see `SessionBrief`).
+    pub fn session_brief(&self, session: &SessionId) -> anyhow::Result<Option<SessionBrief>> {
+        let Some(s) = self.summary(session)?.filter(|s| s.shared) else {
+            return Ok(None);
+        };
+        let from = s.last_seq.saturating_sub(400);
+        let asked = self
+            .events(session, from, 1000)?
+            .into_iter()
+            .rev()
+            .find_map(|e| match e.kind {
+                EventKind::UserMessage { text, .. } if !text.trim_start().starts_with('/') => {
+                    one_line(&text, 80)
+                }
+                _ => None,
+            });
+        let cwd = s.cwd.as_ref().map(|p| p.to_string_lossy().into_owned());
+        let line = s.activity.as_deref().and_then(|a| {
+            let a = match &cwd {
+                Some(c) => a.replace(&format!("{}/", c.trim_end_matches('/')), ""),
+                None => a.to_owned(),
+            };
+            one_line(&a, 160)
+        });
+        Ok(Some(SessionBrief {
+            agent: crate::peers::agent_label(s.agent).to_owned(),
+            repo: s
+                .cwd
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "session".into()),
+            asked,
+            line,
+            status: s.status,
         }))
     }
 

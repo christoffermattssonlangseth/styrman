@@ -116,6 +116,33 @@ async fn phone_api_end_to_end() {
             .all(|row| { row["session"] == sid.as_str() && row.get("line").is_none() })
     );
 
+    // A session in a few words, for the notification extension.
+    let brief_url = format!("{base}/v1/brief/{sid}");
+    assert_eq!(http.get(&brief_url).send().await.unwrap().status(), 401);
+    let brief: serde_json::Value = http
+        .get(&brief_url)
+        .bearer_auth(&paired.token)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        brief["agent"].is_string() && brief["repo"].is_string(),
+        "{brief}"
+    );
+    assert!(brief["status"].is_string(), "{brief}");
+    let missing = http
+        .get(format!("{base}/v1/brief/nope"))
+        .bearer_auth(&paired.token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+
     // Unknown/unshared sessions cannot be subscribed to.
     send(&mut ws, json!({"type": "subscribe", "session": "nope"})).await;
     assert!(matches!(recv(&mut ws).await, ServerMsg::Error { .. }));

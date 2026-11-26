@@ -107,6 +107,27 @@ enum QuickAnswer {
         }
     }
 
+    /// A session in a few words (styrd's `/v1/brief/{session}`), to make a notification
+    /// say which session it's about and what it said.
+    struct Brief: Decodable, Sendable {
+        let agent: String
+        let repo: String
+        /// Your latest message to it: tells sessions in the same folder apart.
+        let asked: String?
+        /// What it's doing or last said, first line.
+        let line: String?
+        let status: String
+    }
+
+    static func brief(_ c: Credentials, session: String) async throws -> Brief {
+        var r = URLRequest(url: c.httpBase.appending(path: "v1/brief").appending(path: session))
+        r.setValue("Bearer \(c.token)", forHTTPHeaderField: "Authorization")
+        r.timeoutInterval = 8
+        let (data, resp) = try await URLSession.shared.data(for: r)
+        try check(data, resp)
+        return try JSONDecoder().decode(Brief.self, from: data)
+    }
+
     static func details(_ c: Credentials, session: String, request: String) async throws -> Details {
         let (data, resp) = try await URLSession.shared.data(for: Self.request(c, session: session, request: request))
         try check(data, resp)

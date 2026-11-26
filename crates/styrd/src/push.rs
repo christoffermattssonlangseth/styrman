@@ -425,7 +425,7 @@ pub fn notification_for(
             title,
             body: "Now on your phone. Tap to follow along.".into(),
             session: Some(session.clone()),
-            category: None,
+            category: Some("SHARED"),
             collapse_id: Some(format!("share-{session}")),
             request: None,
         }),
@@ -466,7 +466,8 @@ pub fn notification_for(
                 title,
                 body,
                 session: Some(session.clone()),
-                category: None,
+                // The phone fills in the reply's first line (fetched from this Mac).
+                category: Some(if failed { "TURN_FAILED" } else { "TURN" }),
                 collapse_id: Some(format!("turn-{session}")),
                 request: None,
             })

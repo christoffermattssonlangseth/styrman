@@ -130,6 +130,8 @@ While agents work, a **Live Activity** on the Lock Screen and in the Dynamic Isl
 
 Approval notifications get **Allow once** and **Deny** buttons (long-press the notification). The push only says "needs your approval": the app's notification extension asks your Mac for the actual command, directly over Tailscale, and shows it before you choose. If the Mac can't be reached, the notification just opens the session. Allowing needs the phone unlocked.
 
+Every notification is made specific the same way: the subtitle is your latest message to that session (so two Codex sessions in one folder read differently), and the body is the command it wants to run or the first line of its reply. All of that comes from the Mac over Tailscale, never through Apple or the relay.
+
 ## Antigravity (agy)
 
 `styr setup` also installs a `styrman` plugin for agy and a user-level `/styr` skill. With `alias agy='styr agy'`, agy works just like Claude Code:

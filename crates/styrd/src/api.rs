@@ -190,6 +190,7 @@ pub fn router(daemon: Arc<Daemon>, stop: watch::Receiver<bool>) -> Router {
         )
         .route("/v1/ws", get(ws))
         .route("/v1/live", get(live_snapshot))
+        .route("/v1/brief/{session}", get(session_brief))
         .route(
             "/v1/upload/{session}",
             post(upload).layer(axum::extract::DefaultBodyLimit::max(
@@ -392,6 +393,28 @@ async fn live_snapshot(State(st): State<AppState>, headers: HeaderMap) -> Respon
             error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "could not load session status",
+            )
+        }
+    }
+}
+
+/// A session in a few words, for the phone's notification (see `quick::SessionBrief`).
+async fn session_brief(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    axum::extract::Path(session): axum::extract::Path<String>,
+) -> Response {
+    if let Err(r) = authed(&st, &headers) {
+        return r;
+    }
+    match st.daemon.session_brief(&SessionId::from(session.as_str())) {
+        Ok(Some(b)) => Json(b).into_response(),
+        Ok(None) => error(StatusCode::NOT_FOUND, "no such session"),
+        Err(e) => {
+            tracing::error!("session brief: {e:#}");
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "couldn't read the session",
             )
         }
     }

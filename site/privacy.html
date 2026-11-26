@@ -40,6 +40,7 @@
 <p>To notify your phone, your Mac sends a short alert through Apple's push service, such as “Codex · harbor needs your approval” or “finished”. By default it contains no commands, code or replies. If you turn on <code>styr push details</code>, it also includes the command or a short excerpt of the reply.</p>
 <p>The Live Activity (Lock Screen and Dynamic Island) is kept current the same way, through Apple's push service. It carries only how many agents are working or waiting for you and, for up to three of them, the agent, folder name and status. You can turn it off in the app's settings.</p>
 <p>Approval notifications show the actual command with Allow and Deny buttons without it passing through Apple: when the alert arrives, the Styrman app on your phone asks your Mac for it directly, over your Tailscale network. Allowing from a notification needs your phone unlocked.</p>
+<p>The same way, every notification is filled in on your phone with which session it's about (your latest message to it) and what it said or wants to run. That text also comes straight from your Mac over Tailscale; Apple only ever sees the agent, the folder and "needs your approval" or "finished".</p>
 <p>If you use the optional Styrman push relay instead of your own Apple key, the relay receives your phone's push token, that same short alert and, for approvals, a random request id; nothing else (details are always off through the relay), and forwards it to Apple. It keeps a random identifier for your Mac and per-hour counters to limit abuse.</p>
 
 <h2>Voice</h2>
