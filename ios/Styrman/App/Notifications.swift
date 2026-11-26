@@ -7,7 +7,18 @@ import UserNotifications
 @MainActor
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     /// Set by StyrmanApp so callbacks can reach the connection.
-    var connection: DaemonConnection?
+    var connection: DaemonConnection? {
+        didSet { openPendingSession() }
+    }
+    /// A tapped notification's session, held until the connection exists: when a tap
+    /// launches the app, iOS often delivers it before the scene is active.
+    private var pendingSession: String?
+
+    private func openPendingSession() {
+        guard let connection, let id = pendingSession else { return }
+        pendingSession = nil
+        connection.requestedSession = id
+    }
 
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
@@ -79,8 +90,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             }
             return
         }
+        guard let session else { return }
         await MainActor.run {
-            if let session { self.connection?.requestedSession = session }
+            self.pendingSession = session
+            self.openPendingSession()
         }
     }
 }
