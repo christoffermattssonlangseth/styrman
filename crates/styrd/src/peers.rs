@@ -174,6 +174,8 @@ impl Daemon {
                         .lock()
                         .unwrap_or_else(|p| p.into_inner())
                         .insert((f.id.clone(), agent), id.clone());
+                    // Phones show it under the session that asked.
+                    self.notify_session_changed(&id);
                 }
                 let target = self.summary(&id)?.context("the new session vanished")?;
                 if let Some(f) = &from {
@@ -302,6 +304,17 @@ impl Daemon {
             }
         }
         outcome
+    }
+
+    /// The session that started `helper` to ask it something, if one did.
+    pub fn helper_of(&self, helper: &SessionId) -> Option<SessionId> {
+        self.peer_state
+            .helpers
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .find(|(_, h)| *h == helper)
+            .map(|((asker, _), _)| asker.clone())
     }
 
     /// Who `to` means. An agent name, asked from a session in a folder, means a

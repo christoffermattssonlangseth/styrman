@@ -107,12 +107,15 @@ struct SessionSummary: Codable, Identifiable, Hashable, Sendable {
     var outdated: Bool = false
     /// The reasoning effort chosen from the phone, if any.
     var effort: String? = nil
+    /// The session that started this one to ask it something: this is its helper.
+    var helperOf: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, agent, cwd, title, model, shared, status
         case nativeId = "native_id", createdMs = "created_ms", updatedMs = "updated_ms", lastSeq = "last_seq"
         case inTerminalWrapper = "in_terminal_wrapper", acceptsPrompts = "accepts_prompts"
         case activity, mode, outdated, effort
+        case helperOf = "helper_of"
     }
 
     init(from decoder: Decoder) throws {
@@ -135,6 +138,7 @@ struct SessionSummary: Codable, Identifiable, Hashable, Sendable {
         mode = (try? c.decodeIfPresent(String.self, forKey: .mode)) ?? nil
         outdated = (try? c.decodeIfPresent(Bool.self, forKey: .outdated)) ?? false
         effort = (try? c.decodeIfPresent(String.self, forKey: .effort)) ?? nil
+        helperOf = (try? c.decodeIfPresent(String.self, forKey: .helperOf)) ?? nil
     }
 
     /// Can be ended from the phone: running in `styr <agent>` (or already over).

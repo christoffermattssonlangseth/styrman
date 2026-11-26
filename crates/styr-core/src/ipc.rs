@@ -329,6 +329,10 @@ pub struct SessionSummary {
     /// "plan", "auto", "bypassPermissions"); known only inside `styr <agent>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// The session that started this one to ask it something (`styr ask`): it's
+    /// that session's helper.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub helper_of: Option<SessionId>,
     /// The reasoning effort chosen from the phone, if any (else the agent's default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,

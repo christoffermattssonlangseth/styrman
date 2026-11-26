@@ -167,13 +167,26 @@ struct SessionListView: View {
     private func group(_ title: String, _ items: [SessionSummary]) -> some View {
         if !items.isEmpty {
             SectionTitle(title: title, count: items.count).plainRow(top: 14, bottom: 2)
-            ForEach(items) { s in card(s, compact: false) }
+            ForEach(withHelpersUnder(items)) { s in card(s, compact: false) }
         }
+    }
+
+    /// A helper right under the session that started it, when both are listed here.
+    private func withHelpersUnder(_ items: [SessionSummary]) -> [SessionSummary] {
+        let ids = Set(items.map(\.id))
+        let tops = items.filter { s in s.helperOf.map { !ids.contains($0) } ?? true }
+        return tops.flatMap { t in [t] + items.filter { $0.helperOf == t.id } }
     }
 
     private func card(_ s: SessionSummary, compact: Bool) -> some View {
         let timeline = connection.timeline(for: s.id)
-        return VStack(spacing: 6) {
+        let asker = s.helperOf.flatMap { connection.session($0) }
+        return VStack(alignment: .leading, spacing: 6) {
+            if let asker {
+                Label("Helping \(asker.agent.displayName) · \(asker.repoName)", systemImage: "arrow.turn.down.right")
+                    .font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                    .padding(.leading, 4)
+            }
             Button { path.append(s.id) } label: {
                 SessionCard(session: s, compact: compact)
             }
@@ -184,6 +197,7 @@ struct SessionListView: View {
                     .id(permission.request)
             }
         }
+        .padding(.leading, asker == nil ? 0 : 18)
         .plainRow(top: 5, bottom: 5)
         .swipeActions(edge: .trailing) {
             Button(s.status == .done ? "Remove" : "Stop sharing", role: .destructive) {

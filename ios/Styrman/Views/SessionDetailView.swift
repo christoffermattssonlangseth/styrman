@@ -345,6 +345,7 @@ struct SessionDetailView: View {
                     .font(.footnote).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity).padding(10).background(.bar)
             } else if let summary {
+                HelperLinks(summary: summary)
                 if let p = openPermission(timeline) {
                     PermissionCard(item: p, title: displayTitle(p.tool, cwd: summary.cwd), sessionId: sessionId, cwd: summary.cwd, pinned: true)
                         .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 4)
@@ -1448,5 +1449,46 @@ struct TerminalSheet: View {
                 try? await Task.sleep(for: .seconds(8))
             }
         }
+    }
+}
+
+/// Agents working together (`styr ask`): links from a session to the helpers it
+/// started, and from a helper back to the session it's helping.
+struct HelperLinks: View {
+    @Environment(DaemonConnection.self) private var connection
+    let summary: SessionSummary
+
+    var body: some View {
+        let asker = summary.helperOf.flatMap { connection.session($0) }
+        let helpers = connection.sessions.filter { $0.helperOf == summary.id }
+        if asker != nil || !helpers.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    if let asker {
+                        chip(asker, "Helping \(asker.agent.displayName) · \(asker.repoName)", "arrow.turn.up.left")
+                    }
+                    ForEach(helpers) { h in
+                        chip(h, "\(h.agent.displayName) is helping", "arrow.turn.down.right")
+                    }
+                }
+                .padding(.horizontal, 12).padding(.vertical, 6)
+            }
+            .background(.bar)
+        }
+    }
+
+    private func chip(_ s: SessionSummary, _ title: String, _ symbol: String) -> some View {
+        NavigationLink(value: s.id) {
+            HStack(spacing: 6) {
+                Image(systemName: symbol)
+                Text(title).lineLimit(1)
+                Circle().fill(Theme.color(for: s.agent)).frame(width: 6, height: 6)
+                    .opacity(s.status == .working ? 1 : 0)
+            }
+            .font(.footnote.weight(.medium))
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(Theme.color(for: s.agent).opacity(0.12), in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 }

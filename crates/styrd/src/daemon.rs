@@ -512,6 +512,7 @@ impl Daemon {
             accepts_prompts: false,
             activity,
             mode: None,
+            helper_of: None,
             effort: None,
             outdated: false,
         }
@@ -532,6 +533,7 @@ impl Daemon {
             }
             s.effort = effort;
         }
+        s.helper_of = self.helper_of(&s.id);
         s.outdated = s.in_terminal_wrapper
             && self
                 .terminals
