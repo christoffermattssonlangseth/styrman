@@ -429,7 +429,8 @@ struct ReplyView: View {
             }
         }
         .animation(.easeOut(duration: 0.2), value: playing)
-        .sensoryFeedback(.selection, trigger: playing)
+        // A tap when it starts; none when it ends (a lone haptic tick sounds like a click).
+        .sensoryFeedback(.selection, trigger: playing) { _, now in now }
         .sheet(isPresented: $selecting) { SelectTextSheet(text: text, raw: raw, agent: agent) }
     }
 }

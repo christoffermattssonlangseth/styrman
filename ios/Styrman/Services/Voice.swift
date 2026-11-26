@@ -210,7 +210,13 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
         remaining = max(0, remaining - 1)
         guard remaining == 0 else { return }
         speakingId = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        // Let the voice's last samples play out before letting go of the audio:
+        // deactivating right away cuts them off with a click.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard let self, self.speakingId == nil, !self.synth.isSpeaking else { return }
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
     }
 }
 
