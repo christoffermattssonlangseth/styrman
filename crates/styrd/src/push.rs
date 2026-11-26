@@ -36,6 +36,12 @@ pub struct RelayConfig {
 /// Wait this long before pushing a permission request; skip it if answered by then.
 pub const PERMISSION_PUSH_DELAY: Duration = Duration::from_secs(8);
 /// Only push "finished" for turns at least this long (quick terminal turns stay quiet).
+/// A message another agent sent (`styr ask`), not you.
+fn from_agent(origin: &styr_core::event::Origin) -> bool {
+    matches!(origin, styr_core::event::Origin::Remote(d)
+        if d.as_str().starts_with(crate::peers::AGENT_DEVICE_PREFIX))
+}
+
 pub const MIN_TURN_FOR_PUSH: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -526,6 +532,9 @@ impl Daemon {
 pub async fn run_notifier(daemon: Arc<Daemon>, mut stop: tokio::sync::watch::Receiver<bool>) {
     let mut bus = daemon.subscribe();
     let mut turn_started: HashMap<SessionId, Instant> = HashMap::new();
+    // Sessions whose current turn another agent asked for (`styr ask`): its reply goes
+    // back to that agent, so its end isn't news for you. Approvals still notify.
+    let mut asked_by_agent: std::collections::HashSet<SessionId> = Default::default();
     loop {
         let msg = tokio::select! {
             _ = stop.wait_for(|v| *v) => return,
@@ -539,6 +548,14 @@ pub async fn run_notifier(daemon: Arc<Daemon>, mut stop: tokio::sync::watch::Rec
         };
         if matches!(ev.kind, EventKind::TurnStarted { .. }) {
             turn_started.insert(ev.session.clone(), Instant::now());
+            continue;
+        }
+        if let EventKind::UserMessage { origin, .. } = &ev.kind {
+            if from_agent(origin) {
+                asked_by_agent.insert(ev.session.clone());
+            } else {
+                asked_by_agent.remove(&ev.session);
+            }
             continue;
         }
         if !matches!(
@@ -556,6 +573,15 @@ pub async fn run_notifier(daemon: Arc<Daemon>, mut stop: tokio::sync::watch::Rec
             continue;
         };
         if !summary.shared {
+            continue;
+        }
+        let quiet = match &ev.kind {
+            EventKind::TurnEnded { .. } => asked_by_agent.remove(&ev.session),
+            // A helper an agent started isn't something you shared.
+            EventKind::SharingChanged { .. } => summary.helper_of.is_some(),
+            _ => false,
+        };
+        if quiet {
             continue;
         }
         let repo = summary
@@ -714,6 +740,15 @@ mod tests {
         )
         .unwrap();
         assert_eq!(n.body, "Fixed the flaky test.");
+    }
+
+    #[test]
+    fn messages_from_agents_are_told_apart_from_yours() {
+        use styr_core::event::Origin;
+        assert!(from_agent(&Origin::Remote("agent:01ABC".into())));
+        assert!(from_agent(&Origin::Remote("agent:mac".into())));
+        assert!(!from_agent(&Origin::Remote("01PHONE".into())));
+        assert!(!from_agent(&Origin::Terminal));
     }
 
     #[test]
