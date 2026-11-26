@@ -46,4 +46,21 @@ private let tool = #"{"type":"tool_call","call":"c1","tool":{"name":"Bash","kind
         ])
         guard case .assistant = t.items.last else { Issue.record("text should stay last"); return }
     }
+
+    /// The reply being written shows until the real message arrives, and a finished
+    /// reply redrawn on the Mac's screen doesn't come back as a preview.
+    @Test func previewUntilTheMessageArrives() throws {
+        let t = SessionTimeline(sessionId: "S")
+        t.showPreview("Lighthouses trace their origins")
+        #expect(t.preview == "Lighthouses trace their origins")
+        t.showPreview("Lighthouses trace their origins to antiquity, when")
+        #expect(t.preview?.hasSuffix("when") == true)
+        t.apply([try event(1, ms: 5_000, source: "transcript",
+                           #"{"type":"assistant_message","message":"m1","text":"Lighthouses trace their origins to antiquity, when builders raised towers.","mode":"final"}"#)])
+        #expect(t.preview == nil)
+        t.showPreview("Lighthouses trace their origins to antiquity, when builders raised towers.")
+        #expect(t.preview == nil, "no echo of what's already there")
+        t.showPreview(nil)
+        #expect(t.preview == nil)
+    }
 }

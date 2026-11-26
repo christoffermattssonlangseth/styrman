@@ -67,7 +67,25 @@ final class SessionTimeline {
     private(set) var lastSeq: UInt64 = 0
     /// History caught up and live events flowing.
     var isLive = false {
-        didSet { if isLive { loaded = true } }
+        didSet {
+            if isLive { loaded = true } else { preview = nil }
+        }
+    }
+    /// The reply the agent is writing right now, as its terminal shows it. Gone when
+    /// the real message (or anything else from the agent) arrives.
+    private(set) var preview: String?
+
+    func showPreview(_ text: String?) {
+        guard let text, !text.isEmpty else { preview = nil; return }
+        // Already here as a message (the screen redrew a finished reply): no echo.
+        let squash = { (s: String) in s.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
+        let body = squash(text.hasPrefix("…") ? String(text.dropFirst()) : text)
+        if let last = items.last(where: { if case .assistant = $0 { true } else { false } }),
+           case .assistant(_, let said, _) = last, squash(said).contains(body.prefix(200)) {
+            preview = nil
+            return
+        }
+        preview = text
     }
     /// The history has been fully loaded at least once (it stays cached after that).
     private(set) var loaded = false
@@ -186,6 +204,12 @@ final class SessionTimeline {
 
     private func apply(_ e: Event) {
         let key = "\(e.seq)"
+        switch e.kind {
+        case .assistantMessage, .userMessage, .toolCall, .permissionRequested, .turnEnded, .sessionEnded:
+            preview = nil
+        default:
+            break
+        }
         switch e.kind {
         case .sessionStarted(_, _, let start):
             append(.divider(id: key, text: start == "resume" ? "Session resumed" : "Session started", at: e.at))

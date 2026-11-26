@@ -178,6 +178,13 @@ pub enum ServerMsg {
     SessionStarting {
         session: SessionId,
     },
+    /// The reply the agent is writing right now, as its terminal shows it (only to
+    /// phones viewing the session; never stored). `None`: no reply in progress.
+    Preview {
+        session: SessionId,
+        #[serde(default)]
+        text: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

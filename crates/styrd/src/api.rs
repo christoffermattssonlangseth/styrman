@@ -618,6 +618,11 @@ impl Connection {
                     }
                     Ok(BusMsg::SessionChanged(id)) => self.on_session_changed(&mut tx, id).await?,
                     Ok(BusMsg::LiveTokens) => {}
+                    Ok(BusMsg::Preview(session, text)) => {
+                        if self.subs.contains_key(&session) {
+                            send(&mut tx, &ServerMsg::Preview { session, text }).await?;
+                        }
+                    }
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!(device = %self.device, "phone lagged {n} messages; resyncing");
                         self.send_sessions(&mut tx).await?;

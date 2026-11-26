@@ -137,17 +137,15 @@ pub fn exec(agent: AgentKind, args: Vec<OsString>) -> Result<std::convert::Infal
         let mut all: Vec<OsString> = spec.extra_args.iter().map(OsString::from).collect();
         all.extend(args);
         let catch_styr = agent == AgentKind::Codex;
-        let mode_reader: Option<crate::pty::ModeReader> = (agent == AgentKind::Claude)
-            .then_some(crate::pty::claude_mode as crate::pty::ModeReader);
-        let code = crate::pty::run(
-            &bin,
-            &all,
-            &env,
-            &launch_id,
-            detector,
-            mode_reader,
-            catch_styr,
-        )?;
+        let readers = if agent == AgentKind::Claude {
+            crate::pty::ScreenReaders {
+                mode: Some(crate::pty::claude_mode),
+                preview: Some(crate::pty::claude_preview),
+            }
+        } else {
+            crate::pty::ScreenReaders::default()
+        };
+        let code = crate::pty::run(&bin, &all, &env, &launch_id, detector, readers, catch_styr)?;
         if crate::pty::END_REQUESTED.load(std::sync::atomic::Ordering::Relaxed) {
             ended_from_phone(from_phone);
         }

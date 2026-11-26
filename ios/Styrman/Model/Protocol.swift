@@ -387,6 +387,8 @@ enum ServerMsg: Decodable, Sendable {
     case error(String)
     case folders(FolderListing)
     case sessionStarting(session: String)
+    /// The reply being written right now (nil: none), read off the agent's terminal.
+    case preview(session: String, text: String?)
     case unknown(type: String)
 
     private enum K: String, CodingKey {
@@ -424,6 +426,8 @@ enum ServerMsg: Decodable, Sendable {
         case "error": self = .error(try c.decode(String.self, forKey: .message))
         case "folders": self = .folders(try c.decode(FolderListing.self, forKey: .listing))
         case "session_starting": self = .sessionStarting(session: try c.decode(String.self, forKey: .session))
+        case "preview": self = .preview(session: try c.decode(String.self, forKey: .session),
+                                        text: try c.decodeIfPresent(String.self, forKey: .text))
         default: self = .unknown(type: type)
         }
     }

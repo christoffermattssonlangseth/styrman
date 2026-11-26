@@ -256,6 +256,8 @@ final class DaemonConnection {
             usage = providers
         case .folders(let listing):
             folders = listing
+        case .preview(let sid, let text):
+            timelines[sid]?.showPreview(text)
         case .sessionStarting(let sid):
             // Open it right away; it fills in as the agent starts.
             if let p = startPrompt { timeline(for: sid).addPending(p); startPrompt = nil }

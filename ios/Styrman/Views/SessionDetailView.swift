@@ -83,6 +83,9 @@ struct SessionDetailView: View {
                     ForEach(timeline.pending) { p in
                         PendingPromptRow(prompt: p) { timeline.dismissUnconfirmed(p.id) }
                     }
+                    if let text = timeline.preview, summary?.status == .working {
+                        LivePreviewRow(text: text, agent: agent).id("preview")
+                    }
                     if timeline.isLive && !timeline.hasContent && timeline.pending.isEmpty {
                         VStack(spacing: 6) {
                             Image(systemName: "ellipsis.bubble").font(.title2).foregroundStyle(.tertiary)
@@ -110,6 +113,10 @@ struct SessionDetailView: View {
             })
             .onChange(of: timeline.items.count + timeline.pending.count) {
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            // Follow the reply as it's written.
+            .onChange(of: timeline.preview?.count ?? 0) {
+                proxy.scrollTo("bottom", anchor: .bottom)
             }
             // Land on the latest message when it opens and when the history arrives.
             .onChange(of: timeline.loaded, initial: true) { _, loaded in
@@ -1232,5 +1239,26 @@ struct SessionBackground: View {
                 .frame(height: 280)
         }
         .ignoresSafeArea()
+    }
+}
+
+/// The reply the agent is writing right now, as its terminal shows it: plain text
+/// that grows, with a blinking cursor. The real message replaces it when it's done.
+struct LivePreviewRow: View {
+    let text: String
+    let agent: AgentKind
+    @State private var on = true
+
+    var body: some View {
+        HStack(alignment: .lastTextBaseline, spacing: 0) {
+            (Text(text) + Text(" ▍").foregroundColor(Theme.color(for: agent).opacity(on ? 1 : 0.15)))
+                .foregroundStyle(.primary.opacity(0.85))
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .contentTransition(.identity)
+        .accessibilityLabel("\(agent.displayName) is writing: \(text)")
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.55).repeatForever()) { on = false }
+        }
     }
 }

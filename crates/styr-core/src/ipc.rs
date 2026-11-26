@@ -77,6 +77,11 @@ pub enum Request {
         launch_id: String,
         prompt: Option<TerminalPrompt>,
     },
+    /// From a terminal wrapper: the reply its agent is writing, read off the screen.
+    TerminalPreview {
+        launch_id: String,
+        text: Option<String>,
+    },
     /// From a terminal wrapper: the permission mode its agent shows changed.
     TerminalMode {
         launch_id: String,

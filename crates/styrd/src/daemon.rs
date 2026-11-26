@@ -26,6 +26,8 @@ pub enum BusMsg {
     SessionChanged(SessionId),
     /// A phone registered a Live Activity token.
     LiveTokens,
+    /// The reply being written in a session's terminal (see `ServerMsg::Preview`).
+    Preview(SessionId, Option<String>),
 }
 
 pub struct Daemon {
@@ -1269,6 +1271,18 @@ impl Daemon {
             Request::TerminalPrompt { launch_id, prompt } => self
                 .terminal_prompt(&launch_id, prompt)
                 .map(|()| Response::Ok),
+            Request::TerminalPreview { launch_id, text } => {
+                // Only while it's working: a finished reply comes as a message.
+                for id in self.terminals.sessions_of(&launch_id) {
+                    let working =
+                        self.summary(&id).ok().flatten().is_some_and(|s| {
+                            s.shared && s.status == styr_core::SessionStatus::Working
+                        });
+                    let text = text.clone().filter(|_| working);
+                    let _ = self.bus.send(BusMsg::Preview(id, text));
+                }
+                Ok(Response::Ok)
+            }
             Request::TerminalMode { launch_id, mode } => {
                 if self.terminals.note_mode(&launch_id, mode) {
                     for id in self.terminals.sessions_of(&launch_id) {

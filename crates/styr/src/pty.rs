@@ -363,6 +363,112 @@ static CHILD: AtomicI32 = AtomicI32::new(0);
 /// Reads the agent's permission mode off its screen.
 pub type ModeReader = fn(&str) -> Option<&'static str>;
 
+/// Reads the reply the agent is writing off its screen.
+pub type PreviewReader = fn(&str) -> Option<String>;
+
+/// What the wrapper reads off an agent's screen besides permission menus.
+#[derive(Default, Clone, Copy)]
+pub struct ScreenReaders {
+    pub mode: Option<ModeReader>,
+    pub preview: Option<PreviewReader>,
+}
+
+/// The reply Claude is writing, from its screen: the last `⏺` block above the input
+/// box, unless it's a tool line (`⏺ Bash(ls)`, `⏺ Ran 3 stop hooks`). Lines the
+/// terminal wrapped are joined back into paragraphs; lists and indented code keep
+/// their line breaks. If the start has scrolled off, it begins with "…".
+pub fn claude_preview(contents: &str) -> Option<String> {
+    let lines: Vec<&str> = contents.lines().collect();
+    // The input box: a rule, the `❯` line, a rule. The reply is above it.
+    let rule = |l: &str| l.trim().len() >= 20 && l.trim().chars().all(|c| c == '─');
+    let bottom = lines
+        .iter()
+        .rposition(|l| l.starts_with('❯'))
+        .and_then(|i| (0..i).rev().find(|&j| rule(lines[j])))?;
+    // The block's `⏺` line, or, when a long reply has scrolled it off, the top of
+    // the screen if that's indented reply text.
+    let top = lines.iter().position(|l| !l.trim().is_empty())?;
+    let (start, scrolled) = match (0..bottom).rev().find(|&i| lines[i].starts_with("⏺ ")) {
+        Some(i) => (i, false),
+        None if top < bottom
+            && lines[top].starts_with("  ")
+            && !lines[top].trim_start().starts_with('⎿') =>
+        {
+            (top, true)
+        }
+        None => return None,
+    };
+    // A block above your latest prompt is the previous reply, not one being written.
+    if lines[start + 1..bottom].iter().any(|l| l.starts_with('❯')) {
+        return None;
+    }
+    let first = lines[start].trim_start_matches("⏺ ").trim();
+    let tool_like = first
+        .find('(')
+        .is_some_and(|i| i < 40 && !first[..i].contains(' '))
+        || [
+            "Ran ",
+            "Read ",
+            "Searched ",
+            "Listed ",
+            "Wrote ",
+            "Updated ",
+            "Edited ",
+            "Fetched ",
+            "Called ",
+            "Interrupted",
+        ]
+        .iter()
+        .any(|p| first.starts_with(p));
+    if tool_like {
+        return None;
+    }
+    let mut body = vec![first.to_owned()];
+    for l in &lines[start + 1..bottom] {
+        let t = l.trim_start();
+        // The spinner ("✻ Baked for 4s"), a tool result, the next block.
+        if ["⏺", "⎿", "✻", "✶", "✳", "✢", "✽", "·", "*", "❯"]
+            .iter()
+            .any(|p| t.starts_with(p) && l.len() - t.len() <= 2)
+        {
+            break;
+        }
+        body.push(l.strip_prefix("  ").unwrap_or(l).trim_end().to_owned());
+    }
+    while body.last().is_some_and(|l| l.is_empty()) {
+        body.pop();
+    }
+    // Join wrapped lines: a line continues the one before unless it's blank, a list
+    // item, indented (code) or follows a blank line.
+    let mut out = String::new();
+    let mut prev_blank = true;
+    for l in &body {
+        let list = l.starts_with("- ")
+            || l.starts_with("* ")
+            || l.split_once(". ")
+                .is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
+        if l.is_empty() {
+            out.push_str("\n\n");
+            prev_blank = true;
+            continue;
+        }
+        if !prev_blank {
+            out.push(if list || l.starts_with("  ") {
+                '\n'
+            } else {
+                ' '
+            });
+        }
+        out.push_str(l.trim_end());
+        prev_blank = false;
+    }
+    let text = out.trim().to_owned();
+    if text.chars().count() < 2 {
+        return None;
+    }
+    Some(if scrolled { format!("…{text}") } else { text })
+}
+
 /// Claude's mode, from its footer: "⏸ manual mode on", "⏵⏵ accept edits on",
 /// "⏸ plan mode on", "⏵⏵ auto mode on", "⏵⏵ bypass permissions on". Versions that
 /// show nothing in the default mode still show "? for shortcuts" there. `None` when
@@ -607,9 +713,10 @@ pub fn run(
     env: &[(String, String)],
     launch_id: &str,
     detector: Option<PromptDetector>,
-    mode_reader: Option<ModeReader>,
+    readers: ScreenReaders,
     catch_styr: bool,
 ) -> Result<i32> {
+    let mode_reader = readers.mode;
     // Environment for the child (and, through it, the agent's hooks).
     for (k, v) in env {
         // SAFETY: still single-threaded here.
@@ -706,7 +813,7 @@ pub fn run(
         let mut r = master_read;
         let screen = screen.clone();
         let blocked = blocked.clone();
-        let emulate = detector.is_some() || mode_reader.is_some();
+        let emulate = detector.is_some() || mode_reader.is_some() || readers.preview.is_some();
         std::thread::spawn(move || {
             let mut out = std::io::stdout();
             let mut buf = [0u8; 16384];
@@ -771,6 +878,33 @@ pub fn run(
                     let _ = client.call(&Request::TerminalPrompt {
                         launch_id: launch_id.clone(),
                         prompt: now.clone(),
+                    });
+                    last = now;
+                }
+            }
+        });
+    }
+    // The reply being written → daemon, whenever it grows (only forwarded while the
+    // session is working).
+    if let Some(read) = readers.preview {
+        let (screen, done) = (screen.clone(), done.clone());
+        let launch_id = launch_id.to_owned();
+        std::thread::spawn(move || {
+            let client =
+                Client::new(Paths::resolve().socket).with_timeout(Some(Duration::from_secs(2)));
+            let mut last: Option<String> = None;
+            while !done.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(300));
+                let contents = screen
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .screen()
+                    .contents();
+                let now = read(&contents);
+                if now != last {
+                    let _ = client.call(&Request::TerminalPreview {
+                        launch_id: launch_id.clone(),
+                        text: now.clone(),
                     });
                     last = now;
                 }
@@ -1152,6 +1286,65 @@ pub fn menu_keys(from: usize, to: usize) -> Vec<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Real Claude Code 2.1.332 screens (100 columns), mid-reply and done.
+    #[test]
+    fn reads_the_reply_claude_is_writing() {
+        let box_ = "────────────────────────────────────────────────────────────────────────────────────────────────────\n❯ \n────────────────────────────────────────────────────────────────────────────────────────────────────\n  ⏵⏵ auto mode on (shift+tab to cycle) · esc to interrupt\n";
+        let mid = format!(
+            " ▐▛███▛█   Claude Code v2.1.332\n\n❯ Without using any tools, write three paragraphs about lighthouses.\n\n\
+⏺ Lighthouses trace their origins to antiquity, when builders raised towers to guide ships safely\n\
+  into harbors. The most famous early example was the Pharos of Alexandria.\n\n\
+  After the Roman era, lighthouse building declined in Europe, and many coastal signals relied on\n\
+  open fires or bonfires kept by local communities. Medieval and early modern towers appeared in\n\n{box_}"
+        );
+        assert_eq!(
+            claude_preview(&mid).as_deref(),
+            Some(
+                "Lighthouses trace their origins to antiquity, when builders raised towers to guide ships safely into harbors. The most famous early example was the Pharos of Alexandria.\n\nAfter the Roman era, lighthouse building declined in Europe, and many coastal signals relied on open fires or bonfires kept by local communities. Medieval and early modern towers appeared in"
+            )
+        );
+        // Done: the spinner line ends the block.
+        let done = mid.replace(
+            box_,
+            &format!("⏺ Ran 3 stop hooks\n  ⎿  Stop hook failed\n\n✻ Baked for 4s\n{box_}"),
+        );
+        assert_eq!(
+            claude_preview(&done),
+            None,
+            "the last block is the hooks line"
+        );
+        let spinner = mid.replace(box_, &format!("\n✻ Baked for 4s · done\n{box_}"));
+        assert!(
+            claude_preview(&spinner)
+                .unwrap()
+                .ends_with("towers appeared in")
+        );
+        // Your next prompt (echoed with `❯`) isn't part of the reply before it.
+        let prompt = format!(
+            "⏺ Shared with your phone.\n\n❯ Without using any tools, write three paragraphs\n  about lighthouses.\n\n{box_}"
+        );
+        assert_eq!(
+            claude_preview(&prompt),
+            None,
+            "that reply is the previous one"
+        );
+        // A tool call, not a reply.
+        let tool = format!("⏺ Bash(cargo test)\n  ⎿  Running…\n\n{box_}");
+        assert_eq!(claude_preview(&tool), None);
+        // Lists keep their lines.
+        let list = format!("⏺ Two things:\n  - first\n  - second\n\n{box_}");
+        assert_eq!(
+            claude_preview(&list).as_deref(),
+            Some("Two things:\n- first\n- second")
+        );
+        // Scrolled off the top: it starts with "…".
+        let scrolled = format!("  the start is gone and\n  this goes on\n\n{box_}");
+        assert_eq!(
+            claude_preview(&scrolled).as_deref(),
+            Some("…the start is gone and this goes on")
+        );
+    }
 
     #[test]
     fn reads_claudes_mode_from_its_footer() {
