@@ -348,6 +348,12 @@ final class DaemonConnection {
         }
     }
 
+    /// Stop the agent's current turn (Esc in its terminal).
+    func interrupt(_ session: String) {
+        guard state == .connected else { return }
+        send(.interrupt(session: session))
+    }
+
     /// Quit the agent on the Mac (closing the tab if the phone opened it) and drop it
     /// from the list.
     func endSession(_ session: String) {

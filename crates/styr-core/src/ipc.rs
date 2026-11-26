@@ -221,6 +221,8 @@ pub enum Response {
     },
     /// Quit the agent; close the tab if the phone opened it (see `Command::EndSession`).
     EndSession,
+    /// Stop the agent's current turn (Esc in its terminal; see `Command::Interrupt`).
+    Interrupt,
     PromptAccepted {
         /// False: queued until the agent next stops.
         delivered: bool,

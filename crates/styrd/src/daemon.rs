@@ -870,6 +870,40 @@ impl Daemon {
         Ok(())
     }
 
+    /// From the phone: stop the current turn (Esc in the agent's terminal). The turn is
+    /// marked as interrupted right away: Claude reports no end for an interrupted turn.
+    pub fn interrupt(&self, session: &SessionId) -> Result<()> {
+        let summary = self
+            .summary(session)?
+            .filter(|s| s.shared)
+            .context("unknown session")?;
+        anyhow::ensure!(
+            matches!(
+                summary.status,
+                styr_core::SessionStatus::Working | styr_core::SessionStatus::NeedsApproval
+            ),
+            "It isn't working on anything right now."
+        );
+        let launch = self
+            .terminals
+            .launch_of(session)
+            .filter(|_| self.terminals.is_live(session))
+            .context("To stop it from here, start it with `styr` (or from the phone). Press Esc in its terminal.")?;
+        self.terminals.interrupt(&launch);
+        let native = styr_core::ids::NativeSessionRef::new(summary.agent, summary.native_id);
+        self.ingest(
+            &SessionUpdate::for_native(native),
+            EventSource::Daemon,
+            vec![EventKind::TurnEnded {
+                turn: None,
+                reason: styr_core::event::TurnEndReason::Interrupted,
+                last_message: None,
+            }],
+        )?;
+        tracing::info!(%session, "turn stopped from the phone");
+        Ok(())
+    }
+
     /// `/styr` (or `/styr off`) caught by a `styr <agent>` terminal wrapper, for an
     /// agent that rejects unknown slash commands itself (Codex). Applies to the
     /// sessions running in that terminal, or to its first one once its hooks arrive.
@@ -1265,6 +1299,7 @@ impl Daemon {
                         Ok(Response::SetMode { mode })
                     }
                     Some(crate::terminals::TerminalAction::End) => Ok(Response::EndSession),
+                    Some(crate::terminals::TerminalAction::Interrupt) => Ok(Response::Interrupt),
                     None => Err(anyhow::anyhow!("detached")),
                 }
             }

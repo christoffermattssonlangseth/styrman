@@ -447,6 +447,10 @@ pub fn notification_for(
             ..
         } => {
             let failed = *reason == TurnEndReason::Failed;
+            // Stopped (from the phone or with Esc): you know already.
+            if *reason == TurnEndReason::Interrupted {
+                return None;
+            }
             if !failed && turn_took.is_none_or(|d| d < MIN_TURN_FOR_PUSH) {
                 return None;
             }

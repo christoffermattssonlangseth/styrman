@@ -244,7 +244,8 @@ struct SessionDetailView: View {
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                     if summary.acceptsPrompts {
-                        Composer(sessionId: sessionId, status: summary.status, agent: summary.agent.displayName)
+                        Composer(sessionId: sessionId, status: summary.status, agent: summary.agent.displayName,
+                                 canStop: summary.inTerminalWrapper)
                             .onChange(of: speaker.autoRead) { _, on in
                                 // Turning it on reads the latest reply, so you hear where things are.
                                 if on, let r = latestReply(timeline) { speaker.speak(r.text, id: r.id, agent: summary.agent) }
@@ -831,6 +832,8 @@ struct Composer: View {
     let sessionId: String
     let status: SessionStatus
     let agent: String
+    /// Runs in `styr`: its turn can be stopped from here.
+    var canStop = false
     @State private var text = ""
     @FocusState private var focused: Bool
     @State private var dictation = Dictation()
@@ -845,6 +848,11 @@ struct Composer: View {
     private var canSend: Bool {
         connection.state == .connected && status != .done && !sending
             && (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
+    }
+
+    private var showsStop: Bool {
+        canStop && (status == .working || status == .needsApproval) && !sending
+            && text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty
     }
 
     /// Upload the attachments to the Mac, then send the message with their paths.
@@ -878,7 +886,8 @@ struct Composer: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             if status == .working {
-                Text("\(agent) is working. Your message is sent when it finishes.")
+                Text(canStop ? "\(agent) is working. A message goes when it finishes; ■ stops it."
+                             : "\(agent) is working. Your message is sent when it finishes.")
                     .font(.caption).foregroundStyle(.secondary)
             } else if status == .done {
                 Text("This session has ended.").font(.caption).foregroundStyle(.secondary)
@@ -926,16 +935,26 @@ struct Composer: View {
                 .tint(dictation.isListening ? Theme.accent : .secondary)
                 .disabled(status == .done)
                 .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Dictate")
-                Button(action: send) {
-                    if sending {
-                        ProgressView().frame(width: 34, height: 34)
-                    } else {
-                        Image(systemName: "arrow.up.circle.fill").font(.system(size: 34))
+                if showsStop {
+                    // Nothing typed while it works: stop its turn instead (Esc on the Mac).
+                    Button { connection.interrupt(sessionId) } label: {
+                        Image(systemName: "stop.circle.fill").font(.system(size: 34))
                     }
+                    .tint(.primary)
+                    .accessibilityLabel("Stop \(agent)")
+                    .sensoryFeedback(.impact(weight: .medium), trigger: status)
+                } else {
+                    Button(action: send) {
+                        if sending {
+                            ProgressView().frame(width: 34, height: 34)
+                        } else {
+                            Image(systemName: "arrow.up.circle.fill").font(.system(size: 34))
+                        }
+                    }
+                    .tint(Theme.accent)
+                    .disabled(!canSend)
+                    .accessibilityLabel("Send")
                 }
-                .tint(Theme.accent)
-                .disabled(!canSend)
-                .accessibilityLabel("Send")
             }
         }
         .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 6)
@@ -1252,7 +1271,7 @@ struct LivePreviewRow: View {
 
     var body: some View {
         HStack(alignment: .lastTextBaseline, spacing: 0) {
-            (Text(text) + Text(" ▍").foregroundColor(Theme.color(for: agent).opacity(on ? 1 : 0.15)))
+            Text("\(text) \(Text("▍").foregroundStyle(Theme.color(for: agent).opacity(on ? 1 : 0.15)))")
                 .foregroundStyle(.primary.opacity(0.85))
                 .frame(maxWidth: .infinity, alignment: .leading)
         }

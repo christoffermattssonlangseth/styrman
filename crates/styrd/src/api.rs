@@ -886,6 +886,21 @@ impl Connection {
             }
             ClientMsg::Command {
                 session,
+                command: styr_core::Command::Interrupt,
+            } => match self.daemon.interrupt(&session) {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    send(
+                        tx,
+                        &ServerMsg::Error {
+                            message: format!("{e:#}"),
+                        },
+                    )
+                    .await
+                }
+            },
+            ClientMsg::Command {
+                session,
                 command: styr_core::Command::EndSession,
             } => match self.daemon.end_session(&session) {
                 Ok(()) => Ok(()),

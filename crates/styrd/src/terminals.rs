@@ -36,6 +36,8 @@ pub enum TerminalAction {
     Mode(String),
     /// Quit the agent.
     End,
+    /// Stop the current turn (Esc).
+    Interrupt,
 }
 
 /// Permission modes the phone may ask for (Claude's names).
@@ -78,6 +80,8 @@ struct Inner {
     mode_sets: HashMap<String, String>,
     /// Launches asked to quit, not yet told.
     ends: std::collections::HashSet<String>,
+    /// Launches asked to stop their turn, not yet told.
+    interrupts: std::collections::HashSet<String>,
     /// The permission mode the agent shows, per launch.
     modes: HashMap<String, String>,
     /// The permission menu currently on screen, per launch.
@@ -271,6 +275,8 @@ impl Terminals {
         // A pending menu selection goes out first, then a mode change.
         if g.ends.remove(launch) {
             let _ = tx.send(TerminalAction::End);
+        } else if g.interrupts.remove(launch) {
+            let _ = tx.send(TerminalAction::Interrupt);
         } else if let Some(i) = g.selects.remove(launch) {
             let _ = tx.send(TerminalAction::Select(i));
         } else if let Some(m) = g.mode_sets.remove(launch) {
@@ -347,6 +353,19 @@ impl Terminals {
             None => {
                 g.mode_sets.insert(launch.to_owned(), mode.to_owned());
             }
+        }
+    }
+
+    /// Ask the wrapper to stop its agent's current turn.
+    pub fn interrupt(&self, launch: &str) {
+        let mut g = self.lock();
+        g.last_seen.insert(launch.to_owned(), Instant::now());
+        let sent = g
+            .attached
+            .remove(launch)
+            .is_some_and(|tx| tx.send(TerminalAction::Interrupt).is_ok());
+        if !sent {
+            g.interrupts.insert(launch.to_owned());
         }
     }
 

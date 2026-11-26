@@ -1167,6 +1167,12 @@ fn inject_loop(
                     }
                 }
             }
+            Ok(Response::Interrupt) => {
+                // Esc stops the turn in Claude Code and Codex.
+                let mut f = w.lock().unwrap_or_else(|p| p.into_inner());
+                let _ = f.write_all(b"\x1b");
+                let _ = f.flush();
+            }
             Ok(Response::EndSession) => {
                 END_REQUESTED.store(true, Ordering::Relaxed);
                 end_agent(w, done);

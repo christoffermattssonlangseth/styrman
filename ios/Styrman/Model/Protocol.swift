@@ -450,6 +450,7 @@ enum ClientMsg: Encodable, Sendable {
     case registerActivityToken(kind: String, token: String?)
     case setMode(session: String, mode: String)
     case endSession(session: String)
+    case interrupt(session: String)
 
     private enum K: String, CodingKey { case type, kind, session, command, request, option, text, token, env, shared, path, agent, cwd, prompt, parent, name, mode, sinceSeq = "since_seq" }
 
@@ -470,6 +471,10 @@ enum ClientMsg: Encodable, Sendable {
             try cmd.encode("resolve_permission", forKey: .type)
             try cmd.encode(request, forKey: .request)
             try cmd.encode(option, forKey: .option)
+        case .interrupt(let s):
+            try c.encode("command", forKey: .type); try c.encode(s, forKey: .session)
+            var cmd = c.nestedContainer(keyedBy: K.self, forKey: .command)
+            try cmd.encode("interrupt", forKey: .type)
         case .endSession(let s):
             try c.encode("command", forKey: .type); try c.encode(s, forKey: .session)
             var cmd = c.nestedContainer(keyedBy: K.self, forKey: .command)
