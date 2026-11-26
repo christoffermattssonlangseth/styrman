@@ -3,6 +3,7 @@
 pub mod api;
 pub mod auth;
 pub mod daemon;
+pub mod follow;
 pub mod ipc;
 pub mod launcher;
 pub mod live;
@@ -120,6 +121,7 @@ pub async fn run_with(
     }
     let notifier = tokio::spawn(push::run_notifier(daemon.clone(), stop_rx.clone()));
     let live = tokio::spawn(live::run(daemon.clone(), stop_rx.clone()));
+    let follower = tokio::spawn(follow::run(daemon.clone(), stop_rx.clone()));
     let reaper = {
         let d = daemon.clone();
         let mut stop = stop_rx.clone();
@@ -142,6 +144,7 @@ pub async fn run_with(
     let _ = api.await;
     let _ = notifier.await;
     let _ = live.await;
+    let _ = follower.await;
     let _ = reaper.await;
     let _ = std::fs::remove_file(&paths.socket);
     tracing::info!("styrd stopped");

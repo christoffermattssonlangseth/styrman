@@ -21,6 +21,7 @@
 		4B398F324DB74E7B8197541E /* DaemonConnection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C5647A67574DB7C5E369840 /* DaemonConnection.swift */; };
 		6542962E87DA49169ADCCC5B /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B27AED31838D3975D0DCEFA /* PairingView.swift */; };
 		679620EC756673D37F73FC31 /* UsageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCDF33717CBF4E65531B1021 /* UsageView.swift */; };
+		691D31E6C70E169D0909E9A4 /* TranscriptOrderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DB846A4F79F815E558B4010 /* TranscriptOrderTests.swift */; };
 		706EB106558B1B609DC45E2B /* StyrmanApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E2DA42B6895A9B2D3DE2D56 /* StyrmanApp.swift */; };
 		7310210765518C68DB35E424 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = CB9682178940E3A389F29142 /* PrivacyInfo.xcprivacy */; };
 		787DEFC79040854312CEC7F9 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45DBF7130A3704CEE2895C33 /* Theme.swift */; };
@@ -79,6 +80,7 @@
 
 /* Begin PBXFileReference section */
 		00AE6AE82221B500B2447089 /* Credentials.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Credentials.swift; sourceTree = "<group>"; };
+		0DB846A4F79F815E558B4010 /* TranscriptOrderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptOrderTests.swift; sourceTree = "<group>"; };
 		1C6177180C2ABCE5EC6CADE3 /* Notifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notifications.swift; sourceTree = "<group>"; };
 		26784D644CF00DF837CCAA4B /* NewSessionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NewSessionView.swift; sourceTree = "<group>"; };
 		2B27AED31838D3975D0DCEFA /* PairingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairingView.swift; sourceTree = "<group>"; };
@@ -112,7 +114,7 @@
 		D4D877A57441234BC54A95F1 /* StyrmanWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = StyrmanWidgets.entitlements; sourceTree = "<group>"; };
 		E25ACD30D61B8467E406440F /* VoiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceTests.swift; sourceTree = "<group>"; };
 		ECC7E94075932B81BE650100 /* Styrman.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Styrman.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		"TEMP_3DC569D7-7CB0-426C-9976-4E42FCC44102" /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
+		"TEMP_FBF4B673-9DBA-4E18-B3D3-E8A224B89611" /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -166,6 +168,7 @@
 			isa = PBXGroup;
 			children = (
 				3F191B43A5982942A6A69A5A /* ProtocolTests.swift */,
+				0DB846A4F79F815E558B4010 /* TranscriptOrderTests.swift */,
 				E25ACD30D61B8467E406440F /* VoiceTests.swift */,
 			);
 			path = StyrmanTests;
@@ -244,10 +247,10 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		"TEMP_26B83881-1148-413C-A9C2-A5B1DD97822E" /* ios */ = {
+		"TEMP_533AD5CA-F435-49DD-A5F9-1C4918D5E198" /* ios */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_3DC569D7-7CB0-426C-9976-4E42FCC44102" /* Signing.xcconfig */,
+				"TEMP_FBF4B673-9DBA-4E18-B3D3-E8A224B89611" /* Signing.xcconfig */,
 			);
 			path = ios;
 			sourceTree = "<group>";
@@ -404,6 +407,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				3ECDDE310E80BA8E1ED61278 /* ProtocolTests.swift in Sources */,
+				691D31E6C70E169D0909E9A4 /* TranscriptOrderTests.swift in Sources */,
 				FB09420B4F8EB90EBC74C700 /* VoiceTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -544,7 +548,7 @@
 		};
 		BAA986BF9E9D340762FAAD97 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_3DC569D7-7CB0-426C-9976-4E42FCC44102" /* Signing.xcconfig */;
+			baseConfigurationReference = "TEMP_FBF4B673-9DBA-4E18-B3D3-E8A224B89611" /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -643,7 +647,7 @@
 		};
 		ED1BF44AF1A5A2C8867941FD /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_3DC569D7-7CB0-426C-9976-4E42FCC44102" /* Signing.xcconfig */;
+			baseConfigurationReference = "TEMP_FBF4B673-9DBA-4E18-B3D3-E8A224B89611" /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;

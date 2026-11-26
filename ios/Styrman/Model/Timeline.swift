@@ -122,6 +122,8 @@ final class SessionTimeline {
     @ObservationIgnored private var toolIndex: [String: Int] = [:]
     @ObservationIgnored private var permissionIndex: [String: Int] = [:]
     @ObservationIgnored private var messageIndex: [String: Int] = [:]
+    /// When each tool call first showed up (to place text read from the transcript).
+    @ObservationIgnored private var toolSeen: [String: Date] = [:]
     @ObservationIgnored private var planIndex: Int?
 
     init(sessionId: String) { self.sessionId = sessionId }
@@ -161,6 +163,27 @@ final class SessionTimeline {
 
     private func append(_ item: TimelineItem) { items.append(item) }
 
+    /// Insert at `i`, keeping the position indexes right.
+    private func insert(_ item: TimelineItem, at i: Int) {
+        guard i < items.count else { return append(item) }
+        items.insert(item, at: i)
+        func shift(_ d: inout [String: Int]) { for (k, v) in d where v >= i { d[k] = v + 1 } }
+        shift(&toolIndex); shift(&permissionIndex); shift(&messageIndex)
+        if let p = planIndex, p >= i { planIndex = p + 1 }
+    }
+
+    /// Where text the agent wrote goes when it's read from the transcript: Claude
+    /// announces a tool (by hook) just before it writes the text that came first, so
+    /// it goes above the tool calls that showed up in the last two seconds.
+    private func placeForTranscriptText(at: Date) -> Int {
+        var i = items.count
+        while i > 0, case .tool(_, let t) = items[i - 1],
+              let seen = toolSeen[t.call], seen >= at.addingTimeInterval(-2) {
+            i -= 1
+        }
+        return i
+    }
+
     private func apply(_ e: Event) {
         let key = "\(e.seq)"
         switch e.kind {
@@ -178,6 +201,10 @@ final class SessionTimeline {
         case .assistantMessage(let id, let text, let delta):
             if let i = messageIndex[id], case .assistant(let iid, let old, let at) = items[i] {
                 items[i] = .assistant(id: iid, text: delta ? old + text : text, at: at)
+            } else if e.source == "transcript" {
+                let i = placeForTranscriptText(at: e.at)
+                insert(.assistant(id: key, text: text, at: e.at), at: i)
+                messageIndex[id] = i
             } else {
                 messageIndex[id] = items.count
                 append(.assistant(id: key, text: text, at: e.at))
@@ -187,7 +214,10 @@ final class SessionTimeline {
             if !call.isEmpty, let i = toolIndex[call], case .tool(let iid, _) = items[i] {
                 items[i] = .tool(id: iid, item)
             } else {
-                if !call.isEmpty { toolIndex[call] = items.count }
+                if !call.isEmpty {
+                    toolIndex[call] = items.count
+                    toolSeen[call] = e.at
+                }
                 append(.tool(id: key, item))
             }
         case .permissionRequested(let request, let tool, let reason, let options, let expires):

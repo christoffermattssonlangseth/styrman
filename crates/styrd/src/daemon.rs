@@ -47,11 +47,16 @@ pub struct Daemon {
     data_dir: Mutex<Option<std::path::PathBuf>>,
     /// Device id → open WebSocket count (a connected app is in the foreground).
     live: Mutex<HashMap<String, usize>>,
+    /// Transcripts followed for replies as they're written.
+    pub(crate) follower: crate::follow::Follower,
 }
 
 struct Inner {
     store: Store,
     trackers: HashMap<SessionId, StatusTracker>,
+    /// The agent's texts this turn, per session: the same reply can come from the
+    /// transcript (as it's written) and from the end-of-turn hook; keep the first.
+    said: HashMap<SessionId, std::collections::HashSet<String>>,
 }
 
 /// A short session title from the first prompt (one line, ≤ 80 chars).
@@ -89,6 +94,7 @@ impl Daemon {
         let mut inner = Inner {
             store,
             trackers: HashMap::new(),
+            said: HashMap::new(),
         };
         let now = now_ms();
         let mut relink = Vec::new();
@@ -131,6 +137,7 @@ impl Daemon {
             pusher: Default::default(),
             data_dir: Mutex::new(None),
             live: Mutex::new(HashMap::new()),
+            follower: Default::default(),
         });
         for (session, launch) in relink {
             daemon.terminals.link(&session, &launch);
@@ -287,6 +294,18 @@ impl Daemon {
             }
             _ => None,
         };
+        // Text the agent wrote before this step goes first (from its transcript).
+        if events.iter().any(|e| {
+            matches!(
+                e,
+                EventKind::ToolCall { .. }
+                    | EventKind::PermissionRequested { .. }
+                    | EventKind::AssistantMessage { .. }
+                    | EventKind::TurnEnded { .. }
+            )
+        }) {
+            self.follower.catch_up(self, &view.id);
+        }
         self.ingest(&update, EventSource::Hook, events)?;
         if gone {
             self.prompts.clear(&view.id);
@@ -361,6 +380,26 @@ impl Daemon {
         let mut shared = rec.shared;
         let mut title: Option<String> = None;
         for kind in events {
+            match &kind {
+                EventKind::UserMessage { .. } => {
+                    inner.said.remove(&rec.id);
+                }
+                EventKind::AssistantMessage {
+                    text,
+                    mode: styr_core::event::TextMode::Final,
+                    ..
+                } if !text.trim().is_empty() => {
+                    let new = inner
+                        .said
+                        .entry(rec.id.clone())
+                        .or_default()
+                        .insert(text.trim().to_owned());
+                    if !new {
+                        continue;
+                    }
+                }
+                _ => {}
+            }
             tracker.apply(&kind);
             if let EventKind::UserMessage { text, .. } = &kind
                 && rec.title.is_none()
@@ -504,6 +543,35 @@ impl Daemon {
 
     /// End sessions whose agent process is gone (closed terminal, crash, kill -9):
     /// they never sent SessionEnd and would otherwise wait for you forever.
+    /// Shared Claude and Codex sessions with a transcript, for `follow`.
+    pub fn follow_targets(&self) -> Result<Vec<crate::follow::Target>> {
+        let g = self.lock();
+        Ok(g.store
+            .sessions()?
+            .into_iter()
+            .filter(|r| r.shared)
+            .filter(|r| matches!(r.native.agent, AgentKind::Claude | AgentKind::Codex))
+            .filter_map(|r| {
+                let status = g.trackers.get(&r.id).map(|t| t.status());
+                if status == Some(styr_core::SessionStatus::Done) {
+                    return None;
+                }
+                Some(crate::follow::Target {
+                    active: matches!(
+                        status,
+                        Some(
+                            styr_core::SessionStatus::Working
+                                | styr_core::SessionStatus::NeedsApproval
+                        )
+                    ),
+                    path: r.transcript_path?,
+                    id: r.id,
+                    native: r.native,
+                })
+            })
+            .collect())
+    }
+
     pub fn reap_dead_sessions(&self) -> Result<usize> {
         let candidates: Vec<SessionRecord> = {
             let g = self.lock();

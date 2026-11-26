@@ -360,3 +360,49 @@ fn sessions_whose_process_died_are_ended_and_can_be_forgotten() {
         "history deleted too"
     );
 }
+
+#[test]
+fn a_reply_from_the_transcript_and_the_hook_is_kept_once_per_turn() {
+    let store = styrd::store::Store::open_in_memory().unwrap();
+    let d = styrd::Daemon::open(store, styrd::default_adapters()).unwrap();
+    let s = update("said");
+    d.ingest(&s, EventSource::Hook, vec![started("said")])
+        .unwrap();
+    d.set_sharing(&native("said"), true).unwrap();
+    let said = |text: &str, id: &str| EventKind::AssistantMessage {
+        message: MessageId(id.into()),
+        text: text.into(),
+        mode: TextMode::Final,
+    };
+    let ask = |text: &str| EventKind::UserMessage {
+        text: text.into(),
+        origin: Origin::Terminal,
+    };
+    d.ingest(&s, EventSource::Hook, vec![ask("go")]).unwrap();
+    // Read from the transcript as it was written, then the same text at the turn's end.
+    let (_, a) = d
+        .ingest(
+            &s,
+            EventSource::Transcript,
+            vec![said("Checking.", "t1"), said("Done: all green.", "t2")],
+        )
+        .unwrap();
+    let (_, b) = d
+        .ingest(
+            &s,
+            EventSource::Hook,
+            vec![said("Done: all green.", "hook")],
+        )
+        .unwrap();
+    assert_eq!((a.len(), b.len()), (2, 0), "the hook's copy is dropped");
+    // The next turn may say the same thing again.
+    d.ingest(&s, EventSource::Hook, vec![ask("again")]).unwrap();
+    let (_, c) = d
+        .ingest(
+            &s,
+            EventSource::Hook,
+            vec![said("Done: all green.", "hook2")],
+        )
+        .unwrap();
+    assert_eq!(c.len(), 1);
+}
