@@ -350,6 +350,8 @@ impl Daemon {
     }
 }
 
+// Short-lived, one at a time: boxing the summary would buy nothing.
+#[allow(clippy::large_enum_variant)]
 enum Peer {
     Running(SessionSummary),
     /// Start this agent in this folder.
