@@ -94,6 +94,8 @@ struct Inner {
     last_tool: HashMap<SessionId, ToolInfo>,
     /// Launch → (agent, canonical folder, first seen), as the wrapper reported them.
     wrappers: HashMap<String, (styr_core::ids::AgentKind, std::path::PathBuf, Instant)>,
+    /// What each wrapper understands (`styr_core::ipc::WRAPPER_LEVEL` when it attached).
+    levels: HashMap<String, u32>,
 }
 
 fn canon(p: &std::path::Path) -> std::path::PathBuf {
@@ -213,6 +215,16 @@ impl Terminals {
     /// Take a queued prompt back (the wrapper is gone; deliver another way).
     pub fn take_queued(&self, session: &SessionId) -> Option<QueuedPrompt> {
         self.lock().queue.get_mut(session)?.pop_front()
+    }
+
+    /// Record which actions a wrapper understands (sent with every attach).
+    pub fn note_level(&self, launch: &str, level: u32) {
+        self.lock().levels.insert(launch.to_owned(), level);
+    }
+
+    /// Which actions `launch` understands: 0 if it's from before levels were sent.
+    pub fn level_of(&self, launch: &str) -> u32 {
+        self.lock().levels.get(launch).copied().unwrap_or(0)
     }
 
     /// Record what a wrapper runs and where (sent with every attach).

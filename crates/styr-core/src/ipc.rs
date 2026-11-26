@@ -18,6 +18,10 @@ pub const PROTOCOL_VERSION: u32 = 1;
 /// Upper bound for one framed message (hook payloads can carry large tool output).
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
+/// The terminal actions a wrapper understands, sent with every `AttachTerminal`.
+/// 1: stop a turn (`Response::Interrupt`) and show the screen (`Response::WatchScreen`).
+pub const WRAPPER_LEVEL: u32 = 1;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
@@ -70,6 +74,11 @@ pub enum Request {
         agent: Option<AgentKind>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cwd: Option<std::path::PathBuf>,
+        /// What the wrapper understands ([`WRAPPER_LEVEL`]); 0 for wrappers from
+        /// before it was sent. A wrapper started before an update keeps running the
+        /// old code, so the daemon must not hand it actions it would ignore.
+        #[serde(default)]
+        level: u32,
     },
     /// From a terminal wrapper: the agent's own permission menu appeared (`Some`)
     /// or went away (`None`).

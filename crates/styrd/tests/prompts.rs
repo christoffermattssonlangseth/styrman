@@ -222,11 +222,17 @@ fn with_launch(mut h: RawHook, launch: &str) -> RawHook {
 
 /// Play `styr claude`'s terminal wrapper: wait for the next prompt to type.
 fn attach(d: &Daemon, launch: &str) -> tokio::task::JoinHandle<Response> {
+    attach_at(d, launch, styr_core::ipc::WRAPPER_LEVEL)
+}
+
+/// A wrapper that understands actions up to `level` (0: from before levels).
+fn attach_at(d: &Daemon, launch: &str, level: u32) -> tokio::task::JoinHandle<Response> {
     let c = Client::new(&d.paths.socket).with_timeout(None);
     let req = Request::AttachTerminal {
         launch_id: launch.into(),
         agent: None,
         cwd: None,
+        level,
     };
     tokio::task::spawn_blocking(move || c.call(&req).expect("attach"))
 }
@@ -314,6 +320,63 @@ async fn inside_styr_claude_prompts_are_typed_into_the_terminal() {
             text: "and then the tests".into()
         }
     );
+    d.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stop_reaches_the_terminal_only_if_its_wrapper_knows_it() {
+    let d = Daemon::start().await;
+    let l = "launch-stop";
+    for (event, extra) in [
+        ("SessionStart", json!({"source": "startup"})),
+        ("UserPromptSubmit", json!({"prompt": "/styr"})),
+    ] {
+        d.call(Request::Hook {
+            hook: with_launch(hook("t1", event, extra), l),
+        })
+        .await;
+    }
+    let (mut ws, sid) = phone(&d, "t1").await;
+    d.call(Request::Hook {
+        hook: with_launch(
+            hook("t1", "UserPromptSubmit", json!({"prompt": "long job"})),
+            l,
+        ),
+    })
+    .await;
+    let stop = json!({"type": "command", "session": sid, "command": {"type": "interrupt"}});
+
+    // Started before an update: its wrapper would ignore the Esc. Say so, and don't
+    // pretend the turn stopped.
+    let _old = attach_at(&d, l, 0);
+    settle().await;
+    send(&mut ws, stop.clone()).await;
+    loop {
+        match recv(&mut ws).await {
+            ServerMsg::Error { message } => {
+                assert!(
+                    message.contains("started before Styrman was updated"),
+                    "{message}"
+                );
+                break;
+            }
+            ServerMsg::Event { event } => assert!(
+                !matches!(event.kind, EventKind::TurnEnded { .. }),
+                "not marked stopped"
+            ),
+            _ => {}
+        }
+    }
+
+    // A current wrapper gets the Esc.
+    let wrapper = attach(&d, l);
+    settle().await;
+    send(&mut ws, stop).await;
+    let got = tokio::time::timeout(Duration::from_secs(5), wrapper)
+        .await
+        .expect("told")
+        .unwrap();
+    assert_eq!(got, Response::Interrupt);
     d.stop().await;
 }
 
@@ -679,6 +742,7 @@ async fn codex_hooks_with_a_stale_terminal_id_find_their_terminal_by_folder() {
         launch_id: "live".into(),
         agent: Some(AgentKind::Codex),
         cwd: Some("/work/repo".into()),
+        level: styr_core::ipc::WRAPPER_LEVEL,
     };
     let _wrapper = tokio::task::spawn_blocking(move || c.call(&req));
     tokio::time::sleep(Duration::from_millis(200)).await;

@@ -91,6 +91,9 @@ fn always_persisted(kind: &EventKind) -> bool {
     )
 }
 
+/// Why a session can't take an action its wrapper doesn't know yet.
+const OLDER_WRAPPER: &str = "This session was started before Styrman was updated. Start it again";
+
 impl Daemon {
     /// Load state from the store. Permission requests left open by a previous
     /// daemon are resolved as cancelled: their hook processes saw EOF and failed open.
@@ -882,6 +885,10 @@ impl Daemon {
             .launch_of(session)
             .filter(|_| self.terminals.is_live(session))
             .context("Its terminal can only be shown for sessions started with `styr` (or from the phone).")?;
+        anyhow::ensure!(
+            self.terminals.level_of(&launch) >= 1,
+            "{OLDER_WRAPPER} to see its terminal here."
+        );
         self.terminals.watch_screen(&launch);
         Ok(())
     }
@@ -905,6 +912,10 @@ impl Daemon {
             .launch_of(session)
             .filter(|_| self.terminals.is_live(session))
             .context("To stop it from here, start it with `styr` (or from the phone). Press Esc in its terminal.")?;
+        anyhow::ensure!(
+            self.terminals.level_of(&launch) >= 1,
+            "{OLDER_WRAPPER} to stop it from here. Press Esc in its terminal for now."
+        );
         self.terminals.interrupt(&launch);
         let native = styr_core::ids::NativeSessionRef::new(summary.agent, summary.native_id);
         self.ingest(
@@ -1300,7 +1311,9 @@ impl Daemon {
                 launch_id,
                 agent,
                 cwd,
+                level,
             } => {
+                self.terminals.note_level(&launch_id, level);
                 if let (Some(agent), Some(cwd)) = (agent, &cwd) {
                     self.terminals.note_wrapper(&launch_id, agent, cwd);
                 }

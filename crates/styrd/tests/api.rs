@@ -380,6 +380,7 @@ async fn screen_permission_reaches_a_watching_phone_live() {
                 launch_id: "L".into(),
                 agent: Some(AgentKind::Codex),
                 cwd: Some("/work/repo".into()),
+                level: styr_core::ipc::WRAPPER_LEVEL,
             })
     });
 

@@ -1149,6 +1149,7 @@ fn inject_loop(
             launch_id: launch_id.to_owned(),
             agent,
             cwd: cwd.clone(),
+            level: styr_core::ipc::WRAPPER_LEVEL,
         }) {
             Ok(Response::TypePrompt { text }) => {
                 // Don't type over a half-written line; wait until it's sent or cleared.
