@@ -13,6 +13,9 @@ struct SessionDetailView: View {
     @State private var showTerminal = false
     @State private var showChanges = false
     @State private var showModel = false
+    /// Scrolled to (near) the end: new text is followed. Scrolled up to read, the
+    /// conversation stays where you are while the reply is written.
+    @State private var atBottom = true
     /// How many of the latest rows to draw (more with "Show earlier").
     @State private var shown = 150
     @Environment(\.dismiss) private var dismiss
@@ -130,7 +133,30 @@ struct SessionDetailView: View {
                 .transition(.opacity)
                 }
             }
-            .defaultScrollAnchor(.bottom)
+            // Open at the end; when content grows, don't move what you're reading.
+            .defaultScrollAnchor(.bottom, for: .initialOffset)
+            .onScrollGeometryChange(for: Bool.self) { g in
+                g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 120
+            } action: { _, near in
+                atBottom = near
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if !atBottom && timeline.loaded {
+                    Button {
+                        withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                    } label: {
+                        Image(systemName: "arrow.down")
+                            .font(.body.weight(.semibold))
+                            .padding(11)
+                            .background(.thinMaterial, in: Circle())
+                    }
+                    .tint(Theme.color(for: agent))
+                    .padding(14)
+                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
+                    .accessibilityLabel("Jump to the latest")
+                }
+            }
+            .animation(.easeOut(duration: 0.2), value: atBottom)
             .animation(.easeOut(duration: 0.2), value: timeline.loaded)
             .background(SessionBackground(agent: agent))
             // Like the Claude app: drag the conversation down to pull the keyboard away,
@@ -139,12 +165,18 @@ struct SessionDetailView: View {
             .simultaneousGesture(TapGesture().onEnded {
                 UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
             })
-            .onChange(of: timeline.items.count + timeline.pending.count) {
+            .onChange(of: timeline.items.count) {
+                guard atBottom else { return }
+                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            // A message you send always brings you to the end.
+            .onChange(of: timeline.pending.count) { old, new in
+                guard new > old else { return }
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
             // Follow the reply as it's written.
             .onChange(of: timeline.preview?.count ?? 0) {
-                proxy.scrollTo("bottom", anchor: .bottom)
+                if atBottom { proxy.scrollTo("bottom", anchor: .bottom) }
             }
             // Land on the latest message when it opens and when the history arrives.
             .onChange(of: timeline.loaded, initial: true) { _, loaded in
@@ -418,7 +450,8 @@ struct TimelineRow: View {
     private var line: some View { Rectangle().fill(.quaternary).frame(height: 1) }
 
     private func markdown(_ s: String) -> AttributedString {
-        (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+        let s = ReplyMarkdown.readable(s)
+        return (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
             ?? AttributedString(s)
     }
 }
@@ -1323,7 +1356,7 @@ struct LivePreviewRow: View {
 
     var body: some View {
         HStack(alignment: .lastTextBaseline, spacing: 0) {
-            Text("\(text) \(Text("▍").foregroundStyle(Theme.color(for: agent).opacity(on ? 1 : 0.15)))")
+            Text("\(rendered) \(Text("▍").foregroundStyle(Theme.color(for: agent).opacity(on ? 1 : 0.15)))")
                 .foregroundStyle(.primary.opacity(0.85))
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -1332,6 +1365,15 @@ struct LivePreviewRow: View {
         .onAppear {
             withAnimation(.easeInOut(duration: 0.55).repeatForever()) { on = false }
         }
+    }
+
+    /// Tables the terminal drew, as readable rows (the rest is plain text: the
+    /// terminal already showed any formatting as such).
+    private var rendered: AttributedString {
+        let readable = ReplyMarkdown.readable(text)
+        guard readable != text else { return AttributedString(text) }
+        return (try? AttributedString(markdown: readable, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(readable)
     }
 }
 

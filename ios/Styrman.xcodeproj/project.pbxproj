@@ -37,6 +37,7 @@
 		E03A4B6D854582CE8012D99D /* Pairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70FD8EDA21890B223957635D /* Pairing.swift */; };
 		E30E53A9A11B15D50CA33B40 /* LiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56426288A6A544796DA60352 /* LiveActivity.swift */; };
 		E97A196F13C4270D91A22563 /* NewSessionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26784D644CF00DF837CCAA4B /* NewSessionView.swift */; };
+		F5D0D4F8B03AEDC21491B774 /* ReplyMarkdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02135AE5E7ED4FE40F1D82A3 /* ReplyMarkdown.swift */; };
 		F7DAEB408231CFB5BC40E109 /* SessionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D0ACD1C6115207E5344249C /* SessionListView.swift */; };
 		FB09420B4F8EB90EBC74C700 /* VoiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E25ACD30D61B8467E406440F /* VoiceTests.swift */; };
 		FB2DC8F8D73A3135F5E2B908 /* StyrmanWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 955979A80F95D24A62AF41CC /* StyrmanWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -83,6 +84,7 @@
 
 /* Begin PBXFileReference section */
 		00AE6AE82221B500B2447089 /* Credentials.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Credentials.swift; sourceTree = "<group>"; };
+		02135AE5E7ED4FE40F1D82A3 /* ReplyMarkdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyMarkdown.swift; sourceTree = "<group>"; };
 		0B081D03C8D53B10EB9B1D01 /* ChangesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangesTests.swift; sourceTree = "<group>"; };
 		0DB846A4F79F815E558B4010 /* TranscriptOrderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptOrderTests.swift; sourceTree = "<group>"; };
 		1C6177180C2ABCE5EC6CADE3 /* Notifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notifications.swift; sourceTree = "<group>"; };
@@ -120,7 +122,7 @@
 		D4D877A57441234BC54A95F1 /* StyrmanWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = StyrmanWidgets.entitlements; sourceTree = "<group>"; };
 		E25ACD30D61B8467E406440F /* VoiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceTests.swift; sourceTree = "<group>"; };
 		ECC7E94075932B81BE650100 /* Styrman.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Styrman.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		"TEMP_85CDEB52-EAFD-41C3-8D52-9B280017531F" /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
+		"TEMP_D03E82D4-20A8-448A-9290-C351EDCA0A7A" /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -165,6 +167,7 @@
 			isa = PBXGroup;
 			children = (
 				72FCEE349C47E9D8119B9F44 /* Protocol.swift */,
+				02135AE5E7ED4FE40F1D82A3 /* ReplyMarkdown.swift */,
 				B220CBE574863299DA11C433 /* Timeline.swift */,
 			);
 			path = Model;
@@ -256,10 +259,10 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		"TEMP_0C850FCE-18F3-449F-AE27-EA447E58C0D3" /* ios */ = {
+		"TEMP_41D0069E-0E57-4879-827D-4091BEFECDA1" /* ios */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_85CDEB52-EAFD-41C3-8D52-9B280017531F" /* Signing.xcconfig */,
+				"TEMP_D03E82D4-20A8-448A-9290-C351EDCA0A7A" /* Signing.xcconfig */,
 			);
 			path = ios;
 			sourceTree = "<group>";
@@ -438,6 +441,7 @@
 				E03A4B6D854582CE8012D99D /* Pairing.swift in Sources */,
 				6542962E87DA49169ADCCC5B /* PairingView.swift in Sources */,
 				9A2CCECF57DD603D691229D5 /* Protocol.swift in Sources */,
+				F5D0D4F8B03AEDC21491B774 /* ReplyMarkdown.swift in Sources */,
 				49C3228F71AD43C16091C244 /* SessionDetailView.swift in Sources */,
 				F7DAEB408231CFB5BC40E109 /* SessionListView.swift in Sources */,
 				706EB106558B1B609DC45E2B /* StyrmanApp.swift in Sources */,
@@ -560,7 +564,7 @@
 		};
 		BAA986BF9E9D340762FAAD97 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_85CDEB52-EAFD-41C3-8D52-9B280017531F" /* Signing.xcconfig */;
+			baseConfigurationReference = "TEMP_D03E82D4-20A8-448A-9290-C351EDCA0A7A" /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -659,7 +663,7 @@
 		};
 		ED1BF44AF1A5A2C8867941FD /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_85CDEB52-EAFD-41C3-8D52-9B280017531F" /* Signing.xcconfig */;
+			baseConfigurationReference = "TEMP_D03E82D4-20A8-448A-9290-C351EDCA0A7A" /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;

@@ -48,3 +48,38 @@ import Testing
         #expect(msg.contains("2. `src/upload.rs` (removed line 41): `let res = self.send(req).await?;`"))
     }
 }
+
+@Suite struct ReplyMarkdownTests {
+    @Test func markdownTablesBecomeRows() {
+        let reply = """
+        What's in it
+
+        | Folder | Contents |
+        |---|---|
+        | `runs/` | 638 run folders |
+        | **docs/** | Paper drafts |
+
+        The main data isn't in the repo.
+        """
+        #expect(ReplyMarkdown.readable(reply) == """
+        What's in it
+
+        **`runs/`** — 638 run folders
+        **docs/** — Paper drafts
+
+        The main data isn't in the repo.
+        """)
+    }
+
+    @Test func widerTablesNameTheirColumns() {
+        let t = "| Model | Speed | Cost |\n|:--|--:|---|\n| Haiku | fast | low |"
+        #expect(ReplyMarkdown.readable(t) == "**Haiku** — Speed: fast · Cost: low")
+    }
+
+    @Test func previewRowsWithoutDividerAndPlainTextUntouched() {
+        // As the live preview reads a terminal's box table.
+        #expect(ReplyMarkdown.readable("| Folder | Contents |\n| runs/ | 638 |") == "**runs/** — 638")
+        let plain = "Use a | b for a pipe.\n- item"
+        #expect(ReplyMarkdown.readable(plain) == plain)
+    }
+}

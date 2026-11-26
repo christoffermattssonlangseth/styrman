@@ -452,32 +452,45 @@ pub fn claude_preview(contents: &str) -> Option<String> {
 /// A reply's lines (indent removed) as text: lines the terminal wrapped are joined
 /// back into paragraphs; lists and indented code keep their line breaks. "…" first
 /// if its start has scrolled off.
-fn reflow(mut body: Vec<String>, scrolled: bool) -> Option<String> {
+fn reflow(body: Vec<String>, scrolled: bool) -> Option<String> {
+    let mut body: Vec<String> = body.into_iter().filter_map(table_line).collect();
     while body.last().is_some_and(|l| l.is_empty()) {
         body.pop();
     }
     // Join wrapped lines: a line continues the one before unless it's blank, a list
-    // item, indented (code) or follows a blank line.
+    // item, a table row, indented code, or follows a blank line. Inside a list item
+    // the terminal indents wrapped lines to the item's text: those continue it.
     let mut out = String::new();
     let mut prev_blank = true;
+    let mut in_item = false;
+    let mut prev_row = false;
     for l in &body {
-        let list = l.starts_with("- ")
-            || l.starts_with("* ")
-            || l.split_once(". ")
-                .is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
+        let t = l.trim_start();
+        let item = list_item(t);
+        let row = t.starts_with("| ");
         if l.is_empty() {
             out.push_str("\n\n");
             prev_blank = true;
+            in_item = false;
+            prev_row = false;
             continue;
         }
         if !prev_blank {
-            out.push(if list || l.starts_with("  ") {
-                '\n'
-            } else {
-                ' '
-            });
+            let indented = l.starts_with("  ");
+            let joins = !item && !row && !prev_row && (!indented || in_item);
+            out.push(if joins { ' ' } else { '\n' });
         }
-        out.push_str(l.trim_end());
+        out.push_str(if prev_blank || !in_item || item || row {
+            l.trim_end()
+        } else {
+            t.trim_end()
+        });
+        if item {
+            in_item = true;
+        } else if !l.starts_with("  ") {
+            in_item = false;
+        }
+        prev_row = row;
         prev_blank = false;
     }
     let text = out.trim().to_owned();
@@ -485,6 +498,56 @@ fn reflow(mut body: Vec<String>, scrolled: bool) -> Option<String> {
         return None;
     }
     Some(if scrolled { format!("…{text}") } else { text })
+}
+
+/// "- x", "* x", "12. x" (or "3." still being written).
+fn list_item(t: &str) -> bool {
+    let numbered = |n: &str| !n.is_empty() && n.len() <= 3 && n.chars().all(|c| c.is_ascii_digit());
+    t.starts_with("- ")
+        || t.starts_with("* ")
+        || t.split_once(". ").is_some_and(|(n, _)| numbered(n))
+        || t.strip_suffix('.').is_some_and(numbered)
+}
+
+/// Tables as agents draw them in the terminal: borders (`┌──┬──┐`, `├──┼──┤`) go,
+/// rows (`│ a │ b │`) become `| a | b |`.
+fn table_line(l: String) -> Option<String> {
+    let t = l.trim();
+    if t.is_empty() {
+        return Some(l);
+    }
+    const BOX: &str = "─━┌┐└┘├┤┬┴┼│┃╭╮╰╯═║╔╗╚╝╠╣╦╩╬╞╡╪ ";
+    if t.chars().all(|c| BOX.contains(c)) {
+        return None;
+    }
+    if t.starts_with(['│', '┃', '║']) {
+        let cells: Vec<&str> = t
+            .split(['│', '┃', '║'])
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .collect();
+        return Some(format!("| {} |", cells.join(" | ")));
+    }
+    Some(l)
+}
+
+/// While a long reply is written, its start scrolls off the agent's screen: keep
+/// what was already read and add what's new, so the preview only grows. `seen` is
+/// the preview so far, `now` what the screen shows ("…" first when scrolled).
+pub fn grow_preview(seen: &str, now: &str) -> String {
+    let Some(tail) = now.strip_prefix('…') else {
+        return now.to_owned();
+    };
+    for n in [80, 40, 20] {
+        let probe: String = tail.chars().take(n).collect();
+        if probe.chars().count() < n.min(tail.chars().count()) || probe.is_empty() {
+            continue;
+        }
+        if let Some(i) = seen.rfind(&probe) {
+            return format!("{}{tail}", &seen[..i]);
+        }
+    }
+    now.to_owned()
 }
 
 /// The reply Codex is writing, from its screen: the last `•` block above its input
@@ -1068,7 +1131,11 @@ pub fn run(
                     .unwrap_or_else(|p| p.into_inner())
                     .screen()
                     .contents();
-                let now = read(&contents);
+                // Past a screenful, add to what was read rather than show the tail.
+                let now = read(&contents).map(|n| match &last {
+                    Some(seen) => grow_preview(seen, &n),
+                    None => n,
+                });
                 if now != last {
                     let _ = client.call(&Request::TerminalPreview {
                         launch_id: launch_id.clone(),
@@ -1544,6 +1611,58 @@ mod tests {
             claude_preview(&scrolled).as_deref(),
             Some("…the start is gone and this goes on")
         );
+    }
+
+    #[test]
+    fn previews_keep_list_items_whole_and_tables_readable() {
+        let body = |lines: &[&str]| lines.iter().map(|l| l.to_string()).collect::<Vec<_>>();
+        // A wrapped list item continues; a nested item starts a line.
+        let list = body(&[
+            "Main findings so far:",
+            "1. The tissue carries a disease clock (ρ 0.83 in RR, with one animal",
+            "   held out). The clock is driven by the interferon response.",
+            "2. Two cell-level effects:",
+            "   - Oligodendrocytes near lymphocytes carry an imprint, which",
+            "     replicates in Kukanja et al.",
+            "   - Endothelial collagen IV is a candidate mechanism.",
+            "3.",
+        ]);
+        assert_eq!(
+            reflow(list, false).as_deref(),
+            Some(
+                "Main findings so far:\n1. The tissue carries a disease clock (ρ 0.83 in RR, with one animal held out). The clock is driven by the interferon response.\n2. Two cell-level effects:\n   - Oligodendrocytes near lymphocytes carry an imprint, which replicates in Kukanja et al.\n   - Endothelial collagen IV is a candidate mechanism.\n3."
+            )
+        );
+        // Box-drawn tables: no borders, a row per line.
+        let table = body(&[
+            "What's in it:",
+            "┌──────────┬──────────────────┐",
+            "│ Folder   │ Contents         │",
+            "├──────────┼──────────────────┤",
+            "│ runs/    │ 638 run folders  │",
+            "└──────────┴──────────────────┘",
+        ]);
+        assert_eq!(
+            reflow(table, false).as_deref(),
+            Some("What's in it:\n| Folder | Contents |\n| runs/ | 638 run folders |")
+        );
+    }
+
+    #[test]
+    fn a_long_preview_grows_instead_of_jumping() {
+        let seen = "Intro paragraph that has scrolled away by now.\n\nThe main data isn't in the repo. The atlas sits on external volumes";
+        let now = "…The main data isn't in the repo. The atlas sits on external volumes and the remote Mac.";
+        assert_eq!(
+            grow_preview(seen, now),
+            "Intro paragraph that has scrolled away by now.\n\nThe main data isn't in the repo. The atlas sits on external volumes and the remote Mac."
+        );
+        // Nothing in common (another block): what the screen shows.
+        assert_eq!(
+            grow_preview("Something else entirely.", "…Brand new text here"),
+            "…Brand new text here"
+        );
+        // Not scrolled: the screen has it all.
+        assert_eq!(grow_preview("Old", "New reply"), "New reply");
     }
 
     /// Real Codex 0.172.0 screens (100 columns) while it writes an answer.
