@@ -391,10 +391,12 @@ enum ServerMsg: Decodable, Sendable {
     case preview(session: String, text: String?)
     /// The session's terminal screen, while this phone watches it.
     case screen(session: String, text: String, cols: Int)
+    /// The session folder's uncommitted changes (a unified diff).
+    case changes(session: String, branch: String?, diff: String, truncated: Bool)
     case unknown(type: String)
 
     private enum K: String, CodingKey {
-        case type, `protocol`, host, sessions, session, id, events, event, message, text, position, warnings, listing, cols
+        case type, `protocol`, host, sessions, session, id, events, event, message, text, position, warnings, listing, cols, branch, diff, truncated
         case providers, usageSupported = "usage_supported"
         case daemonVersion = "daemon_version", deviceId = "device_id", lastSeq = "last_seq"
     }
@@ -428,6 +430,10 @@ enum ServerMsg: Decodable, Sendable {
         case "error": self = .error(try c.decode(String.self, forKey: .message))
         case "folders": self = .folders(try c.decode(FolderListing.self, forKey: .listing))
         case "session_starting": self = .sessionStarting(session: try c.decode(String.self, forKey: .session))
+        case "changes": self = .changes(session: try c.decode(String.self, forKey: .session),
+                                        branch: try c.decodeIfPresent(String.self, forKey: .branch),
+                                        diff: try c.decode(String.self, forKey: .diff),
+                                        truncated: (try? c.decode(Bool.self, forKey: .truncated)) ?? false)
         case "screen": self = .screen(session: try c.decode(String.self, forKey: .session),
                                       text: try c.decode(String.self, forKey: .text),
                                       cols: try c.decode(Int.self, forKey: .cols))
@@ -457,6 +463,7 @@ enum ClientMsg: Encodable, Sendable {
     case endSession(session: String)
     case interrupt(session: String)
     case watchScreen(session: String)
+    case getChanges(session: String)
 
     private enum K: String, CodingKey { case type, kind, session, command, request, option, text, token, env, shared, path, agent, cwd, prompt, parent, name, mode, sinceSeq = "since_seq" }
 
@@ -477,6 +484,8 @@ enum ClientMsg: Encodable, Sendable {
             try cmd.encode("resolve_permission", forKey: .type)
             try cmd.encode(request, forKey: .request)
             try cmd.encode(option, forKey: .option)
+        case .getChanges(let s):
+            try c.encode("get_changes", forKey: .type); try c.encode(s, forKey: .session)
         case .watchScreen(let s):
             try c.encode("watch_screen", forKey: .type); try c.encode(s, forKey: .session)
         case .interrupt(let s):

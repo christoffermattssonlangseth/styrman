@@ -889,6 +889,47 @@ impl Connection {
                     }
                 }
             }
+            ClientMsg::GetChanges { session } => {
+                let cwd = self
+                    .daemon
+                    .summary(&session)?
+                    .filter(|s| s.shared)
+                    .and_then(|s| s.cwd);
+                let Some(cwd) = cwd else {
+                    return send(
+                        tx,
+                        &ServerMsg::Error {
+                            message: "This session has no folder to look at.".into(),
+                        },
+                    )
+                    .await;
+                };
+                let read = tokio::task::spawn_blocking(move || crate::changes::read(&cwd)).await;
+                match read {
+                    Ok(Ok(c)) => {
+                        send(
+                            tx,
+                            &ServerMsg::Changes {
+                                session,
+                                branch: c.branch,
+                                diff: c.diff,
+                                truncated: c.truncated,
+                            },
+                        )
+                        .await
+                    }
+                    Ok(Err(e)) => {
+                        send(
+                            tx,
+                            &ServerMsg::Error {
+                                message: format!("{e:#}"),
+                            },
+                        )
+                        .await
+                    }
+                    Err(e) => Err(e.into()),
+                }
+            }
             ClientMsg::WatchScreen { session } => match self.daemon.watch_screen(&session) {
                 Ok(()) => Ok(()),
                 Err(e) => {

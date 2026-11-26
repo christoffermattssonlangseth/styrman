@@ -60,6 +60,10 @@ pub enum ClientMsg {
         parent: String,
         name: String,
     },
+    /// The session folder's uncommitted git changes (answered with `Changes`).
+    GetChanges {
+        session: SessionId,
+    },
     /// Show me this session's terminal for the next 20 s (sent again to keep it up):
     /// the screen comes as `ServerMsg::Screen`. Only for sessions in `styr <agent>`.
     WatchScreen {
@@ -182,6 +186,16 @@ pub enum ServerMsg {
     /// A session started from the phone; it opens as soon as the agent runs.
     SessionStarting {
         session: SessionId,
+    },
+    /// A session folder's uncommitted changes, as a unified diff (new files as
+    /// additions). `truncated`: it was too long and was cut.
+    Changes {
+        session: SessionId,
+        #[serde(default)]
+        branch: Option<String>,
+        diff: String,
+        #[serde(default)]
+        truncated: bool,
     },
     /// The session's terminal as it looks now (plain text, `cols` wide), while a
     /// phone watches it (`ClientMsg::WatchScreen`). Never stored.

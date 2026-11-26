@@ -11,6 +11,7 @@ struct SessionDetailView: View {
     @State private var showReadOnlyHelp = false
     @State private var confirmEnd = false
     @State private var showTerminal = false
+    @State private var showChanges = false
     /// How many of the latest rows to draw (more with "Show earlier").
     @State private var shown = 150
     @Environment(\.dismiss) private var dismiss
@@ -129,12 +130,14 @@ struct SessionDetailView: View {
         // The bar takes the agent's colour, so it's always clear who you're talking to.
         .toolbarBackground(Theme.color(for: agent).opacity(0.07), for: .navigationBar)
         .sheet(isPresented: $showTerminal) { TerminalSheet(sessionId: sessionId, agent: agent) }
+        .sheet(isPresented: $showChanges) { ChangesSheet(sessionId: sessionId, agent: agent, cwd: summary?.cwd) }
         #if DEBUG
         // Screenshots (simulator): STYR_SHOW=terminal opens the terminal of the opened session.
         .task {
-            if ProcessInfo.processInfo.environment["STYR_SHOW"] == "terminal" {
-                try? await Task.sleep(for: .seconds(6))
-                showTerminal = true
+            switch ProcessInfo.processInfo.environment["STYR_SHOW"] {
+            case "terminal": try? await Task.sleep(for: .seconds(6)); showTerminal = true
+            case "changes": try? await Task.sleep(for: .seconds(6)); showChanges = true
+            default: break
             }
         }
         #endif
@@ -202,6 +205,9 @@ struct SessionDetailView: View {
                             if !on { speaker.stop() }
                         })) {
                             Label("Read replies aloud", systemImage: "speaker.wave.2")
+                        }
+                        if summary.cwd != nil {
+                            Button { showChanges = true } label: { Label("Changes", systemImage: "plusminus") }
                         }
                         if summary.inTerminalWrapper {
                             Button { showTerminal = true } label: { Label("Terminal", systemImage: "terminal") }

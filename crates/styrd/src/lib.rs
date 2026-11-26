@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod auth;
+pub mod changes;
 pub mod daemon;
 pub mod follow;
 pub mod ipc;

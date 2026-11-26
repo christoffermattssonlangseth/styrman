@@ -9,6 +9,9 @@ struct FileDiff: Hashable, Sendable {
     struct Line: Hashable, Sendable {
         let kind: Kind
         let text: String
+        /// Line numbers in the old and new file, when the diff says (git's hunks).
+        var old: Int? = nil
+        var new: Int? = nil
     }
 
     var path: String
@@ -151,6 +154,54 @@ struct FileDiff: Hashable, Sendable {
 private extension String {
     func stripping(_ prefix: String) -> String? {
         hasPrefix(prefix) ? String(dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces) : nil
+    }
+}
+
+/// A repository's uncommitted changes (`git diff` text) as one `FileDiff` per file,
+/// with line numbers from the hunk headers.
+enum GitChanges {
+    static func files(_ diff: String) -> [FileDiff] {
+        var files: [FileDiff] = []
+        var current: FileDiff?
+        var old = 0, new = 0
+        func flush() { if let c = current { files.append(c) }; current = nil }
+        for raw in diff.split(separator: "\n", omittingEmptySubsequences: false) {
+            let l = String(raw)
+            if l.hasPrefix("diff --git ") {
+                flush()
+                // "diff --git a/path b/path": the b/ side (renames end up there).
+                let path = l.range(of: " b/", options: .backwards).map { String(l[$0.upperBound...]) } ?? l
+                current = FileDiff(path: path, lines: [])
+            } else if l.hasPrefix("new file mode") {
+                current?.isNew = true
+            } else if l.hasPrefix("deleted file mode") {
+                current?.isDeleted = true
+            } else if l.hasPrefix("+++ ") || l.hasPrefix("--- ") || l.hasPrefix("index ")
+                        || l.hasPrefix("similarity ") || l.hasPrefix("rename ") || l.hasPrefix("old mode") || l.hasPrefix("new mode") {
+                continue
+            } else if l.hasPrefix("@@") {
+                // "@@ -12,5 +12,7 @@ fn x": where each side starts.
+                let parts = l.split(separator: " ")
+                if parts.count >= 3,
+                   let o = Int(parts[1].dropFirst().split(separator: ",").first ?? ""),
+                   let n = Int(parts[2].dropFirst().split(separator: ",").first ?? "") {
+                    old = o; new = n
+                    if current?.lines.isEmpty == false { current?.lines.append(FileDiff.Line(kind: .gap, text: "")) }
+                } else {
+                    // "@@ binary file: not shown @@" and the like.
+                    current?.lines.append(FileDiff.Line(kind: .gap, text: l.trimmingCharacters(in: CharacterSet(charactersIn: "@ "))))
+                }
+            } else if l.hasPrefix("+") {
+                current?.lines.append(FileDiff.Line(kind: .added, text: String(l.dropFirst()), new: new)); new += 1
+            } else if l.hasPrefix("-") {
+                current?.lines.append(FileDiff.Line(kind: .removed, text: String(l.dropFirst()), old: old)); old += 1
+            } else if l.hasPrefix(" ") {
+                current?.lines.append(FileDiff.Line(kind: .context, text: String(l.dropFirst()), old: old, new: new))
+                old += 1; new += 1
+            }
+        }
+        flush()
+        return files
     }
 }
 
