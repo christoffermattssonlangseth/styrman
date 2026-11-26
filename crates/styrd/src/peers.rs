@@ -21,6 +21,8 @@ use styr_core::ipc::{SessionSummary, SessionUpdate};
 /// At most this many asks per sender in `RATE_WINDOW`.
 const RATE_LIMIT: usize = 10;
 const RATE_WINDOW: Duration = Duration::from_secs(600);
+/// At most this many sessions started by asking, per sender in `RATE_WINDOW`.
+const START_LIMIT: usize = 3;
 /// A asks B, B asks C: fine. A deeper chain is refused.
 const MAX_DEPTH: usize = 2;
 /// The device id of a message sent by an agent: `agent:<session>` (`agent:mac` when
@@ -145,10 +147,40 @@ impl Daemon {
         let text = text.trim();
         anyhow::ensure!(!text.is_empty(), "nothing to ask");
         let from = launch.and_then(|l| self.session_of_launch(l));
-        let target = self.resolve_peer(to, from.as_ref().map(|s| &s.id))?;
         let key = from
             .as_ref()
             .map_or_else(|| "mac".to_owned(), |s| s.id.to_string());
+        let device = DeviceId::from(format!("{AGENT_DEVICE_PREFIX}{key}").as_str());
+        let target = match self.peer_for(to, from.as_ref())? {
+            Peer::Running(s) => s,
+            Peer::Start(agent, cwd) => {
+                // None of that agent in the asker's folder: start one there, with
+                // the message as its first prompt.
+                self.count_send(&key, true)?;
+                let message = labelled(from.as_ref(), text);
+                let mut bus = self.subscribe();
+                let id = self.start_session(
+                    agent,
+                    &cwd.to_string_lossy(),
+                    Some(message.clone()),
+                    device,
+                )?;
+                let target = self.summary(&id)?.context("the new session vanished")?;
+                if let Some(f) = &from {
+                    self.note(
+                        f,
+                        format!("Started {} for this and asked: {}", who(&target), text),
+                    );
+                }
+                tracing::info!(to = %id, from = %key, "agent started another agent to ask it");
+                let Some(limit) = wait else {
+                    return Ok(AskOutcome::Sent);
+                };
+                return Ok(self
+                    .await_reply(&mut bus, from.as_ref(), &target, &message, limit)
+                    .await);
+            }
+        };
 
         // Guards.
         {
@@ -183,26 +215,11 @@ impl Daemon {
                 );
             }
         }
-        {
-            let mut sent = self
-                .peer_state
-                .sent
-                .lock()
-                .unwrap_or_else(|p| p.into_inner());
-            let q = sent.entry(key.clone()).or_default();
-            while q.front().is_some_and(|t| t.elapsed() > RATE_WINDOW) {
-                q.pop_front();
-            }
-            if q.len() >= RATE_LIMIT {
-                bail!("rate limit: at most {RATE_LIMIT} messages to other agents per 10 minutes");
-            }
-            q.push_back(Instant::now());
-        }
+        self.count_send(&key, false)?;
 
         // Listen before sending, so the reply can't slip past.
         let mut bus = self.subscribe();
         let message = labelled(from.as_ref(), text);
-        let device = DeviceId::from(format!("{AGENT_DEVICE_PREFIX}{key}").as_str());
         self.send_prompt(&target.id, &message, device)
             .with_context(|| format!("couldn't reach {}", who(&target)))?;
         if let Some(f) = &from {
@@ -212,21 +229,58 @@ impl Daemon {
         let Some(limit) = wait else {
             return Ok(AskOutcome::Sent);
         };
+        Ok(self
+            .await_reply(&mut bus, from.as_ref(), &target, &message, limit)
+            .await)
+    }
 
-        if let Some(f) = &from {
+    /// Rate limits per sender: messages, and fewer new sessions started.
+    fn count_send(&self, key: &str, starts: bool) -> Result<()> {
+        let mut sent = self
+            .peer_state
+            .sent
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let mut check = |k: String, limit: usize, what: &str| -> Result<()> {
+            let q = sent.entry(k).or_default();
+            while q.front().is_some_and(|t| t.elapsed() > RATE_WINDOW) {
+                q.pop_front();
+            }
+            if q.len() >= limit {
+                bail!("rate limit: at most {limit} {what} per 10 minutes");
+            }
+            q.push_back(Instant::now());
+            Ok(())
+        };
+        if starts {
+            check(format!("{key}:starts"), START_LIMIT, "new agent sessions")?;
+        }
+        check(key.to_owned(), RATE_LIMIT, "messages to other agents")
+    }
+
+    /// Wait for `target`'s answer to `message`, noting it in the asker's session.
+    async fn await_reply(
+        &self,
+        bus: &mut tokio::sync::broadcast::Receiver<BusMsg>,
+        from: Option<&SessionSummary>,
+        target: &SessionSummary,
+        message: &str,
+        limit: Duration,
+    ) -> AskOutcome {
+        if let Some(f) = from {
             self.peer_state
                 .pending
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .insert(target.id.clone(), f.id.clone());
         }
-        let outcome = wait_for_reply(&mut bus, &target.id, &message, limit).await;
+        let outcome = wait_for_reply(bus, &target.id, message, limit).await;
         self.peer_state
             .pending
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .remove(&target.id);
-        if let Some(f) = &from {
+        if let Some(f) = from {
             match &outcome {
                 AskOutcome::Reply(r) => {
                     self.note(f, format!("{} replied: {}", who(&target), short(r, 400)))
@@ -237,8 +291,52 @@ impl Daemon {
                 AskOutcome::Sent => {}
             }
         }
-        Ok(outcome)
+        outcome
     }
+
+    /// Who `to` means. An agent name, asked from a session in a folder, means that
+    /// agent in the same folder: the one running there, or a new one started there.
+    /// Never one busy with another project just because it's the only one shared.
+    fn peer_for(&self, to: &str, from: Option<&SessionSummary>) -> Result<Peer> {
+        let t = to.trim().to_lowercase();
+        let agent = [AgentKind::Claude, AgentKind::Codex, AgentKind::Antigravity]
+            .into_iter()
+            .find(|a| agent_label(*a).to_lowercase() == t || a.as_str() == t);
+        let (Some(agent), Some(cwd)) = (agent, from.and_then(|f| f.cwd.clone())) else {
+            return self
+                .resolve_peer(to, from.map(|s| &s.id))
+                .map(Peer::Running);
+        };
+        let here: Vec<SessionSummary> = self
+            .peers(from.map(|s| &s.id))?
+            .into_iter()
+            .filter(|s| s.agent == agent && s.cwd.as_ref() == Some(&cwd))
+            .collect();
+        match here.as_slice() {
+            [] => Ok(Peer::Start(agent, cwd)),
+            [one] => Ok(Peer::Running(one.clone())),
+            several => {
+                // Rather one that's free.
+                let free: Vec<_> = several
+                    .iter()
+                    .filter(|s| s.status == styr_core::SessionStatus::Waiting)
+                    .collect();
+                match free.as_slice() {
+                    [one] => Ok(Peer::Running((*one).clone())),
+                    _ => bail!(
+                        "several {} sessions run in this folder; use the id from `styr peers`",
+                        agent_label(agent)
+                    ),
+                }
+            }
+        }
+    }
+}
+
+enum Peer {
+    Running(SessionSummary),
+    /// Start this agent in this folder.
+    Start(AgentKind, std::path::PathBuf),
 }
 
 fn short(s: &str, max: usize) -> String {

@@ -491,6 +491,77 @@ async fn another_model_restarts_the_agent_as_the_same_session() {
     d.stop().await;
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn asking_an_agent_by_name_means_the_one_in_your_folder() {
+    let d = Daemon::start().await;
+    // Claude in /work/repo; Codex only in another project.
+    for (event, extra) in [
+        ("SessionStart", json!({"source": "startup"})),
+        ("UserPromptSubmit", json!({"prompt": "/styr"})),
+    ] {
+        d.call(Request::Hook {
+            hook: with_launch(hook("a1", event, extra.clone()), "LA"),
+        })
+        .await;
+        let mut h = codex_hook("x1", event, extra, "LX");
+        h.payload["cwd"] = json!("/work/other");
+        d.call(Request::Hook { hook: h }).await;
+    }
+    let elsewhere = attach(&d, "LX");
+    settle().await;
+    let ask = |to: &'static str| {
+        let c = Client::new(&d.paths.socket).with_timeout(None);
+        tokio::task::spawn_blocking(move || {
+            c.call(&Request::Ask {
+                launch_id: Some("LA".into()),
+                to: to.into(),
+                text: "review this".into(),
+                wait_secs: None,
+            })
+        })
+    };
+    // No Codex in /work/repo: it would start one there (not possible here: the
+    // folder doesn't exist), never use the one busy with another project.
+    let r = ask("codex").await.unwrap();
+    assert!(r.is_err(), "{r:?}");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !elsewhere.is_finished(),
+        "the Codex in /work/other got nothing"
+    );
+    // Its id still reaches it on purpose.
+    let Response::Sessions { sessions } = d
+        .call(Request::ListSessions {
+            include_unshared: false,
+        })
+        .await
+    else {
+        panic!()
+    };
+    let other = sessions
+        .iter()
+        .find(|s| s.native_id == "x1")
+        .unwrap()
+        .id
+        .to_string();
+    let c = Client::new(&d.paths.socket).with_timeout(None);
+    let by_id = tokio::task::spawn_blocking(move || {
+        c.call(&Request::Ask {
+            launch_id: Some("LA".into()),
+            to: other,
+            text: "review this".into(),
+            wait_secs: None,
+        })
+    });
+    let typed = tokio::time::timeout(Duration::from_secs(5), elsewhere)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(typed, Response::TypePrompt { .. }), "{typed:?}");
+    assert!(by_id.await.unwrap().is_ok());
+    d.stop().await;
+}
+
 fn agy_hook(conv: &str, event: &str, extra: Value, launch: &str) -> RawHook {
     let mut payload = json!({"conversationId": conv, "cwd": "/work/repo", "hookEventName": event});
     payload
