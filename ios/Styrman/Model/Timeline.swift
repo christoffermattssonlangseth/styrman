@@ -75,7 +75,29 @@ final class SessionTimeline {
     /// the real message (or anything else from the agent) arrives.
     private(set) var preview: String?
 
+    /// A shorter preview waiting to be shown (see `showPreview`).
+    @ObservationIgnored private var shrinkTask: Task<Void, Never>?
+
     func showPreview(_ text: String?) {
+        // A preview that gets shorter (or goes) waits a moment: a terminal redrawing
+        // can flip between two readings, and the conversation would jump with each.
+        // If a reading at least as long comes back meanwhile, the shorter one is
+        // never shown. (Real messages and the turn ending clear it at once.)
+        let now = (text ?? "").count
+        if let current = preview, now < current.count {
+            shrinkTask?.cancel()
+            shrinkTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                self?.setPreview(text)
+            }
+            return
+        }
+        shrinkTask?.cancel()
+        setPreview(text)
+    }
+
+    private func setPreview(_ text: String?) {
         guard let text, !text.isEmpty else { preview = nil; return }
         // Already here as a message (the screen redrew a finished reply): no echo.
         let squash = { (s: String) in s.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
@@ -235,6 +257,7 @@ final class SessionTimeline {
         let key = "\(e.seq)"
         switch e.kind {
         case .assistantMessage, .userMessage, .toolCall, .permissionRequested, .turnEnded, .sessionEnded:
+            shrinkTask?.cancel()
             preview = nil
         default:
             break

@@ -63,4 +63,21 @@ private let tool = #"{"type":"tool_call","call":"c1","tool":{"name":"Bash","kind
         t.showPreview(nil)
         #expect(t.preview == nil)
     }
+
+    /// A terminal flipping between a longer and a shorter reading (a blinking
+    /// marker) mustn't make the preview, and the conversation, jump.
+    @MainActor @Test func aFlipFloppingPreviewHoldsStill() async throws {
+        let t = SessionTimeline(sessionId: "S")
+        let long = "While they review, I'll start.\n\nWriting the helpers"
+        t.showPreview(long)
+        t.showPreview("Writing the helpers")
+        #expect(t.preview == long, "a shorter reading waits")
+        t.showPreview(long)
+        try await Task.sleep(for: .milliseconds(1_200))
+        #expect(t.preview == long, "it came back: the shorter one never showed")
+        t.showPreview(nil)
+        #expect(t.preview == long)
+        try await Task.sleep(for: .milliseconds(1_200))
+        #expect(t.preview == nil, "gone for real after a moment")
+    }
 }
