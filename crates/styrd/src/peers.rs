@@ -283,10 +283,10 @@ impl Daemon {
         if let Some(f) = from {
             match &outcome {
                 AskOutcome::Reply(r) => {
-                    self.note(f, format!("{} replied: {}", who(&target), short(r, 400)))
+                    self.note(f, format!("{} replied: {}", who(target), short(r, 400)))
                 }
                 AskOutcome::TimedOut => {
-                    self.note(f, format!("No reply from {} in time", who(&target)))
+                    self.note(f, format!("No reply from {} in time", who(target)))
                 }
                 AskOutcome::Sent => {}
             }
