@@ -110,7 +110,7 @@ struct NewSessionView: View {
                     TextField("First message (optional)", text: $firstMessage, axis: .vertical)
                         .lineLimit(1...5)
                 } footer: {
-                    Text("Opens a new cmux tab on your Mac running \(agent?.displayName ?? "the agent") in this folder, shared with this phone. Approvals work as usual.")
+                    Text("Opens a new terminal on your Mac (a cmux tab, or tmux or a Terminal window without cmux) running \(agent?.displayName ?? "the agent") in this folder, shared with this phone. Approvals work as usual.")
                 }
             }
             .navigationTitle("New session")

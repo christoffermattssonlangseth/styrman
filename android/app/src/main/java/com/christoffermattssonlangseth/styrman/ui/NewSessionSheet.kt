@@ -42,7 +42,7 @@ import androidx.compose.ui.unit.dp
 import com.christoffermattssonlangseth.styrman.AgentKind
 import com.christoffermattssonlangseth.styrman.DaemonConnection
 
-/** Start a session on the Mac: an agent and a folder in your home; it opens in a new cmux tab. */
+/** Start a session on the Mac: an agent and a folder in your home; it opens in a new terminal (cmux, tmux or Terminal). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NewSessionSheet(connection: DaemonConnection, onDismiss: () -> Unit) {
@@ -121,7 +121,7 @@ fun NewSessionSheet(connection: DaemonConnection, onDismiss: () -> Unit) {
             }
             OutlinedTextField(first, { first = it }, label = { Text("First message (optional)") }, modifier = Modifier.fillMaxWidth(), maxLines = 4)
             Text(
-                "Opens a new cmux tab on your Mac running ${agent?.displayName ?: "the agent"} in this folder, shared with this phone.",
+                "Opens a new terminal on your Mac (a cmux tab, or tmux or a Terminal window without cmux) running ${agent?.displayName ?: "the agent"} in this folder, shared with this phone.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             if (askNewFolder) androidx.compose.material3.AlertDialog(

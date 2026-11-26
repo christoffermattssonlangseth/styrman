@@ -182,7 +182,8 @@ impl Daemon {
         self.list_folders(Some(&path.to_string_lossy()))
     }
 
-    /// Open a new cmux tab in `cwd` running `agent`, shared with the phone. Returns the
+    /// Open a new terminal in `cwd` running `agent` (see `open_terminal`), shared with
+    /// the phone. Returns the
     /// session (a placeholder until the agent's first hook adopts it). `prompt` is
     /// typed into the agent once it's ready for input.
     pub fn start_session(
@@ -197,7 +198,6 @@ impl Daemon {
             bail!("{} isn't set up on the Mac (run `styr setup`)", agent);
         }
         let cwd = inside_home(Path::new(cwd))?;
-        let cmux = cmux_bin().context("cmux isn't installed on the Mac")?;
         let launch = random_hex();
         self.share_launch(&launch, true, Some(agent), Some(cwd.clone()), None)?;
         let session = self
@@ -215,50 +215,25 @@ impl Daemon {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| "~".into());
-        // The command is typed into the tab's own shell, so it goes through cmux's and
-        // Styrman's routing exactly like typing `codex` there. Only fixed text and a
-        // hex id go into it; the folder is passed separately.
-        let mut cmd = std::process::Command::new(&cmux);
-        cmd.env("CMUX_QUIET", "1");
-        // styrd isn't a cmux process: cmux lets it in with the password `styr setup`
-        // set up (password mode).
-        if let Some(pw) = home()
-            .ok()
-            .and_then(|h| std::fs::read_to_string(h.join(".styrman/cmux-password")).ok())
-        {
-            cmd.env("CMUX_SOCKET_PASSWORD", pw.trim());
-        }
-        let out = cmd
-            .args([
-                "new-workspace",
-                "--name",
-                &format!("{} · {folder}", agent_label(agent)),
-            ])
-            .arg("--cwd")
-            .arg(&cwd)
-            .args([
-                "--command",
-                &format!("STYR_PRESET_LAUNCH_ID={launch} {name}"),
-            ])
-            .args(["--focus", "false"])
-            .output()
-            .context("couldn't run cmux")?;
-        if !out.status.success() {
-            let mut why = String::from_utf8_lossy(&out.stderr).trim().to_owned();
-            if why.contains("Access denied") {
-                why = "cmux only lets its own programs open tabs. Run `styr setup` on the Mac to allow Styrman.".into();
+        let title = format!("{} · {folder}", agent_label(agent));
+        // Only fixed text and a hex id go into the command; the folder is passed
+        // separately (or quoted).
+        let command = format!("STYR_PRESET_LAUNCH_ID={launch} {name}");
+        let opened = match open_terminal(&title, &cwd, &command, &launch) {
+            Ok(w) => w,
+            Err(e) => {
+                self.end_unstarted(&session, &format!("{e:#}"));
+                return Err(e);
             }
-            self.end_unstarted(&session, &format!("cmux couldn't open a tab: {why}"));
-            bail!("cmux couldn't open a tab: {why}");
-        }
-        tracing::info!(%session, %agent, cwd = %cwd.display(), "started from the phone");
+        };
+        tracing::info!(%session, %agent, cwd = %cwd.display(), %opened, "started from the phone");
         // If the agent never comes up (cmux closed, agent missing), say so.
         let d = self.clone();
         let s = session.clone();
         tokio::spawn(async move {
             tokio::time::sleep(START_GRACE).await;
             if !d.terminals.is_live(&s) {
-                d.end_unstarted(&s, "The agent didn't start in the new cmux tab.");
+                d.end_unstarted(&s, &format!("The agent didn't start in the new {opened}."));
             }
         });
         Ok(session)
@@ -289,6 +264,116 @@ impl Daemon {
     }
 }
 
+/// Where a session from the phone runs: a new cmux tab if cmux is there (its own
+/// shell, so its and Styrman's routing apply as when you type the command), else a
+/// tmux session (`tmux attach` to see it), else a Terminal window. Returns what was
+/// opened, for messages.
+fn open_terminal(title: &str, cwd: &Path, command: &str, launch: &str) -> Result<&'static str> {
+    let mut why = vec![];
+    if let Some(cmux) = cmux_bin() {
+        let mut cmd = std::process::Command::new(&cmux);
+        cmd.env("CMUX_QUIET", "1");
+        // styrd isn't a cmux process: cmux lets it in with the password `styr setup`
+        // set up (password mode).
+        if let Some(pw) = home()
+            .ok()
+            .and_then(|h| std::fs::read_to_string(h.join(".styrman/cmux-password")).ok())
+        {
+            cmd.env("CMUX_SOCKET_PASSWORD", pw.trim());
+        }
+        let out = cmd
+            .args(["new-workspace", "--name", title])
+            .arg("--cwd")
+            .arg(cwd)
+            .args(["--command", command])
+            .args(["--focus", "false"])
+            .output()
+            .context("couldn't run cmux")?;
+        if out.status.success() {
+            return Ok("cmux tab");
+        }
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+        if err.contains("Access denied") {
+            bail!(
+                "cmux couldn't open a tab: cmux only lets its own programs open tabs. Run `styr setup` on the Mac to allow Styrman."
+            );
+        }
+        // Not running, most likely: try the others.
+        tracing::info!("cmux couldn't open a tab ({err}); trying tmux or Terminal");
+        why.push(format!("cmux: {err}"));
+    }
+    if let Some(tmux) = tmux_bin() {
+        let out = std::process::Command::new(tmux)
+            .args(tmux_args(cwd, command, launch, &login_shell()))
+            .output()
+            .context("couldn't run tmux")?;
+        if out.status.success() {
+            return Ok("tmux session");
+        }
+        why.push(format!(
+            "tmux: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    let out = std::process::Command::new("/usr/bin/osascript")
+        .args(["-e", &terminal_script(cwd, command)])
+        .output()
+        .context("couldn't run osascript")?;
+    if out.status.success() {
+        return Ok("Terminal window");
+    }
+    why.push(format!(
+        "Terminal: {}",
+        String::from_utf8_lossy(&out.stderr).trim()
+    ));
+    bail!("Couldn't open a terminal on the Mac ({})", why.join("; "))
+}
+
+fn tmux_bin() -> Option<PathBuf> {
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|p| std::env::split_paths(&p).collect())
+        .unwrap_or_default();
+    dirs.extend(["/opt/homebrew/bin".into(), "/usr/local/bin".into()]);
+    dirs.into_iter()
+        .map(|d| d.join("tmux"))
+        .find(|p| p.is_file())
+}
+
+fn login_shell() -> String {
+    std::env::var("SHELL")
+        .ok()
+        .filter(|s| s.starts_with('/'))
+        .unwrap_or_else(|| "/bin/zsh".into())
+}
+
+/// A detached tmux session in `cwd` running `command` in the user's login shell (for
+/// their PATH, as in a terminal); it closes when the agent quits.
+fn tmux_args(cwd: &Path, command: &str, launch: &str, shell: &str) -> Vec<std::ffi::OsString> {
+    vec![
+        "new-session".into(),
+        "-d".into(),
+        "-s".into(),
+        format!("styr-{}", &launch[..launch.len().min(8)]).into(),
+        "-c".into(),
+        cwd.into(),
+        shell.into(),
+        "-lic".into(),
+        command.into(),
+    ]
+}
+
+/// `'it''s'` for the shell: single quotes, with any inside closed and escaped.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// AppleScript that opens a Terminal window running `command` in `cwd`.
+fn terminal_script(cwd: &Path, command: &str) -> String {
+    let line = format!("cd {} && {command}", shell_quote(&cwd.to_string_lossy()));
+    let escaped = line.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("tell application \"Terminal\" to do script \"{escaped}\"")
+}
+
 fn agent_label(agent: AgentKind) -> &'static str {
     match agent {
         AgentKind::Claude => "Claude",
@@ -301,6 +386,35 @@ fn agent_label(agent: AgentKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tmux_and_terminal_commands_quote_the_folder() {
+        let cwd = Path::new("/Users/me/it's \"odd\" \\ dir");
+        let cmd = "STYR_PRESET_LAUNCH_ID=0123456789abcdef claude";
+        let args: Vec<String> = tmux_args(cwd, cmd, "0123456789abcdef", "/bin/zsh")
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "new-session",
+                "-d",
+                "-s",
+                "styr-01234567",
+                "-c",
+                "/Users/me/it's \"odd\" \\ dir",
+                "/bin/zsh",
+                "-lic",
+                cmd
+            ]
+        );
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+        assert_eq!(
+            terminal_script(cwd, cmd),
+            r#"tell application "Terminal" to do script "cd '/Users/me/it'\\''s \"odd\" \\ dir' && STYR_PRESET_LAUNCH_ID=0123456789abcdef claude""#
+        );
+    }
 
     #[test]
     fn folder_names_are_one_plain_component() {
