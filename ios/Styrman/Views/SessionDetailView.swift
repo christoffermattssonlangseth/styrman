@@ -50,6 +50,67 @@ struct SessionDetailView: View {
         let timeline = connection.timeline(for: sessionId)
         let summary = connection.session(sessionId)
         let agent = summary?.agent ?? .unknown
+        conversation(timeline, summary: summary, agent: agent)
+        .navigationTitle(summary?.repoName ?? "Session")
+        .navigationBarTitleDisplayMode(.inline)
+        // The bar takes the agent's colour, so it's always clear who you're talking to.
+        .toolbarBackground(Theme.color(for: agent).opacity(0.07), for: .navigationBar)
+        .sheet(isPresented: $showTerminal) { TerminalSheet(sessionId: sessionId, agent: agent) }
+        .sheet(isPresented: $showChanges) { ChangesSheet(sessionId: sessionId, agent: agent, cwd: summary?.cwd) }
+        #if DEBUG
+        // Screenshots (simulator): STYR_SHOW=terminal opens the terminal of the opened session.
+        .task {
+            switch ProcessInfo.processInfo.environment["STYR_SHOW"] {
+            case "terminal": try? await Task.sleep(for: .seconds(6)); showTerminal = true
+            case "changes": try? await Task.sleep(for: .seconds(6)); showChanges = true
+            default: break
+            }
+        }
+        #endif
+        .confirmationDialog("End this session?", isPresented: $confirmEnd, titleVisibility: .visible) {
+            Button("End session", role: .destructive) {
+                connection.endSession(sessionId)
+                dismiss()
+            }
+        } message: {
+            Text(EndSessionText.message(summary))
+        }
+        .toolbarBackground(.visible, for: .navigationBar)
+        .toolbar { if let summary { toolbarItems(summary) } }
+        .overlay(alignment: .top) {
+            if let error = connection.lastError {
+                Text(error)
+                    .font(.footnote).padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(.thinMaterial, in: Capsule())
+                    .padding(.top, 8)
+                    .task {
+                        try? await Task.sleep(for: .seconds(3))
+                        connection.lastError = nil
+                    }
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            bottomBar(timeline, summary: summary)
+            .animation(.snappy, value: openPermission(timeline)?.request)
+        }
+
+        .onAppear { connection.watch(sessionId) }
+        .onChange(of: timeline.isLive, initial: true) { _, live in
+            if live, baseline == nil { baseline = .some(latestReply(timeline)?.id) }
+        }
+        .onDisappear {
+            connection.unwatch(sessionId)
+            speaker.stop()
+        }
+        // Read new replies aloud as they arrive (when switched on).
+        .onChange(of: latestReply(timeline)?.id) { _, id in
+            guard let seen = baseline, let id, id != seen, let r = latestReply(timeline) else { return }
+            baseline = .some(id)
+            if speaker.autoRead { speaker.speak(r.text, id: r.id, agent: agent) }
+        }
+    }
+
+    private func conversation(_ timeline: SessionTimeline, summary: SessionSummary?, agent: AgentKind) -> some View {
         ScrollViewReader { proxy in
             ScrollView {
                 if !timeline.loaded {
@@ -61,44 +122,7 @@ struct SessionDetailView: View {
                     }
                     .frame(maxWidth: .infinity).padding(.top, 160)
                 } else {
-                // A plain (not lazy) stack: a lazy one anchored to the bottom sometimes
-                // left its scroll position past the content, a blank screen until you
-                // scrolled. Only the latest rows are drawn, so long sessions stay quick.
-                VStack(alignment: .leading, spacing: 12) {
-                    let latest = latestReply(timeline)?.id
-                    let rows = DisplayRow.rows(merged(timeline.items))
-                    if rows.count > shown {
-                        Button("Show earlier") { shown += 150 }
-                            .font(.footnote.weight(.medium))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 4)
-                    }
-                    ForEach(rows.suffix(shown)) { row in
-                        switch row {
-                        case .item(let item):
-                            TimelineRow(item: item, cwd: summary?.cwd, sessionId: sessionId, agent: agent,
-                                        latestReplyId: latest).id(item.id)
-                        case .tools(let id, let tools):
-                            ToolRunCard(tools: tools, cwd: summary?.cwd).id(id)
-                        }
-                    }
-                    ForEach(timeline.pending) { p in
-                        PendingPromptRow(prompt: p) { timeline.dismissUnconfirmed(p.id) }
-                    }
-                    if let text = timeline.preview, summary?.status == .working {
-                        LivePreviewRow(text: text, agent: agent).id("preview")
-                    }
-                    if timeline.isLive && !timeline.hasContent && timeline.pending.isEmpty {
-                        VStack(spacing: 6) {
-                            Image(systemName: "ellipsis.bubble").font(.title2).foregroundStyle(.tertiary)
-                            Text("Nothing yet").font(.headline)
-                            Text("Prompts, tool calls and replies show up here as they happen.")
-                                .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                        }
-                        .frame(maxWidth: .infinity).padding(.top, 40)
-                    }
-                    Color.clear.frame(height: 1).id("bottom")
-                }
+                    messages(timeline, summary: summary, agent: agent)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
                 .transition(.opacity)
@@ -125,189 +149,178 @@ struct SessionDetailView: View {
                 if loaded { Task { @MainActor in proxy.scrollTo("bottom", anchor: .bottom) } }
             }
         }
-        .navigationTitle(summary?.repoName ?? "Session")
-        .navigationBarTitleDisplayMode(.inline)
-        // The bar takes the agent's colour, so it's always clear who you're talking to.
-        .toolbarBackground(Theme.color(for: agent).opacity(0.07), for: .navigationBar)
-        .sheet(isPresented: $showTerminal) { TerminalSheet(sessionId: sessionId, agent: agent) }
-        .sheet(isPresented: $showChanges) { ChangesSheet(sessionId: sessionId, agent: agent, cwd: summary?.cwd) }
-        #if DEBUG
-        // Screenshots (simulator): STYR_SHOW=terminal opens the terminal of the opened session.
-        .task {
-            switch ProcessInfo.processInfo.environment["STYR_SHOW"] {
-            case "terminal": try? await Task.sleep(for: .seconds(6)); showTerminal = true
-            case "changes": try? await Task.sleep(for: .seconds(6)); showChanges = true
-            default: break
+    }
+
+    private func messages(_ timeline: SessionTimeline, summary: SessionSummary?, agent: AgentKind) -> some View {
+            // A plain (not lazy) stack: a lazy one anchored to the bottom sometimes
+            // left its scroll position past the content, a blank screen until you
+            // scrolled. Only the latest rows are drawn, so long sessions stay quick.
+            VStack(alignment: .leading, spacing: 12) {
+                let latest = latestReply(timeline)?.id
+                let rows = DisplayRow.rows(merged(timeline.items))
+                if rows.count > shown {
+                    Button("Show earlier") { shown += 150 }
+                        .font(.footnote.weight(.medium))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                }
+                ForEach(rows.suffix(shown)) { row in
+                    switch row {
+                    case .item(let item):
+                        TimelineRow(item: item, cwd: summary?.cwd, sessionId: sessionId, agent: agent,
+                                    latestReplyId: latest).id(item.id)
+                    case .tools(let id, let tools):
+                        ToolRunCard(tools: tools, cwd: summary?.cwd).id(id)
+                    }
+                }
+                ForEach(timeline.pending) { p in
+                    PendingPromptRow(prompt: p) { timeline.dismissUnconfirmed(p.id) }
+                }
+                if let text = timeline.preview, summary?.status == .working {
+                    LivePreviewRow(text: text, agent: agent).id("preview")
+                }
+                if timeline.isLive && !timeline.hasContent && timeline.pending.isEmpty {
+                    VStack(spacing: 6) {
+                        Image(systemName: "ellipsis.bubble").font(.title2).foregroundStyle(.tertiary)
+                        Text("Nothing yet").font(.headline)
+                        Text("Prompts, tool calls and replies show up here as they happen.")
+                            .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity).padding(.top, 40)
+                }
+                Color.clear.frame(height: 1).id("bottom")
             }
-        }
-        #endif
-        .confirmationDialog("End this session?", isPresented: $confirmEnd, titleVisibility: .visible) {
-            Button("End session", role: .destructive) {
-                connection.endSession(sessionId)
-                dismiss()
-            }
-        } message: {
-            Text(EndSessionText.message(summary))
-        }
-        .toolbarBackground(.visible, for: .navigationBar)
-        .toolbar {
-            if let summary {
-                ToolbarItem(placement: .principal) {
-                    HStack(spacing: 8) {
-                        AgentAvatar(agent: summary.agent, size: 28)
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(summary.repoName).font(.headline).lineLimit(1)
-                            HStack(spacing: 4) {
-                                Text(summary.agent.displayName).foregroundStyle(Theme.color(for: summary.agent))
+    }
+
+    @ToolbarContentBuilder
+    private func toolbarItems(_ summary: SessionSummary) -> some ToolbarContent {
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 8) {
+                    AgentAvatar(agent: summary.agent, size: 28)
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(summary.repoName).font(.headline).lineLimit(1)
+                        HStack(spacing: 4) {
+                            Text(summary.agent.displayName).foregroundStyle(Theme.color(for: summary.agent))
+                            Text("·").foregroundStyle(.tertiary)
+                            Text(Theme.label(for: summary.status))
+                                .foregroundStyle(summary.status.needsUser ? AnyShapeStyle(Theme.attention) : AnyShapeStyle(.secondary))
+                                .contentTransition(.opacity)
+                            if summary.status == .working {
+                                Image(systemName: "circle.fill").font(.system(size: 5)).foregroundStyle(Theme.accent)
+                                    .symbolEffect(.pulse, options: .repeating)
+                            }
+                            if let mode = summary.mode.flatMap(PermissionMode.init), mode != .manual {
                                 Text("·").foregroundStyle(.tertiary)
-                                Text(Theme.label(for: summary.status))
-                                    .foregroundStyle(summary.status.needsUser ? AnyShapeStyle(Theme.attention) : AnyShapeStyle(.secondary))
-                                    .contentTransition(.opacity)
-                                if summary.status == .working {
-                                    Image(systemName: "circle.fill").font(.system(size: 5)).foregroundStyle(Theme.accent)
-                                        .symbolEffect(.pulse, options: .repeating)
-                                }
-                                if let mode = summary.mode.flatMap(PermissionMode.init), mode != .manual {
-                                    Text("·").foregroundStyle(.tertiary)
-                                    Text(mode.short)
-                                        .fixedSize()
-                                        .foregroundStyle(mode == .bypassPermissions ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
-                                        .accessibilityLabel("\(mode.label) mode")
-                                }
+                                Text(mode.short)
+                                    .fixedSize()
+                                    .foregroundStyle(mode == .bypassPermissions ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                                    .accessibilityLabel("\(mode.label) mode")
                             }
-                            .font(.caption2.weight(.medium))
-                            .animation(.easeOut(duration: 0.2), value: summary.status)
                         }
+                        .font(.caption2.weight(.medium))
+                        .animation(.easeOut(duration: 0.2), value: summary.status)
                     }
-                    .accessibilityElement(children: .combine)
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        if summary.status != .done, let mode = summary.mode.flatMap(PermissionMode.init) {
-                            Picker(selection: Binding(get: { mode }, set: { connection.setMode(sessionId, to: $0) })) {
-                                ForEach(PermissionMode.choices(current: mode)) { m in
-                                    Label {
-                                        Text(m.label)
-                                        Text(m.detail)
-                                    } icon: {
-                                        Image(systemName: m.symbol)
-                                    }
-                                    .tag(m)
+                .accessibilityElement(children: .combine)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    if summary.status != .done, let mode = summary.mode.flatMap(PermissionMode.init) {
+                        Picker(selection: Binding(get: { mode }, set: { connection.setMode(sessionId, to: $0) })) {
+                            ForEach(PermissionMode.choices(current: mode)) { m in
+                                Label {
+                                    Text(m.label)
+                                    Text(m.detail)
+                                } icon: {
+                                    Image(systemName: m.symbol)
                                 }
-                            } label: {
-                                Label("Mode: \(mode.label)", systemImage: mode.symbol)
+                                .tag(m)
                             }
-                            .pickerStyle(.menu)
-                            Divider()
-                        }
-                        Toggle(isOn: Binding(get: { speaker.autoRead }, set: { on in
-                            speaker.autoRead = on
-                            if !on { speaker.stop() }
-                        })) {
-                            Label("Read replies aloud", systemImage: "speaker.wave.2")
-                        }
-                        if summary.cwd != nil {
-                            Button { showChanges = true } label: { Label("Changes", systemImage: "plusminus") }
-                        }
-                        if summary.inTerminalWrapper {
-                            Button { showTerminal = true } label: { Label("Terminal", systemImage: "terminal") }
-                        }
-                        Divider()
-                        if summary.canEnd {
-                            Button(role: .destructive) { confirmEnd = true } label: {
-                                Label("End session", systemImage: "stop.circle")
-                            }
-                        }
-                        Button(role: .destructive) {
-                            connection.stopSharing(sessionId)
-                            dismiss()
                         } label: {
-                            Label(summary.status == .done ? "Remove" : "Stop sharing", systemImage: "eye.slash")
+                            Label("Mode: \(mode.label)", systemImage: mode.symbol)
                         }
+                        .pickerStyle(.menu)
+                        Divider()
+                    }
+                    Toggle(isOn: Binding(get: { speaker.autoRead }, set: { on in
+                        speaker.autoRead = on
+                        if !on { speaker.stop() }
+                    })) {
+                        Label("Read replies aloud", systemImage: "speaker.wave.2")
+                    }
+                    if summary.cwd != nil {
+                        Button { showChanges = true } label: { Label("Changes", systemImage: "plusminus") }
+                    }
+                    if summary.inTerminalWrapper {
+                        Button { showTerminal = true } label: { Label("Terminal", systemImage: "terminal") }
+                    }
+                    Divider()
+                    if summary.canEnd {
+                        Button(role: .destructive) { confirmEnd = true } label: {
+                            Label("End session", systemImage: "stop.circle")
+                        }
+                    }
+                    Button(role: .destructive) {
+                        connection.stopSharing(sessionId)
+                        dismiss()
                     } label: {
-                        Image(systemName: speaker.autoRead ? "speaker.wave.2.circle" : "ellipsis.circle")
+                        Label(summary.status == .done ? "Remove" : "Stop sharing", systemImage: "eye.slash")
                     }
-                    .accessibilityLabel("More")
+                } label: {
+                    Image(systemName: speaker.autoRead ? "speaker.wave.2.circle" : "ellipsis.circle")
                 }
+                .accessibilityLabel("More")
             }
-        }
-        .overlay(alignment: .top) {
-            if let error = connection.lastError {
-                Text(error)
-                    .font(.footnote).padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(.thinMaterial, in: Capsule())
-                    .padding(.top, 8)
-                    .task {
-                        try? await Task.sleep(for: .seconds(3))
-                        connection.lastError = nil
-                    }
+    }
+
+    private func bottomBar(_ timeline: SessionTimeline, summary: SessionSummary?) -> some View {
+        VStack(spacing: 0) {
+            if connection.troubled && connection.state != .unauthorized {
+                ConnectionPill()
+                    .padding(8)
+                    .frame(maxWidth: .infinity)
+                    .background(.bar)
             }
-        }
-        .safeAreaInset(edge: .bottom) {
-            VStack(spacing: 0) {
-                if connection.troubled && connection.state != .unauthorized {
-                    ConnectionPill()
-                        .padding(8)
+            if summary == nil, connection.state == .connected {
+                Text("This session is no longer shared.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity).padding(10).background(.bar)
+            } else if let summary {
+                if let p = openPermission(timeline) {
+                    PermissionCard(item: p, title: displayTitle(p.tool, cwd: summary.cwd), sessionId: sessionId, cwd: summary.cwd, pinned: true)
+                        .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 4)
                         .frame(maxWidth: .infinity)
                         .background(.bar)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
-                if summary == nil, connection.state == .connected {
-                    Text("This session is no longer shared.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity).padding(10).background(.bar)
-                } else if let summary {
-                    if let p = openPermission(timeline) {
-                        PermissionCard(item: p, title: displayTitle(p.tool, cwd: summary.cwd), sessionId: sessionId, cwd: summary.cwd, pinned: true)
-                            .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 4)
-                            .frame(maxWidth: .infinity)
-                            .background(.bar)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                    }
-                    if summary.acceptsPrompts {
-                        Composer(sessionId: sessionId, status: summary.status, agent: summary.agent.displayName,
-                                 canStop: summary.inTerminalWrapper)
-                            .onChange(of: speaker.autoRead) { _, on in
-                                // Turning it on reads the latest reply, so you hear where things are.
-                                if on, let r = latestReply(timeline) { speaker.speak(r.text, id: r.id, agent: summary.agent) }
-                            }
-                    } else {
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                Label("Read-only", systemImage: "eye")
-                                Spacer()
-                                Button(showReadOnlyHelp ? "Hide" : "How to reply from here") {
-                                    withAnimation(.snappy) { showReadOnlyHelp.toggle() }
-                                }
-                                .buttonStyle(.borderless)
-                            }
-                            if showReadOnlyHelp {
-                                Text("This \(summary.agent.displayName) session wasn't started through Styrman. Run `styr setup` on the Mac, then start it again in a new terminal tab.")
-                                    .foregroundStyle(.secondary)
-                                    .transition(.opacity)
-                            }
+                if summary.acceptsPrompts {
+                    Composer(sessionId: sessionId, status: summary.status, agent: summary.agent.displayName,
+                             canStop: summary.inTerminalWrapper)
+                        .onChange(of: speaker.autoRead) { _, on in
+                            // Turning it on reads the latest reply, so you hear where things are.
+                            if on, let r = latestReply(timeline) { speaker.speak(r.text, id: r.id, agent: summary.agent) }
                         }
-                        .font(.footnote).foregroundStyle(.secondary)
-                        .padding(.horizontal, 14).padding(.vertical, 10)
-                        .frame(maxWidth: .infinity, alignment: .leading).background(.bar)
+                } else {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Label("Read-only", systemImage: "eye")
+                            Spacer()
+                            Button(showReadOnlyHelp ? "Hide" : "How to reply from here") {
+                                withAnimation(.snappy) { showReadOnlyHelp.toggle() }
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                        if showReadOnlyHelp {
+                            Text("This \(summary.agent.displayName) session wasn't started through Styrman. Run `styr setup` on the Mac, then start it again in a new terminal tab.")
+                                .foregroundStyle(.secondary)
+                                .transition(.opacity)
+                        }
                     }
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading).background(.bar)
                 }
             }
-            .animation(.snappy, value: openPermission(timeline)?.request)
-        }
-
-        .onAppear { connection.watch(sessionId) }
-        .onChange(of: timeline.isLive, initial: true) { _, live in
-            if live, baseline == nil { baseline = .some(latestReply(timeline)?.id) }
-        }
-        .onDisappear {
-            connection.unwatch(sessionId)
-            speaker.stop()
-        }
-        // Read new replies aloud as they arrive (when switched on).
-        .onChange(of: latestReply(timeline)?.id) { _, id in
-            guard let seen = baseline, let id, id != seen, let r = latestReply(timeline) else { return }
-            baseline = .some(id)
-            if speaker.autoRead { speaker.speak(r.text, id: r.id, agent: agent) }
         }
     }
 }
