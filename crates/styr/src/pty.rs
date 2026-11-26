@@ -428,14 +428,35 @@ pub fn claude_preview(contents: &str) -> Option<String> {
             "Fetched ",
             "Called ",
             "Interrupted",
+            // In progress ("Running 1 shell command…", "Reading 2 files…").
+            "Running ",
+            "Reading ",
+            "Searching ",
+            "Listing ",
+            "Writing ",
+            "Editing ",
+            "Updating ",
+            "Fetching ",
+            "Calling ",
         ]
         .iter()
         .any(|p| first.starts_with(p));
-    if tool_like {
+    // A line with a `⎿` right under it is a tool step (`⏺ Sleeping 5 seconds then
+    // printing hi` / `⎿ $ sleep 5`), even while its `⏺` blinks off; reply text never
+    // has one.
+    let detail = |i: usize| {
+        lines
+            .get(i + 1)
+            .is_some_and(|n| n.trim_start().starts_with('⎿'))
+    };
+    if tool_like || detail(start) {
         return None;
     }
     let mut body = vec![first.to_owned()];
-    for l in &lines[start + 1..bottom] {
+    for (i, l) in lines.iter().enumerate().take(bottom).skip(start + 1) {
+        if detail(i) {
+            return None; // the latest block is a tool whose `⏺` is off right now
+        }
         let t = l.trim_start();
         // The spinner ("✻ Baked for 4s"), a tool result, the next block.
         if ["⏺", "⎿", "✻", "✶", "✳", "✢", "✽", "·", "*", "❯"]
@@ -1599,6 +1620,16 @@ mod tests {
         // A tool call, not a reply.
         let tool = format!("⏺ Bash(cargo test)\n  ⎿  Running…\n\n{box_}");
         assert_eq!(claude_preview(&tool), None);
+        // Claude 2.1.332 titles a running command with its description, and blinks
+        // its `⏺`: neither state is a reply (the text before it isn't new).
+        let starting = format!("⏺ Running 1 shell command…\n✻ Polishing…\n{box_}");
+        assert_eq!(claude_preview(&starting), None);
+        for bullet in ["⏺", " "] {
+            let running = format!(
+                "⏺ I'll run it now.\n\n{bullet} Sleeping 5 seconds then printing hi\n  ⎿  $ sleep 5 && echo hi\n\n✻ Polishing… (3s)\n{box_}"
+            );
+            assert_eq!(claude_preview(&running), None, "bullet {bullet:?}");
+        }
         // Lists keep their lines.
         let list = format!("⏺ Two things:\n  - first\n  - second\n\n{box_}");
         assert_eq!(

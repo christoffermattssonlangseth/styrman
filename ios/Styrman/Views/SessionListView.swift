@@ -433,22 +433,20 @@ struct WorkingAvatar: View {
     let agent: AgentKind
     let working: Bool
     var size: CGFloat = 40
-    @State private var spin = false
-
     var body: some View {
         let c = Theme.color(for: agent)
         AgentAvatar(agent: agent, size: size)
             .overlay {
                 if working {
-                    Circle()
-                        .trim(from: 0, to: 0.28)
-                        .stroke(c, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                        .padding(-4)
-                        .rotationEffect(.degrees(spin ? 360 : 0))
-                        .onAppear {
-                            withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) { spin = true }
-                        }
-                        .onDisappear { spin = false }
+                    // Turned by the clock: a repeating animation would also replay
+                    // whatever else changed as it started (the row's size).
+                    TimelineView(.animation) { ctx in
+                        Circle()
+                            .trim(from: 0, to: 0.28)
+                            .stroke(c, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                            .padding(-4)
+                            .rotationEffect(.degrees(ctx.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.4) / 1.4 * 360))
+                    }
                 }
             }
             .padding(working ? 4 : 0)

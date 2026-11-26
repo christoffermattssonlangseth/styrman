@@ -16,6 +16,8 @@ struct SessionDetailView: View {
     /// Scrolled to (near) the end: new text is followed. Scrolled up to read, the
     /// conversation stays where you are while the reply is written.
     @State private var atBottom = true
+    /// Whether you're scrolling (dragging, or it's still gliding).
+    @State private var scrollPhase: ScrollPhase = .idle
     /// How many of the latest rows to draw (more with "Show earlier").
     @State private var shown = 150
     @Environment(\.dismiss) private var dismiss
@@ -137,10 +139,19 @@ struct SessionDetailView: View {
             // no jump per update); scrolled up, don't move what you're reading.
             .defaultScrollAnchor(.bottom, for: .initialOffset)
             .defaultScrollAnchor(atBottom ? .bottom : .top, for: .sizeChanges)
+            .onScrollPhaseChange { _, phase in scrollPhase = phase }
+            // Only your own scrolling stops following: new content arriving (a reply,
+            // a tool card) can make the view briefly look scrolled up, and must not.
             .onScrollGeometryChange(for: Bool.self) { g in
                 g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 120
             } action: { _, near in
-                atBottom = near
+                if near || scrollPhase != .idle { atBottom = near }
+            }
+            // Following: keep the end in view whenever the content grows.
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { old, new in
+                if atBottom, scrollPhase == .idle, new > old {
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                }
             }
             .overlay(alignment: .bottomTrailing) {
                 if !atBottom && timeline.loaded {
@@ -184,8 +195,11 @@ struct SessionDetailView: View {
             // left its scroll position past the content, a blank screen until you
             // scrolled. Only the latest rows are drawn, so long sessions stay quick.
             VStack(alignment: .leading, spacing: 12) {
-                let latest = latestReply(timeline)?.id
-                let rows = DisplayRow.rows(merged(timeline.items))
+                // The actions under the latest reply wait until the turn is over: moving them
+                // from reply to reply while it works would shift everything each time.
+                let busy = summary?.status == .working || summary?.status == .needsApproval
+                let latest = busy ? nil : latestReply(timeline)?.id
+                let rows = DisplayRow.rows(merged(timeline.shownItems))
                 if rows.count > shown {
                     Button("Show earlier") { shown += 150 }
                         .font(.footnote.weight(.medium))
@@ -1346,30 +1360,32 @@ struct SessionBackground: View {
 struct LivePreviewRow: View {
     let text: String
     let agent: AgentKind
-    @State private var on = true
 
     var body: some View {
-        Group {
-            if hasTable {
-                VStack(alignment: .leading, spacing: 4) {
-                    ReplyText(raw: text)
-                    cursor
+        // The cursor blinks by the clock, not by a repeating animation: one started
+        // here would also replay this row's appearance forever, and everything
+        // around it would bounce.
+        TimelineView(.periodic(from: .now, by: 0.5)) { ctx in
+            let on = Int(ctx.date.timeIntervalSinceReferenceDate * 2) % 2 == 0
+            Group {
+                if hasTable {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ReplyText(raw: text)
+                        cursor(on)
+                    }
+                } else {
+                    Text("\(AttributedString(text)) \(cursor(on))")
                 }
-            } else {
-                Text("\(AttributedString(text)) \(cursor)")
             }
         }
         .foregroundStyle(.primary.opacity(0.85))
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentTransition(.identity)
         .accessibilityLabel("\(agent.displayName) is writing: \(text)")
-        .onAppear {
-            withAnimation(.easeInOut(duration: 0.55).repeatForever()) { on = false }
-        }
     }
 
-    private var cursor: Text {
-        Text("▍").foregroundStyle(Theme.color(for: agent).opacity(on ? 1 : 0.15))
+    private func cursor(_ on: Bool) -> Text {
+        Text("▍").foregroundStyle(Theme.color(for: agent).opacity(on ? 1 : 0.2))
     }
 
     /// Tables the terminal drew come as `| a | b |` rows: drawn as a table.

@@ -168,6 +168,35 @@ final class SessionTimeline {
         items.contains { if case .divider = $0 { false } else { true } }
     }
 
+    /// Tool calls that just arrived live, shown a moment later: the text the agent
+    /// wrote before a tool often arrives just after it (Claude writes it to its
+    /// transcript late), and would otherwise land above a card already on screen,
+    /// splitting a group of steps apart: the conversation would jump.
+    @ObservationIgnored private var holdUntil: [String: Date] = [:]
+    private var reveals = 0
+    static let toolHold: Duration = .milliseconds(700)
+
+    /// `items` as shown: without tool calls still held back.
+    var shownItems: [TimelineItem] {
+        _ = reveals // re-read when a held tool is let through
+        guard !holdUntil.isEmpty else { return items }
+        let now = Date()
+        return items.filter { item in
+            guard case .tool(let id, _) = item, let until = holdUntil[id] else { return true }
+            return until <= now
+        }
+    }
+
+    private func hold(_ id: String) {
+        holdUntil[id] = Date().addingTimeInterval(0.7)
+        Task { [weak self] in
+            try? await Task.sleep(for: Self.toolHold + .milliseconds(20))
+            guard let self else { return }
+            self.holdUntil[id] = nil
+            self.reveals &+= 1
+        }
+    }
+
     var openPermissions: [PermissionItem] {
         items.compactMap { if case .permission(_, let p) = $0, p.isOpen { p } else { nil } }
     }
@@ -242,6 +271,7 @@ final class SessionTimeline {
                     toolIndex[call] = items.count
                     toolSeen[call] = e.at
                 }
+                if isLive { hold(key) }
                 append(.tool(id: key, item))
             }
         case .permissionRequested(let request, let tool, let reason, let options, let expires):
