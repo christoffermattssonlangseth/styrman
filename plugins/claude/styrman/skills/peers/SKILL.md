@@ -8,7 +8,7 @@ The user can share several coding-agent sessions with Styrman (Claude Code, Code
 
 - `styr peers` lists the other shared sessions: id, agent, status, folder, and the first message.
 - `styr ask <session> "<message>"` types your message into that session and prints its reply when its turn ends, which may take minutes. `<session>` is an agent name (`codex`, `claude`, `agy`) or an id from `styr peers`.
-- An agent name means that agent **in your folder**: the one running there, or, if none is, a new one Styrman starts there for this (in a new terminal tab, shared with the user's phone). This is the normal way to consult another agent about your work. Don't pick a session working in another folder unless the user asks for that one; to reach it, use its id.
+- An agent name gets you **a helper of your own** in your folder: Styrman starts that agent there for you (in a new terminal tab, shared with the user's phone), and later `styr ask` calls with the same name go to that same helper, so follow-ups keep their context. This is the normal way to consult another agent. Sessions that are already open belong to the user's own work: reach one only if the user asks for it, by its id from `styr peers`.
 
 Rules:
 

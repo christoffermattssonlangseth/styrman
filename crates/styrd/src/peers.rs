@@ -34,6 +34,9 @@ pub struct Peers {
     /// Session answering an ask → the session that asked (and is waiting).
     pending: Mutex<HashMap<SessionId, SessionId>>,
     sent: Mutex<HashMap<String, VecDeque<Instant>>>,
+    /// The helper each session started per agent (asker, agent) → helper, so follow-up
+    /// questions go to the same one.
+    helpers: Mutex<HashMap<(SessionId, AgentKind), SessionId>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -165,6 +168,13 @@ impl Daemon {
                     Some(message.clone()),
                     device,
                 )?;
+                if let Some(f) = &from {
+                    self.peer_state
+                        .helpers
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .insert((f.id.clone(), agent), id.clone());
+                }
                 let target = self.summary(&id)?.context("the new session vanished")?;
                 if let Some(f) = &from {
                     self.note(
@@ -294,42 +304,36 @@ impl Daemon {
         outcome
     }
 
-    /// Who `to` means. An agent name, asked from a session in a folder, means that
-    /// agent in the same folder: the one running there, or a new one started there.
-    /// Never one busy with another project just because it's the only one shared.
+    /// Who `to` means. An agent name, asked from a session in a folder, means a
+    /// helper of its own in that folder: the one it started before (follow-ups), or a
+    /// new one. Never someone else's session that happens to be open there (it may
+    /// be in the middle of the user's own work). An id reaches any session on purpose.
     fn peer_for(&self, to: &str, from: Option<&SessionSummary>) -> Result<Peer> {
         let t = to.trim().to_lowercase();
         let agent = [AgentKind::Claude, AgentKind::Codex, AgentKind::Antigravity]
             .into_iter()
             .find(|a| agent_label(*a).to_lowercase() == t || a.as_str() == t);
-        let (Some(agent), Some(cwd)) = (agent, from.and_then(|f| f.cwd.clone())) else {
+        let (Some(agent), Some(f)) = (agent, from) else {
             return self
                 .resolve_peer(to, from.map(|s| &s.id))
                 .map(Peer::Running);
         };
-        let here: Vec<SessionSummary> = self
-            .peers(from.map(|s| &s.id))?
-            .into_iter()
-            .filter(|s| s.agent == agent && s.cwd.as_ref() == Some(&cwd))
-            .collect();
-        match here.as_slice() {
-            [] => Ok(Peer::Start(agent, cwd)),
-            [one] => Ok(Peer::Running(one.clone())),
-            several => {
-                // Rather one that's free.
-                let free: Vec<_> = several
-                    .iter()
-                    .filter(|s| s.status == styr_core::SessionStatus::Waiting)
-                    .collect();
-                match free.as_slice() {
-                    [one] => Ok(Peer::Running((*one).clone())),
-                    _ => bail!(
-                        "several {} sessions run in this folder; use the id from `styr peers`",
-                        agent_label(agent)
-                    ),
-                }
-            }
+        let Some(cwd) = f.cwd.clone() else {
+            return self.resolve_peer(to, Some(&f.id)).map(Peer::Running);
+        };
+        let helper = self
+            .peer_state
+            .helpers
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(&(f.id.clone(), agent))
+            .cloned();
+        if let Some(h) = helper
+            && let Some(s) = self.peers(Some(&f.id))?.into_iter().find(|s| s.id == h)
+        {
+            return Ok(Peer::Running(s));
         }
+        Ok(Peer::Start(agent, cwd))
     }
 }
 

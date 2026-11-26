@@ -492,9 +492,10 @@ async fn another_model_restarts_the_agent_as_the_same_session() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn asking_an_agent_by_name_means_the_one_in_your_folder() {
+async fn asking_an_agent_by_name_gets_a_helper_of_its_own() {
     let d = Daemon::start().await;
-    // Claude in /work/repo; Codex only in another project.
+    // Claude in /work/repo; a Codex in another project, and one the user has open
+    // in the same folder.
     for (event, extra) in [
         ("SessionStart", json!({"source": "startup"})),
         ("UserPromptSubmit", json!({"prompt": "/styr"})),
@@ -503,11 +504,16 @@ async fn asking_an_agent_by_name_means_the_one_in_your_folder() {
             hook: with_launch(hook("a1", event, extra.clone()), "LA"),
         })
         .await;
-        let mut h = codex_hook("x1", event, extra, "LX");
+        let mut h = codex_hook("x1", event, extra.clone(), "LX");
         h.payload["cwd"] = json!("/work/other");
         d.call(Request::Hook { hook: h }).await;
+        d.call(Request::Hook {
+            hook: codex_hook("y1", event, extra, "LY"),
+        })
+        .await;
     }
     let elsewhere = attach(&d, "LX");
+    let users_own = attach(&d, "LY");
     settle().await;
     let ask = |to: &'static str| {
         let c = Client::new(&d.paths.socket).with_timeout(None);
@@ -520,14 +526,18 @@ async fn asking_an_agent_by_name_means_the_one_in_your_folder() {
             })
         })
     };
-    // No Codex in /work/repo: it would start one there (not possible here: the
-    // folder doesn't exist), never use the one busy with another project.
+    // It starts a Codex of its own in /work/repo (not possible here: the folder
+    // doesn't exist), never using one already open, here or elsewhere.
     let r = ask("codex").await.unwrap();
     assert!(r.is_err(), "{r:?}");
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert!(
         !elsewhere.is_finished(),
         "the Codex in /work/other got nothing"
+    );
+    assert!(
+        !users_own.is_finished(),
+        "nor the user's own Codex in the same folder"
     );
     // Its id still reaches it on purpose.
     let Response::Sessions { sessions } = d
@@ -981,6 +991,25 @@ async fn agents_ask_each_other_and_get_the_reply() {
         })
         .await;
     }
+    // Each other's ids (as `styr peers` shows them): by name, each would get a
+    // helper of its own instead.
+    let Response::Sessions { sessions } = d
+        .call(Request::ListSessions {
+            include_unshared: false,
+        })
+        .await
+    else {
+        panic!()
+    };
+    let id_of = |n: &str| {
+        sessions
+            .iter()
+            .find(|s| s.native_id == n)
+            .unwrap()
+            .id
+            .to_string()
+    };
+    let (a_id, b_id) = (id_of("a1"), id_of("b1"));
     // B's terminal wrapper is waiting for something to type.
     let wrapper_b = attach(&d, "LB");
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -990,7 +1019,7 @@ async fn agents_ask_each_other_and_get_the_reply() {
     let ask = tokio::task::spawn_blocking(move || {
         c.call(&Request::Ask {
             launch_id: Some("LA".into()),
-            to: "claude".into(), // the only *other* shared Claude session
+            to: b_id,
             text: "what does the parser do with tabs?".into(),
             wait_secs: Some(10),
         })
@@ -1014,7 +1043,7 @@ async fn agents_ask_each_other_and_get_the_reply() {
     let back = tokio::task::spawn_blocking(move || {
         c.call(&Request::Ask {
             launch_id: Some("LB".into()),
-            to: "claude".into(),
+            to: a_id,
             text: "and you?".into(),
             wait_secs: Some(1),
         })
