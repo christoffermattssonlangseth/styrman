@@ -8,7 +8,7 @@ test("valid requests pass, with optional ids", () => {
   const p = parsePush({ ...ok, session: "01ABC", collapse_id: "perm-1", category: "PERMISSION" });
   assert.equal(typeof p, "object");
   assert.deepEqual(apnsPayload(p as any), {
-    aps: { alert: { title: ok.title, body: ok.body }, sound: "default", "thread-id": "01ABC", category: "PERMISSION" },
+    aps: { alert: { title: ok.title, body: ok.body }, sound: "default", "thread-id": "01ABC", category: "PERMISSION", "mutable-content": 1 },
     session: "01ABC",
   });
 });

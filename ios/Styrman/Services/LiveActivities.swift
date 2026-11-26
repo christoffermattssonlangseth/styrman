@@ -73,7 +73,7 @@ final class LiveActivities {
     /// Called whenever the session list changes (app in the foreground).
     func update(_ sessions: [SessionSummary], host: String) {
         let state = Self.state(of: sessions)
-        if state != lastWidget {
+        if state != lastWidget || (WidgetSnapshot.load()?.staleAt ?? .distantPast) <= .now {
             lastWidget = state
             WidgetSnapshot(state: state, updated: .now, host: host).save()
             WidgetCenter.shared.reloadAllTimelines()

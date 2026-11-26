@@ -180,13 +180,10 @@ struct SessionDetailView: View {
         }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
-                if !timeline.isLive && (summary != nil || connection.state != .connected) {
-                    Label(connection.state == .connected ? "Catching up…" : "Disconnected from Mac",
-                          systemImage: connection.state == .connected ? "clock" : "wifi.slash")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
+                if connection.troubled && connection.state != .unauthorized {
+                    ConnectionPill()
                         .padding(8)
+                        .frame(maxWidth: .infinity)
                         .background(.bar)
                 }
                 if summary == nil, connection.state == .connected {
@@ -465,6 +462,10 @@ struct PermissionCard: View {
     @State private var sent: String?
     @State private var showAll = false
 
+    private var canAnswer: Bool {
+        connection.state == .connected && connection.timeline(for: sessionId).isLive
+    }
+
     /// "Would you like to run the following command?" says nothing the card doesn't.
     private var reason: String? {
         guard let r = item.reason, !r.hasPrefix("Would you like to") else { return nil }
@@ -503,6 +504,10 @@ struct PermissionCard: View {
             if let reason { Text(reason).font(.footnote).foregroundStyle(.secondary) }
 
             if item.isOpen {
+                if !canAnswer {
+                    Text(connection.state == .connected ? "Checking whether this request is still open…" : "Reconnect to answer from this phone.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
                 VStack(spacing: 8) {
                     ForEach(item.options) { opt in option(opt) }
                 }
@@ -526,7 +531,6 @@ struct PermissionCard: View {
         let primary = opt.kind == .allowOnce
         // Allow once is the answer most of the time: a solid button. Always-allow is quieter,
         // and Deny is red but outlined so it doesn't compete.
-        let tint: Color = deny ? .red : .secondary
         return Button {
             if connection.resolvePermission(session: sessionId, request: item.request, option: opt.id,
                                             failed: { sent = nil }) {
@@ -571,7 +575,7 @@ struct PermissionCard: View {
             .contentShape(RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
-        .disabled(sent != nil || connection.state != .connected)
+        .disabled(sent != nil || !canAnswer)
         .opacity(sent != nil && sent != opt.id ? 0.5 : 1)
     }
 

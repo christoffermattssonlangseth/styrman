@@ -24,9 +24,8 @@ struct SessionListView: View {
                 ForEach(connection.warnings, id: \.self) { w in
                     Label(w, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange).plainRow()
                 }
-                // Busy agents first, then the ones waiting for you.
-                group("Working", working)
                 group("Needs you", needsYou)
+                group("Working", working)
                 if !done.isEmpty {
                     Button {
                         withAnimation(.snappy) { showDone.toggle() }
@@ -72,6 +71,14 @@ struct SessionListView: View {
                 }
             }
             .animation(.snappy, value: connection.troubled)
+            .alert("Styrman", isPresented: Binding(
+                get: { connection.lastError != nil && path.isEmpty },
+                set: { if !$0 { connection.lastError = nil } }
+            )) {
+                Button("OK") { connection.lastError = nil }
+            } message: {
+                Text(connection.lastError ?? "")
+            }
             .navigationTitle("Styrman")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { WheelMark(size: 26) }
@@ -93,7 +100,7 @@ struct SessionListView: View {
             .sheet(isPresented: $showUsage) { UsageView() }
             .sheet(isPresented: $showSettings) { SettingsView() }
             .sheet(isPresented: $showNewSession) { NewSessionView() }
-            .refreshable { connection.connect() }
+            .refreshable { connection.retryNow() }
             .onChange(of: connection.requestedSession, initial: true) { _, id in
                 if let id {
                     path = [id]
@@ -102,7 +109,7 @@ struct SessionListView: View {
             }
             .task { await AppDelegate.enablePush() }
             // Fetch the active sessions' conversations ahead, so opening one is instant.
-            .onChange(of: connection.sessions.filter { $0.status != .done }.prefix(8).map(\.id), initial: true) { _, ids in
+            .onChange(of: (needsYou + working).prefix(8).map(\.id), initial: true) { _, ids in
                 connection.preload(ids)
             }
             #if DEBUG
@@ -140,10 +147,18 @@ struct SessionListView: View {
     }
 
     private func card(_ s: SessionSummary, compact: Bool) -> some View {
-        Button { path.append(s.id) } label: {
-            SessionCard(session: s, compact: compact)
+        let timeline = connection.timeline(for: s.id)
+        return VStack(spacing: 6) {
+            Button { path.append(s.id) } label: {
+                SessionCard(session: s, compact: compact)
+            }
+            .buttonStyle(CardPressStyle())
+            if s.status == .needsApproval, timeline.isLive,
+               let permission = timeline.openPermissions.last {
+                SessionQuickApproval(session: s.id, permission: permission)
+                    .id(permission.request)
+            }
         }
-        .buttonStyle(CardPressStyle())
         .plainRow(top: 5, bottom: 5)
         .swipeActions(edge: .trailing) {
             Button(s.status == .done ? "Remove" : "Stop sharing", role: .destructive) {
@@ -153,6 +168,58 @@ struct SessionListView: View {
         .contextMenu {
             Button(role: .destructive) { connection.stopSharing(s.id) } label: {
                 Label(s.status == .done ? "Remove" : "Stop sharing", systemImage: "eye.slash")
+            }
+        }
+    }
+}
+
+private struct SessionQuickApproval: View {
+    @Environment(DaemonConnection.self) private var connection
+    let session: String
+    let permission: PermissionItem
+    @State private var answering = false
+
+    var body: some View {
+        if let allow = permission.options.first(where: { $0.kind == .allowOnce }) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(displayTitle(permission.tool, cwd: nil))
+                    .font(permission.tool.kind == .execute ? Theme.mono : .callout)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                if let reason = permission.reason, !reason.isEmpty {
+                    Text(reason).font(.footnote).foregroundStyle(.secondary)
+                }
+                HStack {
+                    Button("Allow once") { answer(allow) }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Theme.attention)
+                    if let deny = permission.options.first(where: { $0.kind == .rejectOnce }) {
+                        Menu {
+                            Button("Deny", role: .destructive) { answer(deny) }
+                        } label: {
+                            Label("More approval options", systemImage: "ellipsis.circle")
+                                .labelStyle(.iconOnly)
+                        }
+                    }
+                    if answering { ProgressView().controlSize(.small) }
+                }
+                .disabled(answering || connection.state != .connected)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Theme.attention.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
+        }
+    }
+
+    private func answer(_ option: PermissionOption) {
+        guard let credentials = connection.credentials, connection.state == .connected else { return }
+        answering = true
+        Task {
+            do {
+                try await QuickAnswer.answer(credentials, session: session, request: permission.request, option: option.id)
+            } catch {
+                connection.lastError = error.localizedDescription
+                answering = false
             }
         }
     }
@@ -352,7 +419,7 @@ struct WorkingAvatar: View {
 }
 
 /// Shown only when the connection has been down for a while.
-private struct ConnectionPill: View {
+struct ConnectionPill: View {
     @Environment(DaemonConnection.self) private var connection
     var body: some View {
         HStack(spacing: 8) {
@@ -362,6 +429,7 @@ private struct ConnectionPill: View {
                 Image(systemName: "wifi.slash")
             }
             Text(text).lineLimit(1)
+            Button("Retry now") { connection.retryNow() }.buttonStyle(.borderless)
         }
         .font(.footnote.weight(.medium))
         .padding(.horizontal, 14).padding(.vertical, 9)
@@ -420,7 +488,7 @@ struct SettingsView: View {
                             if on { LiveActivities.shared.update(connection.sessions, host: connection.host) }
                         }
                 } footer: {
-                    Text("Shows which agents are working or need you on the Lock Screen and in the Dynamic Island. It only shows agent, folder and status.")
+                    Text("Shows which agents are working or need you on the Lock Screen and in the Dynamic Island. When the app is closed, updates usually show agent, folder and status. To include command and reply previews in direct pushes, run `styr push details on` on your Mac. Previews may be visible on your Lock Screen.")
                 }
                 Section {
                     Button("Forget this Mac", role: .destructive) { confirmForget = true }

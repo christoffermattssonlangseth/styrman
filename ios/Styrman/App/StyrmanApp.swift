@@ -26,6 +26,11 @@ struct StyrmanApp: App {
                         LiveActivities.shared.update(sessions, host: connection.host)
                     }
                 }
+                .onChange(of: connection.sessionsLoaded) { _, loaded in
+                    if loaded {
+                        LiveActivities.shared.update(connection.sessions, host: connection.host)
+                    }
+                }
                 .onChange(of: scenePhase, initial: true) { _, phase in
                     switch phase {
                     case .active:

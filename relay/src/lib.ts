@@ -59,7 +59,7 @@ export function apnsPayload(p: PushRequest): Record<string, unknown> {
   const aps: Record<string, unknown> = { alert: { title: p.title, body: p.body }, sound: "default" };
   if (p.session) aps["thread-id"] = p.session;
   if (p.category) aps.category = p.category;
-  if (p.request) aps["mutable-content"] = 1;
+  if (p.session) aps["mutable-content"] = 1;
   const out: Record<string, unknown> = { aps };
   if (p.session) out.session = p.session;
   if (p.request) out.request = p.request;

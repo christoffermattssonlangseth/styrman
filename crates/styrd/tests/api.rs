@@ -94,6 +94,28 @@ async fn phone_api_end_to_end() {
     send(&mut ws, json!({"type": "get_usage"})).await;
     assert!(matches!(recv(&mut ws).await, ServerMsg::Usage { .. }));
 
+    let http = reqwest::Client::new();
+    let live_url = format!("{base}/v1/live");
+    assert_eq!(http.get(&live_url).send().await.unwrap().status(), 401);
+    let snapshot: serde_json::Value = http
+        .get(&live_url)
+        .bearer_auth(&paired.token)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        snapshot["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| { row["session"] == sid.as_str() && row.get("line").is_none() })
+    );
+
     // Unknown/unshared sessions cannot be subscribed to.
     send(&mut ws, json!({"type": "subscribe", "session": "nope"})).await;
     assert!(matches!(recv(&mut ws).await, ServerMsg::Error { .. }));

@@ -69,6 +69,7 @@ final class DaemonConnection {
     @ObservationIgnored private var watched: Set<String> = []
     @ObservationIgnored private var task: URLSessionWebSocketTask?
     @ObservationIgnored private var loop: Task<Void, Never>?
+    @ObservationIgnored private var retryDelay: Task<Void, Never>?
     @ObservationIgnored private var backoff: Duration = .seconds(1)
     @ObservationIgnored private let session: URLSession = {
         let cfg = URLSessionConfiguration.default
@@ -116,11 +117,25 @@ final class DaemonConnection {
         loop = Task { [weak self] in await self?.run() }
     }
 
+    func retryNow() {
+        if state == .connected {
+            send(.listSessions)
+        } else if state != .unauthorized {
+            backoff = .seconds(1)
+            retryDelay?.cancel()
+            connect()
+        }
+    }
+
     func disconnect() {
+        retryDelay?.cancel()
+        retryDelay = nil
+        backoff = .seconds(1)
         loop?.cancel()
         loop = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
+        sessionsLoaded = false
         timelines.values.forEach { $0.isLive = false }
         if credentials != nil, state != .unauthorized { state = .offline("Disconnected") }
     }
@@ -131,10 +146,17 @@ final class DaemonConnection {
             let ok = await runOnce(creds)
             if Task.isCancelled || state == .unauthorized { break }
             if ok { backoff = .seconds(1) }
-            try? await Task.sleep(for: backoff)
-            backoff = min(backoff * 2, .seconds(30))
+            let delay = backoff
+            let sleeper = Task<Void, Never> {
+                try? await Task.sleep(for: delay)
+            }
+            retryDelay = sleeper
+            await sleeper.value
+            guard !Task.isCancelled else { return }
+            retryDelay = nil
+            if !sleeper.isCancelled { backoff = min(delay * 2, .seconds(30)) }
         }
-        loop = nil
+        if !Task.isCancelled { loop = nil }
     }
 
     /// One connection; returns whether it got as far as `hello`.
@@ -168,6 +190,7 @@ final class DaemonConnection {
         do {
             while !Task.isCancelled {
                 let msg = try await t.receive()
+                guard !Task.isCancelled else { return greeted }
                 guard case .string(let text) = msg, let data = text.data(using: .utf8) else { continue }
                 // One unreadable message must not drop the connection (it would come
                 // back on reconnect and drop it again, forever).
@@ -176,12 +199,14 @@ final class DaemonConnection {
                 handle(decoded)
             }
         } catch {
+            guard !Task.isCancelled else { return greeted }
             if let http = t.response as? HTTPURLResponse, http.statusCode == 401 {
                 state = .unauthorized
             } else if !Task.isCancelled {
                 state = .offline(greeted ? "Connection lost" : "Can't reach \(creds.host)")
             }
         }
+        sessionsLoaded = false
         for tl in timelines.values { tl.isLive = false }
         return greeted
     }

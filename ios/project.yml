@@ -92,6 +92,7 @@ targets:
         CFBundleDisplayName: Styrman
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        StyrmanAppGroup: group.$(STYRMAN_BUNDLE_ID)
         StyrmanAppBundleID: $(STYRMAN_BUNDLE_ID)
         StyrmanKeychainGroup: $(AppIdentifierPrefix)$(STYRMAN_BUNDLE_ID)
         NSAppTransportSecurity:

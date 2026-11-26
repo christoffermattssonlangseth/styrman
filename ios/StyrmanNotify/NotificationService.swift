@@ -3,7 +3,9 @@
 // carries the command. If the Mac can't be reached in time, the notification stays
 // as it was ("needs your approval") and tapping it opens the session.
 
+import Foundation
 import UserNotifications
+import WidgetKit
 
 final class NotificationService: UNNotificationServiceExtension, @unchecked Sendable {
     private var deliver: ((UNNotificationContent) -> Void)?
@@ -14,7 +16,7 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
         deliver = contentHandler
         original = request.content
         let info = request.content.userInfo
-        guard let session = info["session"] as? String, let req = info["request"] as? String,
+        guard let session = info["session"] as? String,
               let creds = CredentialStore.load(),
               let mutable = request.content.mutableCopy() as? UNMutableNotificationContent else {
             contentHandler(request.content)
@@ -22,10 +24,36 @@ final class NotificationService: UNNotificationServiceExtension, @unchecked Send
         }
         // Only this extension touches these until it hands one back.
         let box = Box(service: self, content: mutable, unchanged: request.content)
+        let req = info["request"] as? String
         Task.detached {
-            let details = try? await QuickAnswer.details(creds, session: session, request: req)
+            async let refresh: Void = Self.refreshWidget(creds)
+            let details: QuickAnswer.Details?
+            if let req {
+                details = try? await QuickAnswer.details(creds, session: session, request: req)
+            } else {
+                details = nil
+            }
+            await refresh
             box.finish(with: details)
         }
+    }
+
+    private static func fetchSnapshot(_ credentials: Credentials) async throws -> WidgetSnapshot {
+        let started = Date.now
+        var request = URLRequest(url: credentials.httpBase.appending(path: "v1/live"))
+        request.timeoutInterval = 8
+        request.setValue("Bearer \(credentials.token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+        let live = try JSONDecoder().decode(LiveState.self, from: data)
+        return WidgetSnapshot(state: live, updated: started, host: credentials.host)
+    }
+
+    private static func refreshWidget(_ credentials: Credentials) async {
+        guard let snapshot = try? await fetchSnapshot(credentials),
+              CredentialStore.load()?.token == credentials.token else { return }
+        snapshot.save()
+        WidgetCenter.shared.reloadTimelines(ofKind: "Agents")
     }
 
     /// Hands the notification and this service to the task (they're not Sendable).

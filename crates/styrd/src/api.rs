@@ -189,6 +189,7 @@ pub fn router(daemon: Arc<Daemon>, stop: watch::Receiver<bool>) -> Router {
             post(pair).layer(axum::extract::DefaultBodyLimit::max(16 * 1024)),
         )
         .route("/v1/ws", get(ws))
+        .route("/v1/live", get(live_snapshot))
         .route(
             "/v1/upload/{session}",
             post(upload).layer(axum::extract::DefaultBodyLimit::max(
@@ -375,6 +376,23 @@ fn authed(st: &AppState, headers: &HeaderMap) -> Result<String, Response> {
                 StatusCode::UNAUTHORIZED,
                 "missing or invalid device token",
             ))
+        }
+    }
+}
+
+/// Refresh the widget over the paired connection. The push itself carries no snapshot.
+async fn live_snapshot(State(st): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = authed(&st, &headers) {
+        return response;
+    }
+    match st.daemon.summaries(false) {
+        Ok(sessions) => Json(crate::live::LiveState::of(&sessions, false)).into_response(),
+        Err(e) => {
+            tracing::warn!("widget snapshot failed: {e:#}");
+            error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not load session status",
+            )
         }
     }
 }

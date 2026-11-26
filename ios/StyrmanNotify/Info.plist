@@ -44,6 +44,8 @@
 	</dict>
 	<key>StyrmanAppBundleID</key>
 	<string>$(STYRMAN_BUNDLE_ID)</string>
+	<key>StyrmanAppGroup</key>
+	<string>group.$(STYRMAN_BUNDLE_ID)</string>
 	<key>StyrmanKeychainGroup</key>
 	<string>$(AppIdentifierPrefix)$(STYRMAN_BUNDLE_ID)</string>
 </dict>

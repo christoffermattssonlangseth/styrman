@@ -40,6 +40,10 @@ struct WidgetSnapshot: Codable, Sendable {
     var updated: Date
     var host: String
 
+    static let staleAfter: TimeInterval = 15 * 60
+
+    var staleAt: Date { updated.addingTimeInterval(Self.staleAfter) }
+
     static var group: String? {
         (Bundle.main.object(forInfoDictionaryKey: "StyrmanAppGroup") as? String).flatMap { $0.isEmpty || $0.hasPrefix("$(") ? nil : $0 }
     }
@@ -51,7 +55,9 @@ struct WidgetSnapshot: Codable, Sendable {
 
     func save() {
         guard let g = Self.group, let data = try? JSONEncoder().encode(self) else { return }
-        UserDefaults(suiteName: g)?.set(data, forKey: "snapshot")
+        guard let defaults = UserDefaults(suiteName: g) else { return }
+        if let current = Self.load(), current.updated > updated { return }
+        defaults.set(data, forKey: "snapshot")
     }
 }
 

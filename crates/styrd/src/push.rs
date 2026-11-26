@@ -73,7 +73,7 @@ impl Notification {
         if let Some(c) = self.category {
             aps["category"] = c.into();
         }
-        if self.request.is_some() {
+        if self.session.is_some() {
             aps["mutable-content"] = 1.into();
         }
         let mut p = serde_json::json!({ "aps": aps });

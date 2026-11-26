@@ -190,9 +190,13 @@ struct AgentsProvider: TimelineProvider {
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<AgentsEntry>) -> Void) {
-        // The app reloads this whenever it sees a change; the policy just keeps "updated …" fresh.
-        completion(Timeline(entries: [AgentsEntry(date: .now, snapshot: WidgetSnapshot.load())],
-                            policy: .after(.now.addingTimeInterval(15 * 60))))
+        let now = Date.now
+        let snapshot = WidgetSnapshot.load()
+        var entries = [AgentsEntry(date: now, snapshot: snapshot)]
+        if let snapshot, snapshot.staleAt > now {
+            entries.append(AgentsEntry(date: snapshot.staleAt, snapshot: snapshot))
+        }
+        completion(Timeline(entries: entries, policy: .never))
     }
 }
 
@@ -203,19 +207,24 @@ struct AgentsWidgetView: View {
 
     var body: some View {
         let s = entry.snapshot?.state ?? .idle
+        let stale = entry.snapshot.map { entry.date >= $0.staleAt } ?? true
         switch family {
         case .accessoryRectangular:
             VStack(alignment: .leading, spacing: 2) {
                 Text("Styrman").font(.caption2.weight(.semibold))
-                Text(summary(s)).font(.headline).widgetAccentable()
-                if let r = s.rows.first { Text("\(r.agent) · \(r.repo)").font(.caption2).lineLimit(1) }
+                Text(stale ? "Open to refresh" : summary(s)).font(.headline).widgetAccentable(!stale)
+                if !stale, let r = s.rows.first { Text("\(r.agent) · \(r.repo)").font(.caption2).lineLimit(1) }
             }
         case .accessoryCircular:
             ZStack {
                 AccessoryWidgetBackground()
                 VStack(spacing: 0) {
-                    Text("\(s.needs)").font(.title3.weight(.bold))
-                    Text("need you").font(.system(size: 8))
+                    if stale {
+                        Image(systemName: "clock").accessibilityLabel("Status out of date")
+                    } else {
+                        Text("\(s.needs)").font(.title3.weight(.bold))
+                        Text("need you").font(.system(size: 8))
+                    }
                 }
             }
         default:
@@ -228,11 +237,11 @@ struct AgentsWidgetView: View {
                     Text("Styrman").font(.caption.weight(.semibold))
                     Spacer()
                 }
-                Text(summary(s))
+                Text(stale ? (entry.snapshot == nil ? "Open Styrman to refresh" : "Status out of date") : summary(s))
                     .font(.headline)
-                    .foregroundStyle(s.needs > 0 && fullColor ? amber : Color.primary)
-                    .widgetAccentable(s.needs > 0)
-                ForEach(s.rows.prefix(family == .systemSmall ? 2 : 3), id: \.self) { r in
+                    .foregroundStyle(!stale && s.needs > 0 && fullColor ? amber : Color.primary)
+                    .widgetAccentable(!stale && s.needs > 0)
+                ForEach((stale ? [] : s.rows).prefix(family == .systemSmall ? 2 : 3), id: \.self) { r in
                     if family == .systemSmall {
                         HStack(spacing: 6) {
                             AgentDot(agent: r.agent, size: 18, fullColor: fullColor)
