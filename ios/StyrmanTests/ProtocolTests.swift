@@ -85,6 +85,15 @@ private func event(_ seq: UInt64, _ kind: String) -> String {
         #expect(obj["session"] as? String == "S")
         #expect(obj["since_seq"] as? Int == 4)
     }
+
+    @Test func notificationSettingsEncodeAsRustReadsThem() throws {
+        // Rust: ClientMsg::SetNotifications { on, finished }
+        let data = try JSONEncoder().encode(ClientMsg.setNotifications(on: true, finished: false))
+        let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        #expect(obj["type"] as? String == "set_notifications")
+        #expect(obj["on"] as? Bool == true)
+        #expect(obj["finished"] as? Bool == false)
+    }
 }
 
 @Suite struct CommandTests {

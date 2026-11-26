@@ -521,6 +521,8 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var confirmForget = false
     @State private var liveActivity = LiveActivities.shared.enabled
+    @State private var notify = true
+    @State private var notifyFinished = true
 
     var body: some View {
         NavigationStack {
@@ -531,6 +533,19 @@ struct SettingsView: View {
                     LabeledContent("Status", value: statusText)
                 }
                 VoiceSettings()
+                Section {
+                    Toggle("Notifications", isOn: $notify)
+                        .onChange(of: notify) { _, on in connection.notify = on }
+                    Toggle("When a turn finishes", isOn: $notifyFinished)
+                        .onChange(of: notifyFinished) { _, on in connection.notifyFinished = on }
+                        .disabled(!notify)
+                } footer: {
+                    Text(notify
+                         ? (notifyFinished
+                            ? "Approvals, errors, finished turns and newly shared sessions. Not for turns one agent asked of another."
+                            : "Only when an agent needs your approval or stops with an error.")
+                         : "No notifications from this Mac. Open the app to see what your agents are doing.")
+                }
                 Section {
                     Toggle("Live Activity", isOn: $liveActivity)
                         .onChange(of: liveActivity) { _, on in
@@ -545,6 +560,10 @@ struct SettingsView: View {
                 } footer: {
                     Text("To revoke this phone from the Mac side, run `styr devices revoke`.")
                 }
+            }
+            .onAppear {
+                notify = connection.notify
+                notifyFinished = connection.notifyFinished
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)

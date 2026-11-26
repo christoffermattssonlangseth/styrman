@@ -245,6 +245,7 @@ final class DaemonConnection {
             state = .connected
             for id in watched.union(preloaded) { subscribe(id) }
             registerPush()
+            sendNotificationSettings()
             for (kind, token) in activityTokens { send(.registerActivityToken(kind: kind, token: token ?? nil)) }
         case .sessions(let list):
             sessions = list.sorted { $0.updatedMs > $1.updatedMs }
@@ -348,6 +349,23 @@ final class DaemonConnection {
         if activityTokens[kind] == .some(token) { return }
         activityTokens[kind] = .some(token)
         if state == .connected { send(.registerActivityToken(kind: kind, token: token)) }
+    }
+
+    /// Which notifications this phone wants. The Mac keeps it (pushes come from
+    /// there, also while the app is closed); sent again on every connect.
+    var notify: Bool {
+        get { UserDefaults.standard.object(forKey: "notify") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "notify"); sendNotificationSettings() }
+    }
+
+    /// Also when a turn finishes or a session is shared (approvals and errors always).
+    var notifyFinished: Bool {
+        get { UserDefaults.standard.object(forKey: "notifyFinished") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "notifyFinished"); sendNotificationSettings() }
+    }
+
+    private func sendNotificationSettings() {
+        if state == .connected { send(.setNotifications(on: notify, finished: notifyFinished)) }
     }
 
     private func registerPush() {

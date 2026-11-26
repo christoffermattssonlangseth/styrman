@@ -53,6 +53,12 @@ pub enum ClientMsg {
         token: String,
         env: String,
     },
+    /// Which notifications this phone wants: none (`on` false), or approvals and
+    /// errors only (`finished` false), or also finished turns and new sessions.
+    SetNotifications {
+        on: bool,
+        finished: bool,
+    },
     /// A Live Activity push token: `kind` "update" (the running activity's) or "start"
     /// (push-to-start). No token clears it.
     RegisterActivityToken {
@@ -300,6 +306,20 @@ mod tests {
             pair_link("ws://100.1.2.3:4719", "AB CD", "Mac mini"),
             "styrman://pair?v=1&url=ws%3A%2F%2F100.1.2.3%3A4719&code=AB%20CD&name=Mac%20mini"
         );
+    }
+
+    #[test]
+    fn notification_settings_from_the_phone() {
+        let m: ClientMsg =
+            serde_json::from_str(r#"{"type":"set_notifications","on":true,"finished":false}"#)
+                .unwrap();
+        assert!(matches!(
+            m,
+            ClientMsg::SetNotifications {
+                on: true,
+                finished: false
+            }
+        ));
     }
 
     #[test]

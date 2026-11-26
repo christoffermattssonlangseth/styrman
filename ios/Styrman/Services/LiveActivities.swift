@@ -17,21 +17,42 @@ final class LiveActivities {
         get { UserDefaults.standard.object(forKey: "liveActivity") as? Bool ?? true }
         set {
             UserDefaults.standard.set(newValue, forKey: "liveActivity")
-            if !newValue { Task { await endAll() } }
+            if newValue {
+                // The Mac may start one again while the app is closed.
+                if let startToken { register(kind: "start", startToken) }
+            } else {
+                // Off means off: end what shows, and take back both tokens, or the
+                // Mac would keep updating it, or start a new one.
+                Task { await endAll() }
+                register(kind: "start", nil)
+            }
         }
     }
+
+    /// The push-to-start token, kept to hand back when switched on again (iOS
+    /// gives it only when it changes).
+    private var startToken: Data?
 
     private init() {
         // Push-to-start: lets styrd start the activity while the app is closed.
         Task { [weak self] in
             for await data in Activity<StyrmanActivityAttributes>.pushToStartTokenUpdates {
-                self?.register(kind: "start", data)
+                guard let self else { return }
+                self.startToken = data
+                if self.enabled { self.register(kind: "start", data) }
             }
         }
         // Activities started by a push get their own update token.
         Task { [weak self] in
             for await activity in Activity<StyrmanActivityAttributes>.activityUpdates {
-                self?.observe(activity)
+                guard let self else { return }
+                if self.enabled {
+                    self.observe(activity)
+                } else {
+                    // Started by the Mac before it heard this was off.
+                    nonisolated(unsafe) let activity = activity
+                    Task { await activity.end(nil, dismissalPolicy: .immediate) }
+                }
             }
         }
     }
@@ -110,7 +131,9 @@ final class LiveActivities {
         guard !observing.contains(activity.id) else { return }
         observing.insert(activity.id)
         Task { [weak self] in
-            for await data in activity.pushTokenUpdates { self?.register(kind: "update", data) }
+            for await data in activity.pushTokenUpdates where self?.enabled == true {
+                self?.register(kind: "update", data)
+            }
         }
     }
 

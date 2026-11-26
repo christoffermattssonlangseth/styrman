@@ -723,6 +723,11 @@ impl Connection {
     async fn on_client(&mut self, tx: &mut Tx, msg: ClientMsg) -> anyhow::Result<()> {
         match msg {
             ClientMsg::ListSessions => self.send_sessions(tx).await,
+            ClientMsg::SetNotifications { on, finished } => {
+                self.daemon.set_notify(&self.device, on, finished)?;
+                tracing::info!(device = %self.device, on, finished, "notification settings");
+                Ok(())
+            }
             ClientMsg::RegisterActivityToken { kind, token } => {
                 let valid = token.as_deref().is_none_or(|t| {
                     (32..=400).contains(&t.len()) && t.chars().all(|c| c.is_ascii_hexdigit())

@@ -486,6 +486,17 @@ pub fn notification_for(
     }
 }
 
+/// Whether a phone's settings let `category` through. Approvals and errors need
+/// notifications on; finished turns and new sessions also "when a turn finishes".
+/// A test push (no category) always goes.
+pub fn wants(d: &crate::store::DeviceRecord, category: Option<&str>) -> bool {
+    match category {
+        None => true,
+        Some("PERMISSION" | "TURN_FAILED") => d.notify,
+        Some(_) => d.notify && d.notify_finished,
+    }
+}
+
 impl Daemon {
     /// Send to every paired phone with a push token that isn't connected right now
     /// (a connected app is in the foreground and already shows it).
@@ -510,6 +521,9 @@ impl Daemon {
                 continue;
             };
             if !include_connected && self.is_device_live(&d.id) {
+                continue;
+            }
+            if !wants(&d, n.category) {
                 continue;
             }
             let env = d.push_env.clone().unwrap_or_else(|| "sandbox".into());
@@ -663,6 +677,37 @@ mod tests {
             reason,
             last_message: Some("Fixed the flaky test.\nDetails…".into()),
         }
+    }
+
+    #[test]
+    fn a_phone_chooses_which_notifications_it_gets() {
+        let phone = |notify, notify_finished| crate::store::DeviceRecord {
+            id: "d".into(),
+            name: "Phone".into(),
+            secret_hash: vec![],
+            created_ms: 0,
+            last_seen_ms: None,
+            revoked: false,
+            push_token: None,
+            push_env: None,
+            activity_token: None,
+            start_token: None,
+            notify,
+            notify_finished,
+        };
+        let all = phone(true, true);
+        let needs_you = phone(true, false);
+        let off = phone(false, false);
+        for c in ["PERMISSION", "TURN_FAILED", "TURN", "SHARED"] {
+            assert!(wants(&all, Some(c)));
+            assert!(!wants(&off, Some(c)));
+        }
+        assert!(wants(&needs_you, Some("PERMISSION")));
+        assert!(wants(&needs_you, Some("TURN_FAILED")));
+        assert!(!wants(&needs_you, Some("TURN")));
+        assert!(!wants(&needs_you, Some("SHARED")));
+        // `styr push test` always arrives.
+        assert!(wants(&off, None));
     }
 
     #[test]

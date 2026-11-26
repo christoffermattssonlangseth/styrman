@@ -769,6 +769,10 @@ impl Daemon {
         self.lock().store.set_push_token(device, token, env)
     }
 
+    pub fn set_notify(&self, device: &str, on: bool, finished: bool) -> Result<()> {
+        self.lock().store.set_notify(device, on, finished)
+    }
+
     /// Like `set_activity_token`, without waking the Live Activity loop (it calls this).
     pub fn set_activity_token_quiet(
         &self,

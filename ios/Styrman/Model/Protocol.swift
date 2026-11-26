@@ -490,14 +490,19 @@ enum ClientMsg: Encodable, Sendable {
     case commit(session: String, message: String, push: Bool)
     case getModels(session: String)
     case setModel(session: String, model: String?, effort: String?)
+    case setNotifications(on: Bool, finished: Bool)
 
-    private enum K: String, CodingKey { case type, kind, session, command, request, option, text, token, env, shared, path, agent, cwd, prompt, parent, name, mode, message, push, model, effort, sinceSeq = "since_seq" }
+    private enum K: String, CodingKey { case type, on, finished, kind, session, command, request, option, text, token, env, shared, path, agent, cwd, prompt, parent, name, mode, message, push, model, effort, sinceSeq = "since_seq" }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: K.self)
         switch self {
         case .getUsage:
             try c.encode("get_usage", forKey: .type)
+        case .setNotifications(let on, let finished):
+            try c.encode("set_notifications", forKey: .type)
+            try c.encode(on, forKey: .on)
+            try c.encode(finished, forKey: .finished)
         case .listSessions:
             try c.encode("list_sessions", forKey: .type)
         case .subscribe(let s, let since):

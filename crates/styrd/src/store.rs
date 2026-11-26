@@ -67,6 +67,12 @@ pub struct DeviceRecord {
     /// The phone's push-to-start token (starts a Live Activity while the app is closed).
     #[serde(skip)]
     pub start_token: Option<String>,
+    /// Notifications at all (set from the phone's settings).
+    #[serde(skip)]
+    pub notify: bool,
+    /// Also when a turn finishes or a session is shared (approvals and errors always).
+    #[serde(skip)]
+    pub notify_finished: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -156,6 +162,16 @@ impl Store {
             conn.execute_batch(
                 "ALTER TABLE devices ADD COLUMN activity_token TEXT;
                  ALTER TABLE devices ADD COLUMN start_token TEXT;",
+            )?;
+        }
+        // Which notifications each phone wants.
+        let has_notify: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('devices') WHERE name = 'notify'")?
+            .exists([])?;
+        if !has_notify {
+            conn.execute_batch(
+                "ALTER TABLE devices ADD COLUMN notify INTEGER NOT NULL DEFAULT 1;
+                 ALTER TABLE devices ADD COLUMN notify_finished INTEGER NOT NULL DEFAULT 1;",
             )?;
         }
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -443,6 +459,8 @@ impl Store {
             push_env: r.get("push_env")?,
             activity_token: r.get("activity_token")?,
             start_token: r.get("start_token")?,
+            notify: r.get::<_, i64>("notify")? != 0,
+            notify_finished: r.get::<_, i64>("notify_finished")? != 0,
         })
     }
 
@@ -486,6 +504,15 @@ impl Store {
         Ok(())
     }
 
+    /// Which notifications a device wants.
+    pub fn set_notify(&mut self, id: &str, on: bool, finished: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE devices SET notify = ?2, notify_finished = ?3 WHERE id = ?1",
+            params![id, on, finished],
+        )?;
+        Ok(())
+    }
+
     /// Set (or clear) a device's Live Activity token; `start` is the push-to-start token.
     pub fn set_activity_token(&mut self, id: &str, start: bool, token: Option<&str>) -> Result<()> {
         let sql = if start {
@@ -517,6 +544,20 @@ mod tests {
             cwd: Some("/repo".into()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_phone_keeps_its_notification_settings() {
+        let mut s = Store::open_in_memory().unwrap();
+        s.insert_device("d", "Phone", b"h", 1).unwrap();
+        let d = s.device("d").unwrap().unwrap();
+        assert!(
+            d.notify && d.notify_finished,
+            "everything, until the phone says otherwise"
+        );
+        s.set_notify("d", true, false).unwrap();
+        let d = s.device("d").unwrap().unwrap();
+        assert!(d.notify && !d.notify_finished);
     }
 
     #[test]
