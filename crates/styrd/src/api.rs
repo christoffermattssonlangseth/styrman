@@ -18,11 +18,33 @@ use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
+use styr_core::event::Event;
 use styr_core::ids::SessionId;
 use styr_core::phone::{ClientMsg, PHONE_PROTOCOL, PairRequest, ServerMsg};
 use tokio::sync::{broadcast, watch};
 
 const PAGE: u32 = 500;
+/// The most history one message carries: the phone's WebSocket drops a message
+/// over 1 MiB (and with it the connection, again on every reconnect).
+const PAGE_BYTES: usize = 256 * 1024;
+
+/// `events` in runs of at most about `limit` bytes of JSON (at least one event each).
+fn by_size(events: Vec<Event>, limit: usize) -> Vec<Vec<Event>> {
+    let mut out: Vec<Vec<Event>> = vec![];
+    let mut size = 0;
+    for e in events {
+        let n = serde_json::to_string(&e).map_or(0, |j| j.len());
+        match out.last_mut() {
+            Some(run) if size + n <= limit => run.push(e),
+            _ => {
+                out.push(vec![e]);
+                size = 0;
+            }
+        }
+        size += n;
+    }
+    out
+}
 
 /// Resolves once `stop` is true (the watch guard is dropped before returning, keeping futures `Send`).
 async fn until_stopped(stop: &mut watch::Receiver<bool>) {
@@ -680,7 +702,7 @@ impl Connection {
             if let Some(e) = events.last() {
                 last = e.seq;
             }
-            if n > 0 {
+            for events in by_size(events, PAGE_BYTES) {
                 send(
                     tx,
                     &ServerMsg::Events {
@@ -1083,5 +1105,36 @@ impl Connection {
                 .await
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod page_tests {
+    use super::*;
+
+    #[test]
+    fn a_long_history_goes_in_messages_the_phone_can_take() {
+        let events: Vec<Event> = (1..=500)
+            .map(|seq| {
+                serde_json::from_value(serde_json::json!({
+                    "session": "01M8C3A705H249464MDSQVZGTA",
+                    "seq": seq,
+                    "at_ms": 0,
+                    "source": "daemon",
+                    "kind": {"type": "error", "message": "x".repeat(3000), "fatal": false},
+                }))
+                .unwrap()
+            })
+            .collect();
+        let runs = by_size(events, PAGE_BYTES);
+        assert!(runs.len() > 1);
+        assert_eq!(runs.iter().map(Vec::len).sum::<usize>(), 500);
+        for run in &runs {
+            assert!(serde_json::to_string(run).unwrap().len() < 1024 * 1024);
+        }
+        assert_eq!(runs[0][0].seq, 1);
+        // Still in order, and a lone event bigger than the limit still goes.
+        assert_eq!(runs.last().unwrap().last().unwrap().seq, 500);
+        assert_eq!(by_size(runs[0].clone(), 10).len(), runs[0].len());
     }
 }

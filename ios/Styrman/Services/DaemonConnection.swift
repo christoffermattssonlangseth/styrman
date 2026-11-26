@@ -174,6 +174,9 @@ final class DaemonConnection {
         var req = URLRequest(url: creds.wsURL)
         req.setValue("Bearer \(creds.token)", forHTTPHeaderField: "Authorization")
         let t = session.webSocketTask(with: req)
+        // The default is 1 MiB: a bigger message (a long history from an older Mac
+        // app) would drop the connection, and again on every reconnect.
+        t.maximumMessageSize = 16 * 1024 * 1024
         task = t
         t.resume()
         var greeted = false
