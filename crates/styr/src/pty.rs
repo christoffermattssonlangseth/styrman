@@ -466,10 +466,11 @@ pub fn detect_agy_prompt(screen: &str) -> Option<TerminalPrompt> {
 pub fn detect_codex_prompt(screen: &str) -> Option<TerminalPrompt> {
     let lines: Vec<&str> = screen.lines().collect();
     // "Press enter to confirm or esc to cancel" (approvals), "enter confirm · esc
-    // skip" (e.g. "Hooks need review" at startup).
+    // skip" (e.g. "Hooks need review" at startup), "enter continue · esc back"
+    // (trusting a new folder), "Press enter to continue".
     let footer = lines.iter().rposition(|l| {
         let l = l.trim_start();
-        l.starts_with("Press enter to confirm") || l.starts_with("enter confirm")
+        l.starts_with("Press enter to") || (l.starts_with("enter ") && l.contains(" · esc"))
     })?;
     // The options sit directly above the footer (blank lines aside).
     let mut end = footer;
@@ -529,9 +530,32 @@ pub fn detect_codex_prompt(screen: &str) -> Option<TerminalPrompt> {
             l.starts_with('•') || l.starts_with('›')
         })
         .map_or(first_option.saturating_sub(30), |i| i + 1);
-    let title_at = (block_start..first_option)
-        .find(|&i| lines[i].trim().ends_with('?'))
-        .or_else(|| (block_start..first_option).find(|&i| !lines[i].trim().is_empty()))?;
+    let title_at = (block_start..first_option).find(|&i| lines[i].trim().ends_with('?'));
+    // "Trust this folder? Codex can read, …": a question that the line goes on past.
+    if title_at.is_none()
+        && let Some(i) = (block_start..first_option).find(|&i| lines[i].contains("? "))
+    {
+        let line = lines[i].trim();
+        let q = line.find("? ").expect("found") + 1;
+        let detail: Vec<String> = std::iter::once(line[q..].trim().to_owned())
+            .chain(
+                lines[block_start..first_option]
+                    .iter()
+                    .enumerate()
+                    .filter(|&(j, l)| block_start + j != i && !l.trim().is_empty())
+                    .map(|(_, l)| l.trim().to_owned()),
+            )
+            .filter(|l| !l.is_empty())
+            .collect();
+        return (options.len() >= 2).then(|| TerminalPrompt {
+            title: line[..q].to_owned(),
+            detail: detail.join("\n"),
+            options,
+            selected,
+        });
+    }
+    let title_at =
+        title_at.or_else(|| (block_start..first_option).find(|&i| !lines[i].trim().is_empty()))?;
     // In a narrow pane the question wraps ("Would you like to run the following" /
     // "command?"): take the whole sentence, back to the start of its paragraph.
     let mut title_start = title_at;
@@ -1347,6 +1371,23 @@ mod tests {
         let s = "  Would you like to run the following command?\n› 1. Yes, proceed (y)\n  2. No (esc)\n";
         assert_eq!(detect_codex_prompt(s), None);
         assert_eq!(detect_codex_prompt("› Ask Codex to do anything"), None);
+    }
+
+    #[test]
+    fn codex_trust_folder_screen_is_a_menu() {
+        // Codex (Nov 2026) on a folder it hasn't seen, as `styr codex` captured it.
+        let s = " \n  Folder access\n  /Users/me/work/projects/lesionSegmenter\n \n  Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings can run code\n  automatically, even without a model request. Continue only if you trust these files. Your trust decision will be saved.\n \n› 1. Trust and continue\n  2. Back to Agent Command Center\n \n  enter continue · esc back\n \n \n";
+        let p = detect_codex_prompt(s).expect("the trust question is a menu");
+        assert_eq!(p.title, "Trust this folder?");
+        assert_eq!(
+            p.options,
+            ["Trust and continue", "Back to Agent Command Center"]
+        );
+        assert_eq!(p.selected, 0);
+        assert!(p.detail.contains("lesionSegmenter"), "{}", p.detail);
+        assert!(p.detail.starts_with("Codex can read"), "{}", p.detail);
+        // So a message from the phone waits instead of being typed into it.
+        assert!(!codex_ready(s));
     }
 
     #[test]
