@@ -346,6 +346,14 @@ final class DaemonConnection {
         }
     }
 
+    /// Quit the agent on the Mac (closing the tab if the phone opened it) and drop it
+    /// from the list.
+    func endSession(_ session: String) {
+        guard state == .connected else { return }
+        sessions.removeAll { $0.id == session }
+        send(.endSession(session: session))
+    }
+
     func stopSharing(_ session: String) {
         guard state == .connected else { return }
         sessions.removeAll { $0.id == session }

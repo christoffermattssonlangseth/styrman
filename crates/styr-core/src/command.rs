@@ -25,4 +25,7 @@ pub enum Command {
     SetMode {
         mode: String,
     },
+    /// Quit the agent (as Ctrl+C would in its terminal) and close the cmux tab if
+    /// the phone opened it. Only for sessions running in `styr <agent>`.
+    EndSession,
 }

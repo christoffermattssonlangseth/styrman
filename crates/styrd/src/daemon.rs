@@ -776,6 +776,30 @@ impl Daemon {
         Ok(())
     }
 
+    /// From the phone: quit the agent in its terminal (and close the tab if the phone
+    /// opened it), then stop sharing. A session that has already ended is just removed.
+    pub fn end_session(&self, session: &SessionId) -> Result<()> {
+        let summary = self
+            .summary(session)?
+            .filter(|s| s.shared)
+            .context("unknown session")?;
+        let native =
+            styr_core::ids::NativeSessionRef::new(summary.agent, summary.native_id.clone());
+        if summary.status != styr_core::SessionStatus::Done {
+            let launch = self
+                .terminals
+                .launch_of(session)
+                .filter(|_| self.terminals.is_live(session))
+                .context(
+                    "This session isn't running in `styr` on the Mac, so it can't be ended from here. Quit it in its terminal.",
+                )?;
+            self.terminals.end(&launch);
+            tracing::info!(%session, "ending the session from the phone");
+        }
+        self.set_sharing(&native, false)?;
+        Ok(())
+    }
+
     /// `/styr` (or `/styr off`) caught by a `styr <agent>` terminal wrapper, for an
     /// agent that rejects unknown slash commands itself (Codex). Applies to the
     /// sessions running in that terminal, or to its first one once its hooks arrive.
@@ -1170,6 +1194,7 @@ impl Daemon {
                     Some(crate::terminals::TerminalAction::Mode(mode)) => {
                         Ok(Response::SetMode { mode })
                     }
+                    Some(crate::terminals::TerminalAction::End) => Ok(Response::EndSession),
                     None => Err(anyhow::anyhow!("detached")),
                 }
             }

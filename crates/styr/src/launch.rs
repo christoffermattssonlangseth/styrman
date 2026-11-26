@@ -127,10 +127,11 @@ pub fn exec(agent: AgentKind, args: Vec<OsString>) -> Result<std::convert::Infal
     if wrappable && interactive && crate::pty::can_wrap() {
         // A session started from the phone comes with its terminal id (the daemon
         // already made its placeholder).
-        let launch_id = std::env::var("STYR_PRESET_LAUNCH_ID")
+        let preset = std::env::var("STYR_PRESET_LAUNCH_ID")
             .ok()
-            .filter(|s| s.len() == 16 && s.bytes().all(|b| b.is_ascii_hexdigit()))
-            .unwrap_or_else(|| format!("{:016x}", rand_u64()));
+            .filter(|s| s.len() == 16 && s.bytes().all(|b| b.is_ascii_hexdigit()));
+        let from_phone = preset.is_some();
+        let launch_id = preset.unwrap_or_else(|| format!("{:016x}", rand_u64()));
         // SAFETY: still single-threaded here; nested agents mustn't reuse it.
         unsafe { std::env::remove_var("STYR_PRESET_LAUNCH_ID") };
         let mut all: Vec<OsString> = spec.extra_args.iter().map(OsString::from).collect();
@@ -147,6 +148,9 @@ pub fn exec(agent: AgentKind, args: Vec<OsString>) -> Result<std::convert::Infal
             mode_reader,
             catch_styr,
         )?;
+        if crate::pty::END_REQUESTED.load(std::sync::atomic::Ordering::Relaxed) {
+            ended_from_phone(from_phone);
+        }
         std::process::exit(code);
     }
     let mut cmd = std::process::Command::new(&bin);
@@ -226,6 +230,33 @@ fn rand_u64() -> u64 {
         let _ = f.read_exact(&mut b);
     }
     u64::from_ne_bytes(b) ^ std::process::id() as u64
+}
+
+/// After the phone ended the session: close the cmux tab if the phone opened it
+/// (it was only ever for this agent), else say what happened in the terminal.
+fn ended_from_phone(phone_tab: bool) {
+    let surface = std::env::var("CMUX_SURFACE_ID")
+        .ok()
+        .filter(|s| !s.is_empty());
+    if phone_tab && let Some(surface) = surface {
+        let cmux = std::env::var("CMUX_BUNDLED_CLI_PATH")
+            .ok()
+            .filter(|p| std::path::Path::new(p).exists())
+            .unwrap_or_else(|| "/Applications/cmux.app/Contents/Resources/bin/cmux".into());
+        // Closing the tab ends this process too: start it and go.
+        let started = std::process::Command::new(cmux)
+            .args(["close-surface", "--surface", &surface])
+            .env("CMUX_QUIET", "1")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        if started.is_ok() {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            return;
+        }
+    }
+    eprintln!("\r\nStyrman: ended from the phone.\r");
 }
 
 #[cfg(test)]

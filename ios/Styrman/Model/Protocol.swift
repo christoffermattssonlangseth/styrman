@@ -131,6 +131,9 @@ struct SessionSummary: Codable, Identifiable, Hashable, Sendable {
         mode = (try? c.decodeIfPresent(String.self, forKey: .mode)) ?? nil
     }
 
+    /// Can be ended from the phone: running in `styr <agent>` (or already over).
+    var canEnd: Bool { inTerminalWrapper && status != .done }
+
     /// Repository / folder name for the list.
     var repoName: String {
         guard let cwd, !cwd.isEmpty else { return title ?? "Session" }
@@ -442,6 +445,7 @@ enum ClientMsg: Encodable, Sendable {
     case createFolder(parent: String, name: String)
     case registerActivityToken(kind: String, token: String?)
     case setMode(session: String, mode: String)
+    case endSession(session: String)
 
     private enum K: String, CodingKey { case type, kind, session, command, request, option, text, token, env, shared, path, agent, cwd, prompt, parent, name, mode, sinceSeq = "since_seq" }
 
@@ -462,6 +466,10 @@ enum ClientMsg: Encodable, Sendable {
             try cmd.encode("resolve_permission", forKey: .type)
             try cmd.encode(request, forKey: .request)
             try cmd.encode(option, forKey: .option)
+        case .endSession(let s):
+            try c.encode("command", forKey: .type); try c.encode(s, forKey: .session)
+            var cmd = c.nestedContainer(keyedBy: K.self, forKey: .command)
+            try cmd.encode("end_session", forKey: .type)
         case .setMode(let s, let mode):
             try c.encode("command", forKey: .type); try c.encode(s, forKey: .session)
             var cmd = c.nestedContainer(keyedBy: K.self, forKey: .command)

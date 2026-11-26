@@ -34,6 +34,8 @@ pub enum TerminalAction {
     Select(usize),
     /// Switch the agent's permission mode.
     Mode(String),
+    /// Quit the agent.
+    End,
 }
 
 /// Permission modes the phone may ask for (Claude's names).
@@ -74,6 +76,8 @@ struct Inner {
     selects: HashMap<String, usize>,
     /// Mode changes not yet handed to the wrapper, per launch.
     mode_sets: HashMap<String, String>,
+    /// Launches asked to quit, not yet told.
+    ends: std::collections::HashSet<String>,
     /// The permission mode the agent shows, per launch.
     modes: HashMap<String, String>,
     /// The permission menu currently on screen, per launch.
@@ -265,7 +269,9 @@ impl Terminals {
         let mut g = self.lock();
         g.last_seen.insert(launch.to_owned(), Instant::now());
         // A pending menu selection goes out first, then a mode change.
-        if let Some(i) = g.selects.remove(launch) {
+        if g.ends.remove(launch) {
+            let _ = tx.send(TerminalAction::End);
+        } else if let Some(i) = g.selects.remove(launch) {
             let _ = tx.send(TerminalAction::Select(i));
         } else if let Some(m) = g.mode_sets.remove(launch) {
             let _ = tx.send(TerminalAction::Mode(m));
@@ -341,6 +347,21 @@ impl Terminals {
             None => {
                 g.mode_sets.insert(launch.to_owned(), mode.to_owned());
             }
+        }
+    }
+
+    /// Ask the wrapper to quit its agent.
+    pub fn end(&self, launch: &str) {
+        let mut g = self.lock();
+        g.last_seen.insert(launch.to_owned(), Instant::now());
+        g.selects.remove(launch);
+        g.mode_sets.remove(launch);
+        let sent = g
+            .attached
+            .remove(launch)
+            .is_some_and(|tx| tx.send(TerminalAction::End).is_ok());
+        if !sent {
+            g.ends.insert(launch.to_owned());
         }
     }
 
@@ -638,6 +659,16 @@ mod tests {
         assert_eq!(rx.try_recv().unwrap(), TerminalAction::Mode("plan".into()));
         assert!(t.note_mode("L", Some("plan".into())));
         assert!(!t.note_mode("L", Some("plan".into())), "unchanged");
+
+        // Quitting goes before anything else still waiting.
+        t.set_mode("L", "auto");
+        t.end("L");
+        let mut rx = t.attach("L");
+        assert_eq!(rx.try_recv().unwrap(), TerminalAction::End);
+        assert!(
+            t.lock().mode_sets.is_empty(),
+            "a mode change after quitting is dropped"
+        );
     }
 
     #[test]

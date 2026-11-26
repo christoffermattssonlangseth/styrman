@@ -12,7 +12,7 @@ use std::io::{Read, Write};
 use std::os::fd::{FromRawFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use styr_core::ipc::{Client, IpcError, Request, Response, TerminalPrompt};
@@ -355,6 +355,11 @@ pub fn can_wrap() -> bool {
 /// Reads an agent's own permission menu off the screen (agent-specific).
 pub type PromptDetector = fn(&str) -> Option<TerminalPrompt>;
 
+/// The phone asked to end the session (see `end_agent`).
+pub static END_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// The agent's pid, once forked.
+static CHILD: AtomicI32 = AtomicI32::new(0);
+
 /// Reads the agent's permission mode off its screen.
 pub type ModeReader = fn(&str) -> Option<&'static str>;
 
@@ -636,6 +641,7 @@ pub fn run(
         }
     }
 
+    CHILD.store(pid, Ordering::Relaxed);
     let raw = RawMode::enter()?;
     // SAFETY: `master` is a fresh descriptor we own; dup it for the writer side.
     let master_read = unsafe { std::fs::File::from_raw_fd(master) };
@@ -1027,6 +1033,10 @@ fn inject_loop(
                     }
                 }
             }
+            Ok(Response::EndSession) => {
+                END_REQUESTED.store(true, Ordering::Relaxed);
+                end_agent(w, done);
+            }
             Ok(Response::SetMode { mode }) => {
                 if let Some(read) = mode_reader {
                     switch_mode(read, &mode, w, screen, on_screen);
@@ -1035,6 +1045,42 @@ fn inject_loop(
             Ok(_) => std::thread::sleep(Duration::from_secs(1)),
             Err(IpcError::NotRunning(_)) => std::thread::sleep(Duration::from_secs(3)),
             Err(_) => std::thread::sleep(Duration::from_secs(1)),
+        }
+    }
+}
+
+/// Quit the agent as you would: Ctrl+C (the first may only interrupt a turn, so up
+/// to three), then SIGTERM, then SIGKILL if it still hasn't exited.
+fn end_agent(w: &Mutex<std::fs::File>, done: &AtomicBool) {
+    let exited_within = |ms: u64| {
+        let until = std::time::Instant::now() + Duration::from_millis(ms);
+        while std::time::Instant::now() < until {
+            if done.load(Ordering::Relaxed) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        done.load(Ordering::Relaxed)
+    };
+    for _ in 0..3 {
+        {
+            let mut f = w.lock().unwrap_or_else(|p| p.into_inner());
+            let _ = f.write_all(b"\x03");
+            let _ = f.flush();
+        }
+        if exited_within(700) {
+            return;
+        }
+    }
+    let pid = CHILD.load(Ordering::Relaxed);
+    if pid <= 0 {
+        return;
+    }
+    for (signal, wait) in [(libc::SIGTERM, 2000), (libc::SIGKILL, 1000)] {
+        // SAFETY: signalling our own child (not yet reaped: `done` is still false).
+        unsafe { libc::kill(pid, signal) };
+        if exited_within(wait) {
+            return;
         }
     }
 }

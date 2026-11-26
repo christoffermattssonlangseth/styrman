@@ -8,6 +8,7 @@ struct SessionListView: View {
     @State private var showUsage = false
     @State private var path: [String] = []
     @State private var showDone = false
+    @State private var ending: SessionSummary?
 
     private var needsYou: [SessionSummary] { connection.sessions.filter { $0.status.needsUser } }
     private var working: [SessionSummary] { connection.sessions.filter { $0.status == .working || $0.status == .error } }
@@ -16,6 +17,12 @@ struct SessionListView: View {
     var body: some View {
         NavigationStack(path: $path) {
             list
+                .confirmationDialog("End this session?", isPresented: endingShown, titleVisibility: .visible,
+                                    presenting: ending) { s in
+                    Button("End session", role: .destructive) { connection.endSession(s.id) }
+                } message: { s in
+                    Text(EndSessionText.message(s))
+                }
                 .alert("Styrman", isPresented: errorShown) {
                     Button("OK") { connection.lastError = nil }
                 } message: {
@@ -135,6 +142,10 @@ struct SessionListView: View {
         }
     }
 
+    private var endingShown: Binding<Bool> {
+        Binding(get: { ending != nil }, set: { if !$0 { ending = nil } })
+    }
+
     private var errorShown: Binding<Bool> {
         Binding(get: { connection.lastError != nil && path.isEmpty },
                 set: { if !$0 { connection.lastError = nil } })
@@ -178,8 +189,16 @@ struct SessionListView: View {
             Button(s.status == .done ? "Remove" : "Stop sharing", role: .destructive) {
                 connection.stopSharing(s.id)
             }
+            if s.canEnd {
+                Button("End") { ending = s }.tint(.orange)
+            }
         }
         .contextMenu {
+            if s.canEnd {
+                Button(role: .destructive) { ending = s } label: {
+                    Label("End session", systemImage: "stop.circle")
+                }
+            }
             Button(role: .destructive) { connection.stopSharing(s.id) } label: {
                 Label(s.status == .done ? "Remove" : "Stop sharing", systemImage: "eye.slash")
             }
@@ -614,5 +633,13 @@ struct VoiceSettings: View {
         default: ""
         }
         return "\(v.name)\(q)"
+    }
+}
+
+enum EndSessionText {
+    /// What ending does, for the confirmation.
+    static func message(_ s: SessionSummary?) -> String {
+        let agent = s?.agent.displayName ?? "The agent"
+        return "\(agent) quits on your Mac, as if you pressed Ctrl+C in its terminal. If it was started from this phone, its cmux tab closes too."
     }
 }

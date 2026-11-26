@@ -9,6 +9,7 @@ struct SessionDetailView: View {
     /// after it are read aloud automatically.
     @State private var baseline: String??
     @State private var showReadOnlyHelp = false
+    @State private var confirmEnd = false
     /// How many of the latest rows to draw (more with "Show earlier").
     @State private var shown = 150
     @Environment(\.dismiss) private var dismiss
@@ -119,6 +120,14 @@ struct SessionDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         // The bar takes the agent's colour, so it's always clear who you're talking to.
         .toolbarBackground(Theme.color(for: agent).opacity(0.07), for: .navigationBar)
+        .confirmationDialog("End this session?", isPresented: $confirmEnd, titleVisibility: .visible) {
+            Button("End session", role: .destructive) {
+                connection.endSession(sessionId)
+                dismiss()
+            }
+        } message: {
+            Text(EndSessionText.message(summary))
+        }
         .toolbarBackground(.visible, for: .navigationBar)
         .toolbar {
             if let summary {
@@ -177,6 +186,11 @@ struct SessionDetailView: View {
                             Label("Read replies aloud", systemImage: "speaker.wave.2")
                         }
                         Divider()
+                        if summary.canEnd {
+                            Button(role: .destructive) { confirmEnd = true } label: {
+                                Label("End session", systemImage: "stop.circle")
+                            }
+                        }
                         Button(role: .destructive) {
                             connection.stopSharing(sessionId)
                             dismiss()

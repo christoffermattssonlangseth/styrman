@@ -214,6 +214,8 @@ pub enum Response {
     SetMode {
         mode: String,
     },
+    /// Quit the agent; close the tab if the phone opened it (see `Command::EndSession`).
+    EndSession,
     PromptAccepted {
         /// False: queued until the agent next stops.
         delivered: bool,
