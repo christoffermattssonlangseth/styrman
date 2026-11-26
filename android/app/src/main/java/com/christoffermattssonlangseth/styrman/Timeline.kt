@@ -33,8 +33,46 @@ class SessionTimeline(val sessionId: String) {
     val items = mutableStateListOf<TimelineItem>()
     var lastSeq = 0L
         private set
+    private var liveState by mutableStateOf(false)
     /** History caught up and live events flowing. */
-    var isLive by mutableStateOf(false)
+    var isLive: Boolean
+        get() = liveState
+        set(value) {
+            liveState = value
+            // Offline, nothing keeps it current.
+            if (!value) preview = null
+        }
+
+    /** The reply the agent is writing right now, as its terminal shows it. Gone when
+     *  the real message (or anything else from the agent) arrives. */
+    var preview: String? by mutableStateOf(null)
+        private set
+
+    fun showPreview(text: String?) {
+        if (text.isNullOrEmpty()) { preview = null; return }
+        // Already here as a message (the screen redrew a finished reply): no echo.
+        fun squash(s: String) = s.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
+        val body = squash(text.removePrefix("…")).take(200)
+        val last = items.lastOrNull { it is TimelineItem.Assistant } as? TimelineItem.Assistant
+        preview = if (last != null && squash(last.text).contains(body)) null else text
+    }
+
+    /** The diffs a permission is about: from its own input, or else from the latest edit
+     *  of the same file (Codex asks with the paths only). */
+    fun diffs(permission: TimelineItem.Permission): List<FileDiff>? {
+        if (permission.tool.kind != ToolKind.Edit) return null
+        FileDiff.from(permission.tool)?.let { return it }
+        val paths = permission.tool.locations.toSet() +
+            listOfNotNull(((permission.tool.input as? kotlinx.serialization.json.JsonObject)?.str("path")))
+        for (item in items.asReversed()) {
+            val t = item as? TimelineItem.Tool ?: continue
+            if (t.tool.kind != ToolKind.Edit) continue
+            val d = FileDiff.from(t.tool) ?: continue
+            val mine = d.map { it.path }.toSet() + t.tool.locations
+            if (paths.isEmpty() || mine.any { m -> paths.any { p -> p == m || p.endsWith(m) || m.endsWith(p) } }) return d
+        }
+        return null
+    }
     /** Prompts sent from this phone that the agent hasn't picked up yet. */
     val pending = mutableStateListOf<PendingPrompt>()
 
@@ -94,6 +132,11 @@ class SessionTimeline(val sessionId: String) {
 
     private fun apply(e: Event) {
         val key = e.seq.toString()
+        when (e.kind) {
+            is EventKind.AssistantMessage, is EventKind.UserMessage, is EventKind.ToolCall,
+            is EventKind.PermissionRequested, EventKind.TurnEnded, is EventKind.SessionEnded -> preview = null
+            else -> {}
+        }
         when (val k = e.kind) {
             is EventKind.SessionStarted ->
                 items += TimelineItem.Divider(key, if (k.start == "resume") "Session resumed" else "Session started", e.atMs)

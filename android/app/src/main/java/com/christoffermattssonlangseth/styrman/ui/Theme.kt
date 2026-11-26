@@ -66,6 +66,13 @@ fun agentColor(agent: AgentKind): Color {
     }
 }
 
+/** Diff greens and reds (GitHub's, as on iOS). */
+@Composable
+fun diffAddedColor(): Color = if (isSystemInDarkTheme()) Color(0xFF56D364) else Color(0xFF1A7F37)
+
+@Composable
+fun diffRemovedColor(): Color = if (isSystemInDarkTheme()) Color(0xFFF47067) else Color(0xFFCF222E)
+
 @Composable
 fun attentionColor(): Color = if (isSystemInDarkTheme()) Color(0xFFFFCF83) else Color(0xFF855008)
 

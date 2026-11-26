@@ -78,7 +78,19 @@ data class SessionSummary(
     val lastSeq: Long,
     val inTerminalWrapper: Boolean,
     val acceptsPrompts: Boolean,
+    /** Permission mode as the terminal shows it; known only inside `styr <agent>`. */
+    val mode: String? = null,
+    /** Its wrapper predates a Styrman update and lacks stop / terminal. */
+    val outdated: Boolean = false,
 ) {
+    /** Quit the agent from the phone: needs the wrapper. */
+    val canEnd get() = inTerminalWrapper && status != SessionStatus.Done
+
+    /** Stop a turn and show the terminal: needs a current wrapper. */
+    val hasLiveControls get() = inTerminalWrapper && !outdated
+
+    val permissionMode get() = PermissionMode.of(mode)
+
     /** Repository / folder name for the list. */
     val repoName: String
         get() = cwd?.takeIf { it.isNotEmpty() }?.trimEnd('/')?.substringAfterLast('/') ?: (title ?: "Session")
@@ -99,7 +111,26 @@ data class SessionSummary(
             inTerminalWrapper = o.bool("in_terminal_wrapper") ?: false,
             // Older daemons don't say; assume yes rather than hide the message box.
             acceptsPrompts = o.bool("accepts_prompts") ?: true,
+            mode = o.str("mode"),
+            outdated = o.bool("outdated") ?: false,
         )
+    }
+}
+
+/** Claude's permission modes (Shift+Tab in its terminal), labelled as on iOS. */
+enum class PermissionMode(val wire: String, val label: String, val short: String, val detail: String) {
+    Manual("default", "Manual", "Manual", "Asks before edits and commands"),
+    AcceptEdits("acceptEdits", "Accept edits", "Edits", "Edits files without asking"),
+    Plan("plan", "Plan", "Plan", "Plans first, changes nothing"),
+    Auto("auto", "Auto", "Auto", "Decides for itself what needs asking"),
+    BypassPermissions("bypassPermissions", "Bypass permissions", "Bypass", "Never asks");
+
+    companion object {
+        fun of(s: String?) = entries.firstOrNull { it.wire == s }
+
+        /** What the phone offers: bypass only when the session already allows it. */
+        fun choices(current: PermissionMode) =
+            if (current == BypassPermissions) entries.toList() else entries.filter { it != BypassPermissions }
     }
 }
 
@@ -117,13 +148,20 @@ enum class ToolStatus { Pending, Running, Completed, Failed;
     }
 }
 
-data class ToolInfo(val name: String, val kind: ToolKind, val title: String, val input: JsonElement) {
+data class ToolInfo(
+    val name: String,
+    val kind: ToolKind,
+    val title: String,
+    val input: JsonElement,
+    val locations: List<String> = emptyList(),
+) {
     companion object {
         fun parse(o: JsonObject?) = ToolInfo(
             name = o?.str("name") ?: "tool",
             kind = ToolKind.of(o?.str("kind")),
             title = o?.str("title") ?: "",
             input = o?.get("input") ?: JsonNull,
+            locations = o?.arr("locations").orEmpty().mapNotNull { (it as? JsonPrimitive)?.contentOrNull },
         )
     }
 }
@@ -316,6 +354,12 @@ sealed interface ServerMsg {
     data class PromptDelivered(val session: String, val text: String) : ServerMsg
     data class Folders(val listing: FolderListing) : ServerMsg
     data class SessionStarting(val session: String) : ServerMsg
+    /** Uncommitted changes as a unified diff; `truncated`: cut for length. */
+    data class Changes(val session: String, val branch: String?, val diff: String, val truncated: Boolean) : ServerMsg
+    /** The terminal as it looks now, while this phone watches it. */
+    data class Screen(val session: String, val text: String, val cols: Int) : ServerMsg
+    /** The reply being written right now; null: none in progress. */
+    data class Preview(val session: String, val text: String?) : ServerMsg
     data class Error(val message: String) : ServerMsg
     data class Unknown(val type: String) : ServerMsg
 
@@ -339,6 +383,9 @@ sealed interface ServerMsg {
                 "prompt_delivered" -> PromptDelivered(o.str("session") ?: "", o.str("text") ?: "")
                 "folders" -> Folders(FolderListing.parse(o.obj("listing") ?: JsonObject(emptyMap())))
                 "session_starting" -> SessionStarting(o.str("session") ?: "")
+                "changes" -> Changes(o.str("session") ?: "", o.str("branch"), o.str("diff") ?: "", o.bool("truncated") ?: false)
+                "screen" -> Screen(o.str("session") ?: "", o.str("text") ?: "", o.long("cols")?.toInt() ?: 80)
+                "preview" -> Preview(o.str("session") ?: "", o.str("text"))
                 "error" -> Error(o.str("message") ?: "")
                 else -> Unknown(type ?: "?")
             }
@@ -355,18 +402,20 @@ object ClientMsg {
     fun subscribe(session: String, sinceSeq: Long) =
         buildJsonObject { put("type", "subscribe"); put("session", session); put("since_seq", sinceSeq) }
     fun unsubscribe(session: String) = buildJsonObject { put("type", "unsubscribe"); put("session", session) }
-    fun resolvePermission(session: String, request: String, option: String) = buildJsonObject {
-        put("type", "command"); put("session", session)
-        putJsonObject("command") { put("type", "resolve_permission"); put("request", request); put("option", option) }
-    }
-    fun sendPrompt(session: String, text: String) = buildJsonObject {
-        put("type", "command"); put("session", session)
-        putJsonObject("command") { put("type", "send_prompt"); put("text", text) }
-    }
-    fun stopSharing(session: String) = buildJsonObject {
-        put("type", "command"); put("session", session)
-        putJsonObject("command") { put("type", "set_sharing"); put("shared", false) }
-    }
+    private fun command(session: String, type: String, fields: kotlinx.serialization.json.JsonObjectBuilder.() -> Unit = {}) =
+        buildJsonObject {
+            put("type", "command"); put("session", session)
+            putJsonObject("command") { put("type", type); fields() }
+        }
+    fun resolvePermission(session: String, request: String, option: String) =
+        command(session, "resolve_permission") { put("request", request); put("option", option) }
+    fun sendPrompt(session: String, text: String) = command(session, "send_prompt") { put("text", text) }
+    fun stopSharing(session: String) = command(session, "set_sharing") { put("shared", false) }
+    fun interrupt(session: String) = command(session, "interrupt")
+    fun endSession(session: String) = command(session, "end_session")
+    fun setMode(session: String, mode: String) = command(session, "set_mode") { put("mode", mode) }
+    fun getChanges(session: String) = buildJsonObject { put("type", "get_changes"); put("session", session) }
+    fun watchScreen(session: String) = buildJsonObject { put("type", "watch_screen"); put("session", session) }
     fun listFolders(path: String?) = buildJsonObject {
         put("type", "list_folders"); if (path != null) put("path", path)
     }

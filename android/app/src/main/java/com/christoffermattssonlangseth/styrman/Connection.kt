@@ -5,6 +5,7 @@ import android.os.Handler
 import android.os.Looper
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.serialization.json.JsonObject
@@ -52,6 +53,16 @@ class DaemonConnection(context: Context) {
     var folders: FolderListing? by mutableStateOf(null)
         private set
 
+    /** A session folder's uncommitted changes, or why they couldn't be read. */
+    data class Changes(val branch: String?, val files: List<FileDiff>, val truncated: Boolean, val error: String? = null)
+
+    /** Uncommitted changes asked for, per session. */
+    val changes = mutableStateMapOf<String, Changes>()
+    /** Terminal screens being watched, per session. */
+    val screens = mutableStateMapOf<String, ServerMsg.Screen>()
+    // The daemon's errors name no session: one arriving while changes are awaited is theirs.
+    private var awaitingChanges: String? = null
+
     private val timelines = HashMap<String, SessionTimeline>()
     private val watched = HashSet<String>()
     private var ws: WebSocket? = null
@@ -98,6 +109,8 @@ class DaemonConnection(context: Context) {
         credentials = null
         sessions.clear()
         timelines.clear()
+        changes.clear()
+        screens.clear()
         state = State.Unpaired
     }
 
@@ -125,6 +138,8 @@ class DaemonConnection(context: Context) {
 
     private fun lost(unauthorized: Boolean, why: String) {
         timelines.values.forEach { it.isLive = false }
+        awaitingChanges?.let { changes[it] = Changes(null, emptyList(), false, error = "The connection to the Mac was lost.") }
+        awaitingChanges = null
         if (unauthorized) {
             state = State.Unauthorized
             return
@@ -173,7 +188,19 @@ class DaemonConnection(context: Context) {
                 requestedSession = msg.session
                 send(ClientMsg.listSessions())
             }
-            is ServerMsg.Error -> lastError = msg.message
+            is ServerMsg.Changes -> {
+                if (awaitingChanges == msg.session) awaitingChanges = null
+                changes[msg.session] = Changes(msg.branch, GitChanges.files(msg.diff), msg.truncated)
+            }
+            is ServerMsg.Screen -> screens[msg.session] = msg
+            is ServerMsg.Preview -> timelines[msg.session]?.showPreview(msg.text)
+            is ServerMsg.Error -> {
+                val waiting = awaitingChanges
+                if (waiting != null) {
+                    awaitingChanges = null
+                    changes[waiting] = Changes(null, emptyList(), false, error = msg.message)
+                } else lastError = msg.message
+            }
             is ServerMsg.Unknown -> {}
         }
     }
@@ -216,6 +243,48 @@ class DaemonConnection(context: Context) {
         val id = timeline.addPending(t)
         main.postDelayed({ timeline.markUnconfirmed(id) }, 15_000)
         return true
+    }
+
+    /** Stop the agent's current turn (Esc in its terminal). */
+    fun interrupt(session: String) {
+        if (state == State.Connected) send(ClientMsg.interrupt(session))
+    }
+
+    /** Quit the agent on the Mac (closing the tab if the phone opened it) and drop it from the list. */
+    fun endSession(session: String) {
+        if (state != State.Connected) return
+        sessions.removeAll { it.id == session }
+        send(ClientMsg.endSession(session))
+    }
+
+    /** Switch the permission mode. The Mac presses Shift+Tab until the footer shows it; if
+     *  the session's mode hasn't followed after a few seconds, say so. */
+    fun setMode(session: String, mode: PermissionMode) {
+        if (state != State.Connected) return
+        send(ClientMsg.setMode(session, mode.wire))
+        main.postDelayed({
+            val s = this.session(session) ?: return@postDelayed
+            if (s.mode != mode.wire && lastError == null) {
+                lastError = "${s.agent.displayName} didn't switch to ${mode.label}. " +
+                    "This version may not have that mode, or a dialog is open in its terminal."
+            }
+        }, 6_000)
+    }
+
+    /** Ask for the session folder's uncommitted changes (they arrive in `changes`). */
+    fun getChanges(session: String) {
+        if (state != State.Connected) {
+            changes[session] = Changes(null, emptyList(), false, error = "Not connected to the Mac.")
+            return
+        }
+        changes.remove(session)
+        awaitingChanges = session
+        send(ClientMsg.getChanges(session))
+    }
+
+    /** Ask for the terminal screen for the next 20 s (call again to keep it). */
+    fun watchScreen(session: String) {
+        if (state == State.Connected) send(ClientMsg.watchScreen(session))
     }
 
     fun stopSharing(session: String) {
