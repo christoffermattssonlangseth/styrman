@@ -446,6 +446,13 @@ pub fn claude_preview(contents: &str) -> Option<String> {
         }
         body.push(l.strip_prefix("  ").unwrap_or(l).trim_end().to_owned());
     }
+    reflow(body, scrolled)
+}
+
+/// A reply's lines (indent removed) as text: lines the terminal wrapped are joined
+/// back into paragraphs; lists and indented code keep their line breaks. "…" first
+/// if its start has scrolled off.
+fn reflow(mut body: Vec<String>, scrolled: bool) -> Option<String> {
     while body.last().is_some_and(|l| l.is_empty()) {
         body.pop();
     }
@@ -478,6 +485,97 @@ pub fn claude_preview(contents: &str) -> Option<String> {
         return None;
     }
     Some(if scrolled { format!("…{text}") } else { text })
+}
+
+/// The reply Codex is writing, from its screen: the last `•` block above its input
+/// line (`› …`), while the turn runs. Not a tool step (`• Ran cargo test`,
+/// `• Explored`) or the status line (`• Working (3s • esc to interrupt)`); nothing
+/// once the turn is over (`Worked for 13s`). "…" first if its start scrolled off.
+pub fn codex_preview(contents: &str) -> Option<String> {
+    let lines: Vec<&str> = contents.lines().collect();
+    let input = lines.iter().rposition(|l| l.starts_with("› "))?;
+    let status = |l: &str| {
+        let t = l.trim();
+        t.starts_with("• Working") || t.contains("esc to interrupt")
+    };
+    // Upwards from the input line: past blanks and the status line, to the reply's
+    // last line.
+    let mut end = input;
+    while end > 0 && (lines[end - 1].trim().is_empty() || status(lines[end - 1])) {
+        end -= 1;
+    }
+    if end == 0 {
+        return None;
+    }
+    let last = lines[end - 1].trim_start_matches(['─', ' ']);
+    if last.starts_with("Worked for") || last.starts_with("■") {
+        return None; // the turn is over (or was interrupted)
+    }
+    let mut start = end - 1;
+    let scrolled = loop {
+        let l = lines[start];
+        if l.starts_with("• ") {
+            break false;
+        }
+        // On a short screen Codex pins your prompt to the top, cut to one line
+        // ("…"): right under it, the reply's start has scrolled off. (In the history
+        // a prompt wraps instead, and a reply under it starts with `•`.)
+        if l.starts_with("› ") && l.trim_end().ends_with('…') && start + 1 < end {
+            start += 1;
+            while start + 1 < end && lines[start].trim().is_empty() {
+                start += 1;
+            }
+            break true;
+        }
+        // Not reply text: the prompt, a tool's output, a rule.
+        if !(l.trim().is_empty() || l.starts_with("  "))
+            || l.trim_start().starts_with(['└', '│', '›'])
+        {
+            return None;
+        }
+        if start == 0 {
+            break true;
+        }
+        start -= 1;
+    };
+    let first = if scrolled {
+        lines[start].trim()
+    } else {
+        lines[start].trim_start_matches("• ").trim()
+    };
+    let tool_like = [
+        "Ran ",
+        "Running ",
+        "Explored",
+        "Exploring",
+        "Edited ",
+        "Editing ",
+        "Added ",
+        "Deleted ",
+        "Read ",
+        "Reading ",
+        "Searched ",
+        "Searching ",
+        "Listed ",
+        "Updated Plan",
+        "Called ",
+        "Calling ",
+        "Waited",
+        "Waiting",
+        "Viewed ",
+        "Applied ",
+        "Interrupted",
+    ]
+    .iter()
+    .any(|p| first.starts_with(p));
+    if !scrolled && tool_like {
+        return None;
+    }
+    let mut body = vec![first.to_owned()];
+    for l in &lines[start + 1..end] {
+        body.push(l.strip_prefix("  ").unwrap_or(l).trim_end().to_owned());
+    }
+    reflow(body, scrolled)
 }
 
 /// Claude's mode, from its footer: "⏸ manual mode on", "⏵⏵ accept edits on",
@@ -1445,6 +1543,74 @@ mod tests {
         assert_eq!(
             claude_preview(&scrolled).as_deref(),
             Some("…the start is gone and this goes on")
+        );
+    }
+
+    /// Real Codex 0.172.0 screens (100 columns) while it writes an answer.
+    #[test]
+    fn reads_the_reply_codex_is_writing() {
+        let head = [
+            "  >_ OpenAI Codex (v0.172.0)",
+            "",
+            "› Without using any tools, write three paragraphs (about 80 words each) about the history of",
+            "  lighthouses.",
+            "",
+            "",
+        ]
+        .join("\n");
+        let foot = "\n› Ask Codex to do anything\n\n  GPT-6.2-Sol default · ~/cap · Write lighthouse history paragraphs\n  ← for agents · ? for shortcuts\n";
+        let reply = [
+            "• Some of the earliest lighthouses were fires kept burning on headlands or at harbor entrances. The",
+            "  most famous ancient example was the Pharos of Alexandria.",
+            "",
+            "  As maritime trade expanded, builders took on the challenge of placing lights on reefs and rocks",
+            "  far from shore. In 1759, John Smeaton completed a stone",
+            "",
+        ]
+        .join("\n");
+        let mid = format!("{head}{reply}{foot}");
+        assert_eq!(
+            codex_preview(&mid).as_deref(),
+            Some(
+                "Some of the earliest lighthouses were fires kept burning on headlands or at harbor entrances. The most famous ancient example was the Pharos of Alexandria.\n\nAs maritime trade expanded, builders took on the challenge of placing lights on reefs and rocks far from shore. In 1759, John Smeaton completed a stone"
+            )
+        );
+        // Thinking: only the status line.
+        let thinking = format!("{head}• Working (1s • esc to interrupt)\n{foot}");
+        assert_eq!(codex_preview(&thinking), None);
+        // With the status line under the reply, still the reply.
+        let both = format!("{head}{reply}\n• Working (5s • esc to interrupt)\n{foot}");
+        assert!(codex_preview(&both).unwrap().ends_with("completed a stone"));
+        // The turn is over.
+        let done = format!("{head}{reply}\n─ Worked for 13s • 13:50 ─────────\n{foot}");
+        assert_eq!(codex_preview(&done), None);
+        // A tool step, not a reply.
+        let tool = format!("{head}• Ran cargo test\n  └ running 12 tests\n    test ok\n{foot}");
+        assert_eq!(codex_preview(&tool), None);
+        let explored = format!("{head}• Explored\n  └ Read pty.rs\n{foot}");
+        assert_eq!(codex_preview(&explored), None);
+        // Scrolled off the top: it starts with "…".
+        // Short screens pin the prompt to the top.
+        let pinned = format!(
+            "› Without using any tools, write three paragraphs about the history of light…\n  far from shore.\n{foot}"
+        );
+        assert_eq!(codex_preview(&pinned).as_deref(), Some("…far from shore."));
+        // Codex's blank lines may be a single space.
+        assert_eq!(
+            codex_preview(&mid.replace("\n\n  As", "\n \n  As")),
+            codex_preview(&mid)
+        );
+        let scrolled =
+            format!("  far from shore. In 1759, John Smeaton\n  completed a stone{foot}");
+        assert_eq!(
+            codex_preview(&scrolled).as_deref(),
+            Some("…far from shore. In 1759, John Smeaton completed a stone")
+        );
+        // Commentary between tool steps is text too.
+        let note = format!("{head}• Ran ls\n  └ a b\n\n• I'll read the parser next.\n{foot}");
+        assert_eq!(
+            codex_preview(&note).as_deref(),
+            Some("I'll read the parser next.")
         );
     }
 

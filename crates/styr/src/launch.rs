@@ -137,13 +137,16 @@ pub fn exec(agent: AgentKind, args: Vec<OsString>) -> Result<std::convert::Infal
         let mut all: Vec<OsString> = spec.extra_args.iter().map(OsString::from).collect();
         all.extend(args);
         let catch_styr = agent == AgentKind::Codex;
-        let readers = if agent == AgentKind::Claude {
-            crate::pty::ScreenReaders {
+        let readers = match agent {
+            AgentKind::Claude => crate::pty::ScreenReaders {
                 mode: Some(crate::pty::claude_mode),
                 preview: Some(crate::pty::claude_preview),
-            }
-        } else {
-            crate::pty::ScreenReaders::default()
+            },
+            AgentKind::Codex => crate::pty::ScreenReaders {
+                mode: None,
+                preview: Some(crate::pty::codex_preview),
+            },
+            _ => crate::pty::ScreenReaders::default(),
         };
         let mut code =
             crate::pty::run(&bin, &all, &env, &launch_id, detector, readers, catch_styr)?;
