@@ -96,3 +96,24 @@ import Testing
         #expect(ReplyMarkdown.blocks("|---|\n|---|") == [.text("|---|\n|---|")])
     }
 }
+
+@Suite struct CommandTitleTests {
+    @Test func cdIntoTheSessionFolderIsDropped() {
+        let cwd = "/Users/me/work/reCORD"
+        #expect(withoutCd("cd /Users/me/work/reCORD && cat > a.py <<'EOF'", cwd: cwd) == "cat > a.py <<'EOF'")
+        #expect(withoutCd("cd \"/Users/me/work/reCORD\"; ls", cwd: cwd) == "ls")
+        // Somewhere else: kept (it matters when approving).
+        #expect(withoutCd("cd /etc && rm -rf .", cwd: cwd) == "cd /etc && rm -rf .")
+        #expect(withoutCd("cd /Users/me/work/reCORD-old && ls", cwd: cwd) == "cd /Users/me/work/reCORD-old && ls")
+        #expect(withoutCd("ls", cwd: cwd) == "ls")
+    }
+}
+
+@Suite struct UsageTextTests {
+    @Test func shortDurations() {
+        #expect(UsageText.short(45) == "45 s")
+        #expect(UsageText.short(58 * 60 + 39) == "58 min")
+        #expect(UsageText.short(3_600 + 58 * 60) == "1 h 58 min")
+        #expect(UsageText.short(5 * 86_400 + 9 * 3_600 + 120) == "5 d 9 h")
+    }
+}

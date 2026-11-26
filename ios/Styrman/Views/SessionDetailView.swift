@@ -385,11 +385,30 @@ struct SessionDetailView: View {
     }
 }
 
+/// `cd <session folder> && cargo test` → `cargo test`: agents often start each command
+/// by going to the folder they're already in, which hides the part that matters. A
+/// `cd` anywhere else stays: it matters (above all when approving).
+func withoutCd(_ cmd: String, cwd: String?) -> String {
+    guard let cwd, !cwd.isEmpty else { return cmd }
+    let t = cmd.trimmingCharacters(in: .whitespaces)
+    let home = cwd.hasSuffix("/") ? String(cwd.dropLast()) : cwd
+    for form in [home, "\"\(home)\"", "'\(home)'", home + "/"] {
+        for sep in [" && ", "; "] {
+            let prefix = "cd \(form)\(sep)"
+            if t.hasPrefix(prefix) {
+                let rest = String(t.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+                return rest.isEmpty ? cmd : rest
+            }
+        }
+    }
+    return cmd
+}
+
 /// How a tool call reads in the timeline: the bare command for shell tools, paths
 /// relative to the session's folder for everything else.
 func displayTitle(_ tool: ToolInfo, cwd: String?) -> String {
     if tool.kind == .execute, let cmd = tool.input["command"]?.string {
-        return cmd
+        return withoutCd(cmd, cwd: cwd)
     }
     guard let cwd, !cwd.isEmpty else { return tool.title }
     let prefix = cwd.hasSuffix("/") ? cwd : cwd + "/"
@@ -642,8 +661,11 @@ struct ToolCallRow: View {
                 Image(systemName: Theme.symbol(for: item.tool.kind))
                     .font(.caption)
                     .foregroundStyle(.secondary).frame(width: 14)
-                Text(title)
-                    .font(item.tool.kind == .execute
+                // Claude says what a command is for ("Run the parser tests"): plainer
+                // than the command (still in the details).
+                let described = item.tool.kind == .execute ? item.tool.input["description"]?.string : nil
+                Text(described ?? title)
+                    .font(item.tool.kind == .execute && described == nil
                           ? .system(.caption, design: .monospaced) : .footnote)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)

@@ -28,6 +28,7 @@ struct UsageView: View {
                 .refreshable { connection.refreshUsage() }
             }
             .navigationTitle("Usage")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
@@ -43,35 +44,50 @@ struct UsageView: View {
 
     private func providerSection(_ provider: UsageProvider, now: Date) -> some View {
         let observed = Date(timeIntervalSince1970: Double(provider.observedAtMs) / 1_000)
+        let stale = now.timeIntervalSince(observed) > 180
         return Section {
             ForEach(Array(provider.windows.enumerated()), id: \.offset) { _, window in
                 let reset = Date(timeIntervalSince1970: Double(window.resetsAtMs) / 1_000)
-                HStack(spacing: 16) {
-                    Gauge(value: window.usedFraction) {
-                        Text(window.title)
-                    } currentValueLabel: {
+                let hot = window.usedFraction >= 0.9
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(window.title).font(.subheadline.weight(.medium))
+                        Spacer()
                         Text(window.usedFraction, format: .percent.precision(.fractionLength(0)))
+                            .font(.subheadline.weight(.semibold)).monospacedDigit()
+                            .foregroundStyle(hot ? Color.orange : .primary)
                     }
-                    .gaugeStyle(.accessoryCircularCapacity)
-                    .tint(window.usedFraction >= 0.9 ? Color.orange : Theme.accent)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(window.title)
-                        if reset > now {
-                            Text(window.rolling ? "Next relief \(reset, style: .relative)" : "Resets in \(reset, style: .relative)")
-                                .font(.footnote).foregroundStyle(.secondary)
-                        } else {
-                            Text("Awaiting a fresh reading").font(.footnote).foregroundStyle(.secondary)
-                        }
-                    }
+                    ProgressView(value: min(max(window.usedFraction, 0), 1))
+                        .tint(hot ? Color.orange : Theme.accent)
+                    Text(reset > now
+                         ? "\(window.rolling ? "Eases" : "Resets") in \(UsageText.short(reset.timeIntervalSince(now)))"
+                         : "Awaiting a fresh reading")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, 2)
             }
         } header: {
-            Text(provider.name)
+            HStack {
+                Text(provider.name)
+                Spacer()
+                Text("\(stale ? "Stale · " : "")\(UsageText.short(now.timeIntervalSince(observed))) ago")
+                    .textCase(nil).font(.caption)
+                    .foregroundStyle(stale ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+            }
         } footer: {
-            let source = provider.estimated ? "Activity estimate" : "Reported quota"
-            let freshness = now.timeIntervalSince(observed) > 180 ? "Stale · " : ""
-            Text("\(source) · \(freshness)Updated \(observed, style: .relative) ago")
+            if provider.estimated { Text("Estimated from activity") }
         }
+    }
+}
+
+enum UsageText {
+    /// "45 s", "58 min", "1 h 58 min", "5 d 9 h".
+    static func short(_ seconds: TimeInterval) -> String {
+        let s = Int(max(0, seconds))
+        let (d, h, m) = (s / 86_400, s % 86_400 / 3_600, s % 3_600 / 60)
+        if d > 0 { return h > 0 ? "\(d) d \(h) h" : "\(d) d" }
+        if h > 0 { return m > 0 ? "\(h) h \(m) min" : "\(h) h" }
+        if m > 0 { return "\(m) min" }
+        return "\(s) s"
     }
 }
