@@ -235,6 +235,24 @@ impl Daemon {
             // The placeholder already announced the session.
             events.retain(|e| !matches!(e, EventKind::SessionStarted { .. }));
         }
+        // Restarted from the phone (another model): the agent quitting and resuming is
+        // the same session going on.
+        if let Some(l) = hook.launch_id.as_deref()
+            && self.terminals.restarting(l)
+        {
+            if events
+                .iter()
+                .any(|e| matches!(e, EventKind::SessionStarted { .. }))
+            {
+                self.terminals.restarted(l);
+            }
+            events.retain(|e| {
+                !matches!(
+                    e,
+                    EventKind::SessionStarted { .. } | EventKind::SessionEnded { .. }
+                )
+            });
+        }
         // A `/styr` caught by the terminal wrapper before this session existed.
         let pending = hook.launch_id.as_ref().and_then(|l| {
             self.pending_shares
@@ -494,6 +512,7 @@ impl Daemon {
             accepts_prompts: false,
             activity,
             mode: None,
+            effort: None,
             outdated: false,
         }
     }
@@ -504,6 +523,15 @@ impl Daemon {
             .in_terminal_wrapper
             .then(|| self.terminals.mode_of(&s.id))
             .flatten();
+        if s.in_terminal_wrapper
+            && let Some(launch) = self.terminals.launch_of(&s.id)
+        {
+            let (model, effort) = self.terminals.chosen(&launch);
+            if model.is_some() {
+                s.model = model;
+            }
+            s.effort = effort;
+        }
         s.outdated = s.in_terminal_wrapper
             && self
                 .terminals
@@ -878,6 +906,64 @@ impl Daemon {
             tracing::info!(%session, "ending the session from the phone");
         }
         self.set_sharing(&native, false)?;
+        Ok(())
+    }
+
+    /// From the phone: restart the agent with another model and/or effort, resuming
+    /// the same conversation in the same terminal. Only while it waits for a prompt:
+    /// restarting mid-turn would lose the turn.
+    pub fn set_model(
+        &self,
+        session: &SessionId,
+        model: Option<String>,
+        effort: Option<String>,
+    ) -> Result<()> {
+        let summary = self
+            .summary(session)?
+            .filter(|s| s.shared)
+            .context("unknown session")?;
+        anyhow::ensure!(
+            model.is_some() || effort.is_some(),
+            "Choose a model or effort."
+        );
+        let safe = |v: &Option<String>| {
+            v.as_deref().is_none_or(|v| {
+                !v.is_empty()
+                    && v.len() <= 80
+                    && v.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"-._:[]/".contains(&b))
+            })
+        };
+        anyhow::ensure!(safe(&model) && safe(&effort), "That isn't a model name.");
+        let launch = self
+            .terminals
+            .launch_of(session)
+            .filter(|_| self.terminals.is_live(session))
+            .context("Its model can only be changed for sessions started with `styr` (or from the phone).")?;
+        anyhow::ensure!(
+            self.terminals.level_of(&launch) >= 2,
+            "{OLDER_WRAPPER} to change its model from here."
+        );
+        anyhow::ensure!(
+            !matches!(
+                summary.status,
+                styr_core::SessionStatus::Working | styr_core::SessionStatus::NeedsApproval
+            ),
+            "It's working: change the model once it's done (or stop it first)."
+        );
+        let mode = (summary.agent == AgentKind::Claude)
+            .then(|| self.terminals.mode_of(session))
+            .flatten();
+        tracing::info!(%session, ?model, ?effort, "restarting with another model from the phone");
+        self.terminals.restart(
+            &launch,
+            crate::terminals::Restart {
+                resume: summary.native_id,
+                model,
+                effort,
+                mode,
+            },
+        );
         Ok(())
     }
 
@@ -1335,6 +1421,12 @@ impl Daemon {
                     }
                     Some(crate::terminals::TerminalAction::End) => Ok(Response::EndSession),
                     Some(crate::terminals::TerminalAction::Interrupt) => Ok(Response::Interrupt),
+                    Some(crate::terminals::TerminalAction::Restart(r)) => Ok(Response::Restart {
+                        resume: r.resume,
+                        model: r.model,
+                        effort: r.effort,
+                        mode: r.mode,
+                    }),
                     Some(crate::terminals::TerminalAction::WatchScreen) => {
                         Ok(Response::WatchScreen)
                     }

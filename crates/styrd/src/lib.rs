@@ -8,6 +8,7 @@ pub mod follow;
 pub mod ipc;
 pub mod launcher;
 pub mod live;
+pub mod models;
 pub mod peers;
 pub mod permissions;
 pub mod prompts;

@@ -357,6 +357,8 @@ pub type PromptDetector = fn(&str) -> Option<TerminalPrompt>;
 
 /// The phone asked to end the session (see `end_agent`).
 pub static END_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// The phone asked to restart the agent with other options (see `crate::restart`).
+pub static RESTART: Mutex<Option<crate::restart::Restart>> = Mutex::new(None);
 /// The agent's pid, once forked.
 static CHILD: AtomicI32 = AtomicI32::new(0);
 /// Send the screen until this time (ms since the epoch): a phone is watching.
@@ -779,10 +781,9 @@ pub fn run(
 
     // Keyboard → agent.
     {
-        let (w, line) = (master_write.clone(), line.clone());
+        let (w, line, done) = (master_write.clone(), line.clone(), done.clone());
         let launch_id = launch_id.to_owned();
         std::thread::spawn(move || {
-            let mut stdin = std::io::stdin().lock();
             let mut buf = [0u8; 4096];
             let mut catcher = catch_styr.then(StyrCatcher::default);
             // Diagnostics: STYR_KEYLOG=/path logs what the terminal sends (escaped).
@@ -793,10 +794,35 @@ pub fn run(
                     .open(p)
                     .ok()
             });
-            while let Ok(n) = stdin.read(&mut buf) {
-                if n == 0 {
+            loop {
+                // Wait for keys, but notice when the agent has exited: after a restart
+                // the next run's thread reads the keyboard, and none may be lost here.
+                let mut pfd = libc::pollfd {
+                    fd: 0,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                // SAFETY: polling our own stdin.
+                let ready = unsafe { libc::poll(&mut pfd, 1, 200) };
+                if done.load(Ordering::Relaxed) {
                     break;
                 }
+                if ready <= 0 {
+                    continue;
+                }
+                // Straight from the descriptor: std's buffered stdin could keep keys
+                // that poll then doesn't see.
+                // SAFETY: reading into our own buffer.
+                let n = unsafe { libc::read(0, buf.as_mut_ptr().cast(), buf.len()) };
+                if n < 0
+                    && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+                {
+                    continue;
+                }
+                if n <= 0 {
+                    break;
+                }
+                let n = n as usize;
                 if let Some(f) = keylog.as_mut() {
                     let _ = writeln!(f, "{}", buf[..n].escape_ascii());
                 }
@@ -1224,6 +1250,28 @@ fn inject_loop(
             Ok(Response::EndSession) => {
                 END_REQUESTED.store(true, Ordering::Relaxed);
                 end_agent(w, done);
+            }
+            Ok(Response::Restart {
+                resume,
+                model,
+                effort,
+                mode,
+            }) => {
+                let what = [model.as_deref(), effort.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                *RESTART.lock().unwrap_or_else(|p| p.into_inner()) =
+                    Some(crate::restart::Restart {
+                        resume,
+                        model,
+                        effort,
+                        mode,
+                    });
+                end_agent(w, done);
+                // After the agent's own goodbye.
+                eprint!("\r\nStyrman: restarting with {what} (from the phone)…\r\n");
             }
             Ok(Response::SetMode { mode }) => {
                 if let Some(read) = mode_reader {

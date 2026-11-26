@@ -333,6 +333,21 @@ private func event(_ seq: UInt64, _ kind: String) -> String {
 }
 
 @Suite struct AgentMessageTests {
+    @Test func modelsAndSwitching() throws {
+        let msg = try decode(ServerMsg.self, #"{"type":"models","session":"S","models":[{"id":"sonnet","label":"Sonnet","efforts":["low","high"]},{"id":"gemini-4-neon-low","label":"Gemini 4 Neon (Low)"}]}"#)
+        guard case .models(_, let list) = msg else { Issue.record("\(msg)"); return }
+        #expect(list.map(\.id) == ["sonnet", "gemini-4-neon-low"])
+        #expect(list[1].efforts.isEmpty)
+        #expect(list[0].matches("claude-sonnet-5-5"), "an alias matches the full name")
+        #expect(!list[0].matches("claude-opus-5-5"))
+        #expect(list[1].matches("gemini-4-neon-low") && !list[1].matches("gemini-4-neon-lower"))
+        #expect(ModelText.short("claude-haiku-5-5") == "Haiku 5.5")
+
+        let sent = try JSONSerialization.jsonObject(with: JSONEncoder().encode(ClientMsg.setModel(session: "S", model: "sonnet", effort: nil))) as! [String: Any]
+        let cmd = sent["command"] as! [String: Any]
+        #expect(cmd["type"] as? String == "set_model" && cmd["model"] as? String == "sonnet" && cmd["effort"] == nil)
+    }
+
     @Test func commitRoundTrip() throws {
         let sent = String(data: try JSONEncoder().encode(ClientMsg.commit(session: "S", message: "Fix it", push: true)), encoding: .utf8)!
         let back = try JSONSerialization.jsonObject(with: Data(sent.utf8)) as! [String: Any]

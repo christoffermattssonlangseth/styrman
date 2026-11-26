@@ -66,6 +66,8 @@ final class DaemonConnection {
     var commitResult: [String: String] = [:]
     /// Terminal screens being watched: session → (text, columns).
     private(set) var screens: [String: (text: String, cols: Int)] = [:]
+    /// Models each session's agent can be switched to, as asked for.
+    private(set) var models: [String: [ModelChoice]] = [:]
     /// The first message of a session being started, shown as pending once it opens.
     @ObservationIgnored private var startPrompt: String?
     /// APNs device token (hex), sent to the daemon on every connection.
@@ -266,6 +268,8 @@ final class DaemonConnection {
             folders = listing
         case .changes(let sid, let branch, let diff, let truncated, let ahead):
             changes[sid] = (branch, GitChanges.files(diff), truncated, ahead)
+        case .models(let sid, let list):
+            models[sid] = list
         case .committed(let sid, let commit, let pushed):
             committing.remove(sid)
             commitResult[sid] = CommitText.result(commit: commit, pushed: pushed)
@@ -362,6 +366,18 @@ final class DaemonConnection {
                   s.mode != mode.rawValue, self.lastError == nil else { return }
             self.lastError = "Claude didn't switch to \(mode.label). This version may not have that mode, or a dialog is open in its terminal."
         }
+    }
+
+    /// Ask what this session's agent can be switched to (arrives in `models`).
+    func getModels(_ session: String) {
+        guard state == .connected else { return }
+        send(.getModels(session: session))
+    }
+
+    /// Restart the agent with another model and/or effort, resuming the conversation.
+    func setModel(_ session: String, model: String?, effort: String?) {
+        guard state == .connected else { lastError = "Not connected to your Mac."; return }
+        send(.setModel(session: session, model: model, effort: effort))
     }
 
     /// Ask for the session folder's uncommitted changes (they arrive in `changes`).

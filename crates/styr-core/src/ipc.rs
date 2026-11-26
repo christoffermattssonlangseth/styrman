@@ -20,7 +20,8 @@ pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
 /// The terminal actions a wrapper understands, sent with every `AttachTerminal`.
 /// 1: stop a turn (`Response::Interrupt`) and show the screen (`Response::WatchScreen`).
-pub const WRAPPER_LEVEL: u32 = 1;
+/// 2: restart with another model or effort (`Response::Restart`).
+pub const WRAPPER_LEVEL: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -240,6 +241,18 @@ pub enum Response {
     Interrupt,
     /// Send the screen for the next 20 s (a phone is watching).
     WatchScreen,
+    /// Quit the agent and start it again in the same terminal, resuming conversation
+    /// `resume` with this model and effort (see `Command::SetModel`). `mode`: Claude's
+    /// permission mode to keep.
+    Restart {
+        resume: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        effort: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<String>,
+    },
     PromptAccepted {
         /// False: queued until the agent next stops.
         delivered: bool,
@@ -316,6 +329,9 @@ pub struct SessionSummary {
     /// "plan", "auto", "bypassPermissions"); known only inside `styr <agent>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<String>,
+    /// The reasoning effort chosen from the phone, if any (else the agent's default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
     /// Its wrapper was started before Styrman was updated and lacks newer actions
     /// (stop, terminal): starting the session again brings them.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

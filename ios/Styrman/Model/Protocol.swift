@@ -105,12 +105,14 @@ struct SessionSummary: Codable, Identifiable, Hashable, Sendable {
     var mode: String? = nil
     /// Started before Styrman was updated: no Stop or Terminal until it's started again.
     var outdated: Bool = false
+    /// The reasoning effort chosen from the phone, if any.
+    var effort: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, agent, cwd, title, model, shared, status
         case nativeId = "native_id", createdMs = "created_ms", updatedMs = "updated_ms", lastSeq = "last_seq"
         case inTerminalWrapper = "in_terminal_wrapper", acceptsPrompts = "accepts_prompts"
-        case activity, mode, outdated
+        case activity, mode, outdated, effort
     }
 
     init(from decoder: Decoder) throws {
@@ -132,6 +134,7 @@ struct SessionSummary: Codable, Identifiable, Hashable, Sendable {
         activity = (try? c.decodeIfPresent(String.self, forKey: .activity)) ?? nil
         mode = (try? c.decodeIfPresent(String.self, forKey: .mode)) ?? nil
         outdated = (try? c.decodeIfPresent(Bool.self, forKey: .outdated)) ?? false
+        effort = (try? c.decodeIfPresent(String.self, forKey: .effort)) ?? nil
     }
 
     /// Can be ended from the phone: running in `styr <agent>` (or already over).
@@ -399,12 +402,14 @@ enum ServerMsg: Decodable, Sendable {
     case screen(session: String, text: String, cols: Int)
     /// The session folder's uncommitted changes (a unified diff).
     case changes(session: String, branch: String?, diff: String, truncated: Bool, ahead: Int?)
+    /// What a session's agent can be switched to.
+    case models(session: String, models: [ModelChoice])
     /// A commit from the phone went through ("abc1234 Subject"), maybe pushed.
     case committed(session: String, commit: String?, pushed: Bool)
     case unknown(type: String)
 
     private enum K: String, CodingKey {
-        case type, `protocol`, host, sessions, session, id, events, event, message, text, position, warnings, listing, cols, branch, diff, truncated, ahead, commit, pushed
+        case type, `protocol`, host, sessions, session, id, events, event, message, text, position, warnings, listing, cols, branch, diff, truncated, ahead, commit, pushed, models
         case providers, usageSupported = "usage_supported"
         case daemonVersion = "daemon_version", deviceId = "device_id", lastSeq = "last_seq"
     }
@@ -443,6 +448,8 @@ enum ServerMsg: Decodable, Sendable {
                                         diff: try c.decode(String.self, forKey: .diff),
                                         truncated: (try? c.decode(Bool.self, forKey: .truncated)) ?? false,
                                         ahead: try? c.decodeIfPresent(Int.self, forKey: .ahead))
+        case "models": self = .models(session: try c.decode(String.self, forKey: .session),
+                                      models: (try? c.decode([ModelChoice].self, forKey: .models)) ?? [])
         case "committed": self = .committed(session: try c.decode(String.self, forKey: .session),
                                             commit: try? c.decodeIfPresent(String.self, forKey: .commit),
                                             pushed: (try? c.decode(Bool.self, forKey: .pushed)) ?? false)
@@ -477,8 +484,10 @@ enum ClientMsg: Encodable, Sendable {
     case watchScreen(session: String)
     case getChanges(session: String)
     case commit(session: String, message: String, push: Bool)
+    case getModels(session: String)
+    case setModel(session: String, model: String?, effort: String?)
 
-    private enum K: String, CodingKey { case type, kind, session, command, request, option, text, token, env, shared, path, agent, cwd, prompt, parent, name, mode, message, push, sinceSeq = "since_seq" }
+    private enum K: String, CodingKey { case type, kind, session, command, request, option, text, token, env, shared, path, agent, cwd, prompt, parent, name, mode, message, push, model, effort, sinceSeq = "since_seq" }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: K.self)
@@ -512,6 +521,14 @@ enum ClientMsg: Encodable, Sendable {
             try c.encode("command", forKey: .type); try c.encode(s, forKey: .session)
             var cmd = c.nestedContainer(keyedBy: K.self, forKey: .command)
             try cmd.encode("end_session", forKey: .type)
+        case .getModels(let s):
+            try c.encode("get_models", forKey: .type); try c.encode(s, forKey: .session)
+        case .setModel(let s, let model, let effort):
+            try c.encode("command", forKey: .type); try c.encode(s, forKey: .session)
+            var cmd = c.nestedContainer(keyedBy: K.self, forKey: .command)
+            try cmd.encode("set_model", forKey: .type)
+            try cmd.encodeIfPresent(model, forKey: .model)
+            try cmd.encodeIfPresent(effort, forKey: .effort)
         case .setMode(let s, let mode):
             try c.encode("command", forKey: .type); try c.encode(s, forKey: .session)
             var cmd = c.nestedContainer(keyedBy: K.self, forKey: .command)
@@ -686,5 +703,29 @@ enum PermissionMode: String, CaseIterable, Identifiable, Sendable {
     /// What the phone offers: bypass only when the session already allows it.
     static func choices(current: PermissionMode) -> [PermissionMode] {
         current == .bypassPermissions ? allCases : allCases.filter { $0 != .bypassPermissions }
+    }
+}
+
+/// A model a session can be switched to (restarts the agent, same conversation).
+struct ModelChoice: Decodable, Hashable, Identifiable {
+    let id: String
+    let label: String
+    var efforts: [String] = []
+
+    private enum K: String, CodingKey { case id, label, efforts }
+    init(id: String, label: String, efforts: [String] = []) {
+        self.id = id; self.label = label; self.efforts = efforts
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: K.self)
+        id = try c.decode(String.self, forKey: .id)
+        label = try c.decode(String.self, forKey: .label)
+        efforts = (try? c.decode([String].self, forKey: .efforts)) ?? []
+    }
+
+    /// Whether `model` (as the agent reports it, e.g. "claude-sonnet-5-5") is this one.
+    func matches(_ model: String?) -> Bool {
+        guard let model = model?.lowercased() else { return false }
+        return model == id.lowercased() || (!id.contains("-") && model.contains(id.lowercased()))
     }
 }

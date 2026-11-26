@@ -12,6 +12,7 @@ struct SessionDetailView: View {
     @State private var confirmEnd = false
     @State private var showTerminal = false
     @State private var showChanges = false
+    @State private var showModel = false
     /// How many of the latest rows to draw (more with "Show earlier").
     @State private var shown = 150
     @Environment(\.dismiss) private var dismiss
@@ -56,6 +57,7 @@ struct SessionDetailView: View {
         // The bar takes the agent's colour, so it's always clear who you're talking to.
         .toolbarBackground(Theme.color(for: agent).opacity(0.07), for: .navigationBar)
         .sheet(isPresented: $showTerminal) { TerminalSheet(sessionId: sessionId, agent: agent) }
+        .sheet(isPresented: $showModel) { ModelSheet(sessionId: sessionId, agent: agent) }
         .sheet(isPresented: $showChanges) { ChangesSheet(sessionId: sessionId, agent: agent, cwd: summary?.cwd) }
         #if DEBUG
         // Screenshots (simulator): STYR_SHOW=terminal opens the terminal of the opened session.
@@ -242,6 +244,11 @@ struct SessionDetailView: View {
                         .pickerStyle(.menu)
                         Divider()
                     }
+                    if summary.hasLiveControls, summary.status != .done {
+                        Button { showModel = true } label: {
+                            Label("Model: \(ModelText.current(summary, in: connection.models[sessionId] ?? []))", systemImage: "cpu")
+                        }
+                    }
                     Toggle(isOn: Binding(get: { speaker.autoRead }, set: { on in
                         speaker.autoRead = on
                         if !on { speaker.stop() }
@@ -255,11 +262,11 @@ struct SessionDetailView: View {
                         Button { showTerminal = true } label: { Label("Terminal", systemImage: "terminal") }
                     }
                     if summary.outdated && summary.inTerminalWrapper {
-                        // Explains why Stop and Terminal are missing here.
+                        // Explains why Stop, Terminal and Model are missing here.
                         Button {} label: {
                             Label {
                                 Text("Started before an update")
-                                Text("End it and start it again for Stop and Terminal.")
+                                Text("End it and start it again for Stop, Terminal and Model.")
                             } icon: {
                                 Image(systemName: "arrow.clockwise.circle")
                             }

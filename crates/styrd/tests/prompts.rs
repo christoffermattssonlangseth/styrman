@@ -72,6 +72,15 @@ async fn prompt(ws: &mut Ws, sid: &str, text: &str) {
     send(ws, json!({"type": "command", "session": sid, "command": {"type": "send_prompt", "text": text}})).await;
 }
 
+/// Next error sent to the phone, skipping everything else.
+async fn next_error(ws: &mut Ws) -> String {
+    loop {
+        if let ServerMsg::Error { message } = recv(ws).await {
+            return message;
+        }
+    }
+}
+
 /// Next `user_message` from the phone, skipping everything else.
 async fn next_remote_message(ws: &mut Ws) -> String {
     loop {
@@ -399,6 +408,86 @@ async fn stop_reaches_the_terminal_only_if_its_wrapper_knows_it() {
         .expect("told")
         .unwrap();
     assert_eq!(got, Response::Interrupt);
+    d.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn another_model_restarts_the_agent_as_the_same_session() {
+    let d = Daemon::start().await;
+    let l = "launch-model";
+    for (event, extra) in [
+        ("SessionStart", json!({"source": "startup"})),
+        ("UserPromptSubmit", json!({"prompt": "/styr"})),
+        ("UserPromptSubmit", json!({"prompt": "long job"})),
+    ] {
+        d.call(Request::Hook {
+            hook: with_launch(hook("t1", event, extra), l),
+        })
+        .await;
+    }
+    let (mut ws, sid) = phone(&d, "t1").await;
+    let set = json!({"type": "command", "session": sid,
+        "command": {"type": "set_model", "model": "sonnet", "effort": "low"}});
+    // Old wrappers can't; nor mid-turn.
+    let _old = attach_at(&d, l, 1);
+    settle().await;
+    send(&mut ws, set.clone()).await;
+    assert!(
+        next_error(&mut ws)
+            .await
+            .contains("started before Styrman was updated")
+    );
+    let wrapper = attach(&d, l);
+    settle().await;
+    send(&mut ws, set.clone()).await;
+    assert!(next_error(&mut ws).await.contains("working"));
+
+    d.call(Request::Hook {
+        hook: with_launch(hook("t1", "Stop", json!({"stop_hook_active": false})), l),
+    })
+    .await;
+    send(&mut ws, set).await;
+    let got = tokio::time::timeout(Duration::from_secs(5), wrapper)
+        .await
+        .expect("told")
+        .unwrap();
+    assert_eq!(
+        got,
+        Response::Restart {
+            resume: "t1".into(),
+            model: Some("sonnet".into()),
+            effort: Some("low".into()),
+            mode: None,
+        }
+    );
+
+    // The agent quits and resumes: no end, still shared, model shown.
+    for (event, extra) in [
+        ("SessionEnd", json!({"reason": "other"})),
+        ("SessionStart", json!({"source": "resume"})),
+    ] {
+        d.call(Request::Hook {
+            hook: with_launch(hook("t1", event, extra), l),
+        })
+        .await;
+    }
+    let _again = attach(&d, l);
+    settle().await;
+    let Response::Sessions { sessions } = d
+        .call(Request::ListSessions {
+            include_unshared: true,
+        })
+        .await
+    else {
+        panic!()
+    };
+    let s = sessions.iter().find(|s| s.native_id == "t1").unwrap();
+    assert!(s.shared);
+    assert_ne!(s.status, styr_core::SessionStatus::Done);
+    assert_eq!(
+        (s.model.as_deref(), s.effort.as_deref()),
+        (Some("sonnet"), Some("low"))
+    );
     d.stop().await;
 }
 

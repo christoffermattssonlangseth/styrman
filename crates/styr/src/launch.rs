@@ -145,7 +145,21 @@ pub fn exec(agent: AgentKind, args: Vec<OsString>) -> Result<std::convert::Infal
         } else {
             crate::pty::ScreenReaders::default()
         };
-        let code = crate::pty::run(&bin, &all, &env, &launch_id, detector, readers, catch_styr)?;
+        let mut code =
+            crate::pty::run(&bin, &all, &env, &launch_id, detector, readers, catch_styr)?;
+        // Restarted from the phone (another model): the same conversation, same terminal.
+        loop {
+            let restart = crate::pty::RESTART
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .take();
+            let Some(r) = restart else { break };
+            let user_args = &all[spec.extra_args.len()..];
+            let mut next: Vec<OsString> = spec.extra_args.iter().map(OsString::from).collect();
+            next.extend(crate::restart::args(agent, user_args, &r));
+            code = crate::pty::run(&bin, &next, &env, &launch_id, detector, readers, catch_styr)?;
+            all = next;
+        }
         if crate::pty::END_REQUESTED.load(std::sync::atomic::Ordering::Relaxed) {
             ended_from_phone(from_phone);
         }

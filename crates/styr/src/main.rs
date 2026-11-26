@@ -6,6 +6,7 @@ mod codex_hooks;
 pub(crate) mod hook;
 pub(crate) mod launch;
 mod pty;
+mod restart;
 mod service;
 mod setup;
 

@@ -32,6 +32,7 @@
 		86B5E7D5E4FF026347D46EF6 /* Credentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00AE6AE82221B500B2447089 /* Credentials.swift */; };
 		9A2CCECF57DD603D691229D5 /* Protocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72FCEE349C47E9D8119B9F44 /* Protocol.swift */; };
 		9B9388375EFD227C2D3B3ED8 /* Timeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = B220CBE574863299DA11C433 /* Timeline.swift */; };
+		9ED66E21B5E3DA0E70F364E6 /* ModelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B96ABF8B49C638533AAE57 /* ModelView.swift */; };
 		A8E466578293CA7ED3E90314 /* DiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCECD309CC4A5AD3E872D83F /* DiffView.swift */; };
 		E03A4B6D854582CE8012D99D /* Pairing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70FD8EDA21890B223957635D /* Pairing.swift */; };
 		E30E53A9A11B15D50CA33B40 /* LiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56426288A6A544796DA60352 /* LiveActivity.swift */; };
@@ -106,6 +107,7 @@
 		9A0EFECC2598262BB3C5DE41 /* StyrmanTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = StyrmanTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9A494FA97E73F2292F21D283 /* SessionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionDetailView.swift; sourceTree = "<group>"; };
 		9E2DA42B6895A9B2D3DE2D56 /* StyrmanApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StyrmanApp.swift; sourceTree = "<group>"; };
+		A0B96ABF8B49C638533AAE57 /* ModelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelView.swift; sourceTree = "<group>"; };
 		A5D69A43CF54A86119E59F1F /* Styrman.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Styrman.entitlements; sourceTree = "<group>"; };
 		AAB8E83738C43E374ED7234C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		B220CBE574863299DA11C433 /* Timeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Timeline.swift; sourceTree = "<group>"; };
@@ -118,7 +120,7 @@
 		D4D877A57441234BC54A95F1 /* StyrmanWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = StyrmanWidgets.entitlements; sourceTree = "<group>"; };
 		E25ACD30D61B8467E406440F /* VoiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceTests.swift; sourceTree = "<group>"; };
 		ECC7E94075932B81BE650100 /* Styrman.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Styrman.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		"TEMP_6511798D-A997-42DE-9774-4F8847E118B3" /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
+		"TEMP_85CDEB52-EAFD-41C3-8D52-9B280017531F" /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -224,6 +226,7 @@
 			children = (
 				4BF41EF17F772721F413BA82 /* ChangesView.swift */,
 				CCECD309CC4A5AD3E872D83F /* DiffView.swift */,
+				A0B96ABF8B49C638533AAE57 /* ModelView.swift */,
 				26784D644CF00DF837CCAA4B /* NewSessionView.swift */,
 				2B27AED31838D3975D0DCEFA /* PairingView.swift */,
 				9A494FA97E73F2292F21D283 /* SessionDetailView.swift */,
@@ -253,10 +256,10 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		"TEMP_07E9F085-4B02-47A2-AE53-C185D724C9AF" /* ios */ = {
+		"TEMP_0C850FCE-18F3-449F-AE27-EA447E58C0D3" /* ios */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_6511798D-A997-42DE-9774-4F8847E118B3" /* Signing.xcconfig */,
+				"TEMP_85CDEB52-EAFD-41C3-8D52-9B280017531F" /* Signing.xcconfig */,
 			);
 			path = ios;
 			sourceTree = "<group>";
@@ -429,6 +432,7 @@
 				A8E466578293CA7ED3E90314 /* DiffView.swift in Sources */,
 				2830F59013F4FC426AFE065E /* LiveActivities.swift in Sources */,
 				E30E53A9A11B15D50CA33B40 /* LiveActivity.swift in Sources */,
+				9ED66E21B5E3DA0E70F364E6 /* ModelView.swift in Sources */,
 				E97A196F13C4270D91A22563 /* NewSessionView.swift in Sources */,
 				432241619CC5645D2E4C6CF7 /* Notifications.swift in Sources */,
 				E03A4B6D854582CE8012D99D /* Pairing.swift in Sources */,
@@ -556,7 +560,7 @@
 		};
 		BAA986BF9E9D340762FAAD97 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_6511798D-A997-42DE-9774-4F8847E118B3" /* Signing.xcconfig */;
+			baseConfigurationReference = "TEMP_85CDEB52-EAFD-41C3-8D52-9B280017531F" /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -655,7 +659,7 @@
 		};
 		ED1BF44AF1A5A2C8867941FD /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_6511798D-A997-42DE-9774-4F8847E118B3" /* Signing.xcconfig */;
+			baseConfigurationReference = "TEMP_85CDEB52-EAFD-41C3-8D52-9B280017531F" /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;

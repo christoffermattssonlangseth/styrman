@@ -20,6 +20,17 @@ pub const DEFAULT_PORT: u16 = 4719;
 /// URL scheme of pairing links: `styrman://pair?url=…&code=…&name=…`.
 pub const PAIR_SCHEME: &str = "styrman";
 
+/// A model the phone can switch a session to (`ServerMsg::Models`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelChoice {
+    /// What the agent takes (`--model <id>`).
+    pub id: String,
+    pub label: String,
+    /// Reasoning efforts this model takes; empty: none to choose.
+    #[serde(default)]
+    pub efforts: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMsg {
@@ -62,6 +73,10 @@ pub enum ClientMsg {
     },
     /// The session folder's uncommitted git changes (answered with `Changes`).
     GetChanges {
+        session: SessionId,
+    },
+    /// The models this session's agent can be switched to (answered with `Models`).
+    GetModels {
         session: SessionId,
     },
     /// Commit everything in the session's folder with `message` (skipped if empty),
@@ -208,6 +223,11 @@ pub enum ServerMsg {
         /// Commits not yet pushed; absent when the branch has no upstream.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ahead: Option<u32>,
+    },
+    /// What a session's agent can be switched to (`Command::SetModel`).
+    Models {
+        session: SessionId,
+        models: Vec<ModelChoice>,
     },
     /// A `Commit` went through: the new commit ("abc1234 Subject"), and whether it
     /// was pushed.

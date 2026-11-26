@@ -931,6 +931,19 @@ impl Connection {
                     Err(e) => Err(e.into()),
                 }
             }
+            ClientMsg::GetModels { session } => {
+                let Some(agent) = self
+                    .daemon
+                    .summary(&session)?
+                    .filter(|s| s.shared)
+                    .map(|s| s.agent)
+                else {
+                    return Ok(());
+                };
+                let models =
+                    tokio::task::spawn_blocking(move || crate::models::choices(agent)).await?;
+                send(tx, &ServerMsg::Models { session, models }).await
+            }
             ClientMsg::Commit {
                 session,
                 message,
@@ -1034,6 +1047,21 @@ impl Connection {
                 session,
                 command: styr_core::Command::SetMode { mode },
             } => match self.daemon.set_mode(&session, &mode) {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    send(
+                        tx,
+                        &ServerMsg::Error {
+                            message: format!("{e:#}"),
+                        },
+                    )
+                    .await
+                }
+            },
+            ClientMsg::Command {
+                session,
+                command: styr_core::Command::SetModel { model, effort },
+            } => match self.daemon.set_model(&session, model, effort) {
                 Ok(()) => Ok(()),
                 Err(e) => {
                     send(

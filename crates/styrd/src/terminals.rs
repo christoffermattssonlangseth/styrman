@@ -40,6 +40,16 @@ pub enum TerminalAction {
     Interrupt,
     /// Send the screen for a while (a phone is watching).
     WatchScreen,
+    Restart(Restart),
+}
+
+/// Restart the agent with another model or effort (see `Daemon::set_model`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Restart {
+    pub resume: String,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub mode: Option<String>,
 }
 
 /// Permission modes the phone may ask for (Claude's names).
@@ -96,6 +106,13 @@ struct Inner {
     wrappers: HashMap<String, (styr_core::ids::AgentKind, std::path::PathBuf, Instant)>,
     /// What each wrapper understands (`styr_core::ipc::WRAPPER_LEVEL` when it attached).
     levels: HashMap<String, u32>,
+    /// Restarts not yet handed to the wrapper, per launch.
+    restarts: HashMap<String, Restart>,
+    /// Launches restarting for the phone: their agent's end and new start are one
+    /// session going on, not an end.
+    restarting: HashMap<String, Instant>,
+    /// The model and effort the phone last restarted a launch with.
+    chosen: HashMap<String, (Option<String>, Option<String>)>,
 }
 
 fn canon(p: &std::path::Path) -> std::path::PathBuf {
@@ -291,6 +308,8 @@ impl Terminals {
         // A pending menu selection goes out first, then a mode change.
         if g.ends.remove(launch) {
             let _ = tx.send(TerminalAction::End);
+        } else if let Some(r) = g.restarts.remove(launch) {
+            let _ = tx.send(TerminalAction::Restart(r));
         } else if g.interrupts.remove(launch) {
             let _ = tx.send(TerminalAction::Interrupt);
         } else if g.screens.remove(launch) {
@@ -385,6 +404,40 @@ impl Terminals {
         if !sent {
             g.screens.insert(launch.to_owned());
         }
+    }
+
+    /// Ask the wrapper to restart its agent (another model or effort).
+    pub fn restart(&self, launch: &str, r: Restart) {
+        let mut g = self.lock();
+        g.last_seen.insert(launch.to_owned(), Instant::now());
+        g.chosen
+            .insert(launch.to_owned(), (r.model.clone(), r.effort.clone()));
+        g.restarting.insert(launch.to_owned(), Instant::now());
+        if let Some(tx) = g.attached.remove(launch) {
+            if let Err(TerminalAction::Restart(r)) = tx.send(TerminalAction::Restart(r)) {
+                g.restarts.insert(launch.to_owned(), r);
+            }
+        } else {
+            g.restarts.insert(launch.to_owned(), r);
+        }
+    }
+
+    /// Whether `launch` is restarting for the phone (asked for within the last minute).
+    pub fn restarting(&self, launch: &str) -> bool {
+        self.lock()
+            .restarting
+            .get(launch)
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(60))
+    }
+
+    /// The restarted agent is up again.
+    pub fn restarted(&self, launch: &str) {
+        self.lock().restarting.remove(launch);
+    }
+
+    /// The model and effort the phone last chose for `launch`.
+    pub fn chosen(&self, launch: &str) -> (Option<String>, Option<String>) {
+        self.lock().chosen.get(launch).cloned().unwrap_or_default()
     }
 
     /// Ask the wrapper to stop its agent's current turn.

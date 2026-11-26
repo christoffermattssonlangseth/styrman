@@ -28,4 +28,13 @@ pub enum Command {
     /// Quit the agent (as Ctrl+C would in its terminal) and close the cmux tab if
     /// the phone opened it. Only for sessions running in `styr <agent>`.
     EndSession,
+    /// Restart the agent in its terminal with another model and/or effort, resuming
+    /// the same conversation (choices from `ClientMsg::GetModels`). Only while idle,
+    /// in `styr <agent>`.
+    SetModel {
+        #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        effort: Option<String>,
+    },
 }
