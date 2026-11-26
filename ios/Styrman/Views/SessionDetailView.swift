@@ -218,8 +218,12 @@ struct SessionDetailView: View {
                 ForEach(timeline.pending) { p in
                     PendingPromptRow(prompt: p) { timeline.dismissUnconfirmed(p.id) }
                 }
-                if let text = timeline.preview, summary?.status == .working {
-                    LivePreviewRow(text: text, agent: agent).id("preview")
+                if summary?.status == .working, timeline.pending.isEmpty || timeline.preview != nil {
+                    if let text = timeline.preview {
+                        LivePreviewRow(text: text, agent: agent).id("preview")
+                    } else {
+                        WorkingRow(agent: agent).id("preview")
+                    }
                 }
                 if timeline.isLive && !timeline.hasContent && timeline.pending.isEmpty {
                     VStack(spacing: 6) {
@@ -1383,37 +1387,90 @@ struct SessionBackground: View {
 struct LivePreviewRow: View {
     let text: String
     let agent: AgentKind
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// How many characters of `text` show so far.
+    @State private var revealed = 0
 
     var body: some View {
-        // The cursor blinks by the clock, not by a repeating animation: one started
-        // here would also replay this row's appearance forever, and everything
-        // around it would bounce.
-        TimelineView(.periodic(from: .now, by: 0.5)) { ctx in
-            let on = Int(ctx.date.timeIntervalSinceReferenceDate * 2) % 2 == 0
-            Group {
-                if hasTable {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ReplyText(raw: text)
-                        cursor(on)
-                    }
-                } else {
-                    Text("\(AttributedString(text)) \(cursor(on))")
-                }
+        // Like the Claude app: the terminal's text arrives in chunks, about twice a
+        // second, but shows at a steady pace, newest words dimmed. A chunk shown all
+        // at once is a jump; spread out, it reads as writing.
+        let shown = String(text.prefix(reduceMotion ? text.count : revealed))
+        Group {
+            if hasTable {
+                ReplyText(raw: shown)
+            } else {
+                let (settled, fresh) = Self.split(shown)
+                Text("\(Text(settled))\(Text(fresh).foregroundStyle(.secondary))")
             }
         }
         .foregroundStyle(.primary.opacity(0.85))
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentTransition(.identity)
         .accessibilityLabel("\(agent.displayName) is writing: \(text)")
+        .onChange(of: text, initial: true) { old, new in
+            // A different reading (not just more): keep only what still matches.
+            if !new.hasPrefix(old) || revealed > new.count {
+                revealed = min(revealed, old.commonPrefix(with: new).count)
+            }
+        }
+        .task(id: text) { await flow() }
     }
 
-    private func cursor(_ on: Bool) -> Text {
-        Text("▍").foregroundStyle(Theme.color(for: agent).opacity(on ? 1 : 0.2))
+    /// Reveal the rest at a pace that catches up in about half a second (the time
+    /// to the next chunk), never slower than a quick reader.
+    private func flow() async {
+        let tick = 1.0 / 30
+        while !Task.isCancelled, revealed < text.count {
+            let behind = Double(text.count - revealed)
+            let step = max(1, Int((max(60, behind / 0.5) * tick).rounded()))
+            revealed = min(text.count, revealed + step)
+            try? await Task.sleep(for: .seconds(tick))
+        }
+    }
+
+    /// The text up to its last few words, and those words (shown dimmed).
+    static func split(_ s: String) -> (String, String) {
+        var words = 0
+        var i = s.endIndex
+        while i > s.startIndex {
+            let j = s.index(before: i)
+            if s[j] == " " || s[j] == "\n" {
+                words += 1
+                if words == 4 { break }
+            }
+            i = j
+        }
+        return (String(s[..<i]), String(s[i...]))
     }
 
     /// Tables the terminal drew come as `| a | b |` rows: drawn as a table.
     private var hasTable: Bool {
         ReplyMarkdown.blocks(text).contains { if case .table = $0 { true } else { false } }
+    }
+}
+
+/// While the agent works and nothing it writes shows yet: one quiet line, like the
+/// Claude app's, in place of a preview.
+struct WorkingRow: View {
+    let agent: AgentKind
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.4)) { ctx in
+            let n = Int(ctx.date.timeIntervalSinceReferenceDate / 0.4) % 3
+            HStack(spacing: 8) {
+                HStack(spacing: 3) {
+                    ForEach(0..<3) { i in
+                        Circle().frame(width: 4, height: 4).opacity(i == n ? 1 : 0.3)
+                    }
+                }
+                Text("Working…")
+            }
+            .foregroundStyle(Theme.color(for: agent))
+            .font(.subheadline)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityLabel("\(agent.displayName) is working")
     }
 }
 

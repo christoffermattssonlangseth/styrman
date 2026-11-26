@@ -117,3 +117,13 @@ import Testing
         #expect(UsageText.short(5 * 86_400 + 9 * 3_600 + 120) == "5 d 9 h")
     }
 }
+
+struct FlowingPreviewTests {
+    @Test func theLastFewWordsAreTheFreshOnes() {
+        let (settled, fresh) = LivePreviewRow.split("Yes, everything is fine. The one thing left")
+        #expect(settled == "Yes, everything is fine. ")
+        #expect(fresh == "The one thing left")
+        #expect(LivePreviewRow.split("Hi") == ("", "Hi"))
+        #expect(LivePreviewRow.split("") == ("", ""))
+    }
+}
