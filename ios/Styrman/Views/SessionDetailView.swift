@@ -140,12 +140,14 @@ struct SessionDetailView: View {
             .defaultScrollAnchor(.bottom, for: .initialOffset)
             .defaultScrollAnchor(atBottom ? .bottom : .top, for: .sizeChanges)
             .onScrollPhaseChange { _, phase in scrollPhase = phase }
-            // Only your own scrolling stops following: new content arriving (a reply,
-            // a tool card) can make the view briefly look scrolled up, and must not.
-            .onScrollGeometryChange(for: Bool.self) { g in
-                g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 120
-            } action: { _, near in
-                if near || scrollPhase != .idle { atBottom = near }
+            // At the end or not, from where it's scrolled. Not while content grows:
+            // a reply or tool card arriving makes the view look scrolled up for a
+            // moment, and must not stop it following.
+            .onScrollGeometryChange(for: ScrollSpot.self) { g in
+                ScrollSpot(near: g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 120,
+                           height: g.contentSize.height)
+            } action: { old, new in
+                if new.near || scrollPhase != .idle || new.height == old.height { atBottom = new.near }
             }
             // Following: keep the end in view whenever the content grows.
             .onScrollGeometryChange(for: CGFloat.self) { $0.contentSize.height } action: { old, new in
@@ -156,7 +158,14 @@ struct SessionDetailView: View {
             .overlay(alignment: .bottomTrailing) {
                 if !atBottom && timeline.loaded {
                     Button {
+                        // Follow again from now on. While a reply grows, the animated
+                        // jump can land short of the end: land there once it's done.
+                        atBottom = true
                         withAnimation(.easeOut(duration: 0.25)) { proxy.scrollTo("bottom", anchor: .bottom) }
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(350))
+                            if atBottom { proxy.scrollTo("bottom", anchor: .bottom) }
+                        }
                     } label: {
                         Image(systemName: "arrow.down")
                             .font(.body.weight(.semibold))
@@ -181,11 +190,19 @@ struct SessionDetailView: View {
             // A message you send always brings you to the end.
             .onChange(of: timeline.pending.count) { old, new in
                 guard new > old else { return }
+                atBottom = true
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
-            // Land on the latest message when it opens and when the history arrives.
+            // Land on the latest message when it opens and when the history arrives
+            // (again once it's laid out: right away, the end may not be there yet).
             .onChange(of: timeline.loaded, initial: true) { _, loaded in
-                if loaded { Task { @MainActor in proxy.scrollTo("bottom", anchor: .bottom) } }
+                guard loaded else { return }
+                Task { @MainActor in
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                    try? await Task.sleep(for: .milliseconds(150))
+                    proxy.scrollTo("bottom", anchor: .bottom)
+                    atBottom = true
+                }
             }
         }
     }
@@ -1384,6 +1401,12 @@ struct SessionBackground: View {
 
 /// The reply the agent is writing right now, as its terminal shows it: plain text
 /// that grows, with a blinking cursor. The real message replaces it when it's done.
+/// Where the conversation is scrolled: near its end or not, and how tall it is.
+struct ScrollSpot: Equatable {
+    var near: Bool
+    var height: CGFloat
+}
+
 struct LivePreviewRow: View {
     let text: String
     let agent: AgentKind
