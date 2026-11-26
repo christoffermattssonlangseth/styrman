@@ -355,6 +355,41 @@ pub fn can_wrap() -> bool {
 /// Reads an agent's own permission menu off the screen (agent-specific).
 pub type PromptDetector = fn(&str) -> Option<TerminalPrompt>;
 
+/// Reads the agent's permission mode off its screen.
+pub type ModeReader = fn(&str) -> Option<&'static str>;
+
+/// Claude's mode, from its footer: "⏸ manual mode on", "⏵⏵ accept edits on",
+/// "⏸ plan mode on", "⏵⏵ auto mode on", "⏵⏵ bypass permissions on". Versions that
+/// show nothing in the default mode still show "? for shortcuts" there. `None` when
+/// the footer isn't on screen (a dialog is open, or it's still starting).
+pub fn claude_mode(contents: &str) -> Option<&'static str> {
+    const MODES: [(&str, &str); 6] = [
+        ("manual mode on", "default"),
+        ("default mode on", "default"),
+        ("accept edits on", "acceptEdits"),
+        ("plan mode on", "plan"),
+        ("auto mode on", "auto"),
+        ("bypass permissions on", "bypassPermissions"),
+    ];
+    let bottom: Vec<&str> = contents
+        .lines()
+        .rev()
+        .filter(|l| !l.trim().is_empty())
+        .take(6)
+        .collect();
+    for l in &bottom {
+        if (l.contains('⏸') || l.contains('⏵'))
+            && let Some((_, m)) = MODES.iter().find(|(needle, _)| l.contains(needle))
+        {
+            return Some(m);
+        }
+    }
+    bottom
+        .iter()
+        .any(|l| l.contains("? for shortcuts"))
+        .then_some("default")
+}
+
 /// agy's permission menu:
 ///
 /// ```text
@@ -543,6 +578,7 @@ pub fn run(
     env: &[(String, String)],
     launch_id: &str,
     detector: Option<PromptDetector>,
+    mode_reader: Option<ModeReader>,
     catch_styr: bool,
 ) -> Result<i32> {
     // Environment for the child (and, through it, the agent's hooks).
@@ -640,7 +676,7 @@ pub fn run(
         let mut r = master_read;
         let screen = screen.clone();
         let blocked = blocked.clone();
-        let emulate = detector.is_some();
+        let emulate = detector.is_some() || mode_reader.is_some();
         std::thread::spawn(move || {
             let mut out = std::io::stdout();
             let mut buf = [0u8; 16384];
@@ -711,6 +747,46 @@ pub fn run(
             }
         });
     }
+    // The agent's permission mode → daemon, whenever it changes.
+    if let Some(read) = mode_reader {
+        let (screen, done) = (screen.clone(), done.clone());
+        let launch_id = launch_id.to_owned();
+        std::thread::spawn(move || {
+            let client =
+                Client::new(Paths::resolve().socket).with_timeout(Some(Duration::from_secs(2)));
+            let mut last: Option<&'static str> = None;
+            let mut seen_at = std::time::Instant::now();
+            while !done.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(300));
+                let contents = screen
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .screen()
+                    .contents();
+                // A dialog hides the footer for a moment; keep the last mode then.
+                let Some(now) = read(&contents) else {
+                    if last.is_some() && seen_at.elapsed() > Duration::from_secs(30) {
+                        last = None;
+                        let _ = client.call(&Request::TerminalMode {
+                            launch_id: launch_id.clone(),
+                            mode: None,
+                        });
+                    }
+                    continue;
+                };
+                seen_at = std::time::Instant::now();
+                if Some(now) != last {
+                    let sent = client.call(&Request::TerminalMode {
+                        launch_id: launch_id.clone(),
+                        mode: Some(now.to_owned()),
+                    });
+                    if sent.is_ok() {
+                        last = Some(now);
+                    }
+                }
+            }
+        });
+    }
     // Window size follows the real terminal.
     {
         let done = done.clone();
@@ -746,7 +822,16 @@ pub fn run(
         let agent = catch_styr.then_some(styr_core::ids::AgentKind::Codex);
         let screen = screen.clone();
         std::thread::spawn(move || {
-            inject_loop(agent, &launch_id, &w, &line, &done, &on_screen, &screen)
+            inject_loop(
+                agent,
+                &launch_id,
+                &w,
+                &line,
+                &done,
+                &on_screen,
+                &screen,
+                mode_reader,
+            )
         });
     }
 
@@ -837,6 +922,7 @@ fn share_from_terminal(cmd: styr_core::adapter::StyrCommand, launch_id: &str, ag
     let _ = out.flush();
 }
 
+#[allow(clippy::too_many_arguments)]
 fn inject_loop(
     agent: Option<styr_core::ids::AgentKind>,
     launch_id: &str,
@@ -845,6 +931,7 @@ fn inject_loop(
     done: &AtomicBool,
     on_screen: &Mutex<Option<TerminalPrompt>>,
     screen: &Mutex<vt100::Parser>,
+    mode_reader: Option<ModeReader>,
 ) {
     let client = Client::new(Paths::resolve().socket).with_timeout(None);
     let cwd = std::env::current_dir().ok();
@@ -916,9 +1003,65 @@ fn inject_loop(
                     }
                 }
             }
+            Ok(Response::SetMode { mode }) => {
+                if let Some(read) = mode_reader {
+                    switch_mode(read, &mode, w, screen, on_screen);
+                }
+            }
             Ok(_) => std::thread::sleep(Duration::from_secs(1)),
             Err(IpcError::NotRunning(_)) => std::thread::sleep(Duration::from_secs(3)),
             Err(_) => std::thread::sleep(Duration::from_secs(1)),
+        }
+    }
+}
+
+/// Press Shift+Tab until the screen shows `target`: never while a menu or dialog
+/// hides the mode, and at most once round the cycle.
+fn switch_mode(
+    read: ModeReader,
+    target: &str,
+    w: &Mutex<std::fs::File>,
+    screen: &Mutex<vt100::Parser>,
+    on_screen: &Mutex<Option<TerminalPrompt>>,
+) {
+    let current = || {
+        read(
+            &screen
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .screen()
+                .contents(),
+        )
+    };
+    let Some(start) = current() else { return };
+    let mut now = start;
+    for pressed in 0..6 {
+        if now == target
+            || (pressed > 0 && now == start)
+            || on_screen
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .is_some()
+        {
+            return;
+        }
+        {
+            let mut f = w.lock().unwrap_or_else(|p| p.into_inner());
+            let _ = f.write_all(b"\x1b[Z");
+            let _ = f.flush();
+        }
+        // Wait for the footer to redraw (and to change: it can lag the key).
+        let pressed_at = std::time::Instant::now();
+        loop {
+            std::thread::sleep(Duration::from_millis(80));
+            match current() {
+                Some(m) if m != now => {
+                    now = m;
+                    break;
+                }
+                _ if pressed_at.elapsed() > Duration::from_millis(1200) => return,
+                _ => {}
+            }
         }
     }
 }
@@ -939,6 +1082,41 @@ pub fn menu_keys(from: usize, to: usize) -> Vec<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_claudes_mode_from_its_footer() {
+        // As Claude Code 2.1.332 draws them, cycling with Shift+Tab.
+        let screen =
+            |footer: &str| format!("╭───╮\n│ > Try \"fix lint errors\"\n╰───╯\n  {footer}\n\n");
+        for (footer, mode) in [
+            (
+                "⏸ manual mode on · ? for shortcuts · ← for agents",
+                "default",
+            ),
+            (
+                "⏵⏵ accept edits on (shift+tab to cycle) · ← for agents",
+                "acceptEdits",
+            ),
+            ("⏸ plan mode on (shift+tab to cycle)", "plan"),
+            ("⏵⏵ auto mode on (shift+tab to cycle)", "auto"),
+            (
+                "⏵⏵ bypass permissions on (shift+tab to cycle)",
+                "bypassPermissions",
+            ),
+            // Older versions: nothing in the default mode but the shortcuts hint.
+            ("? for shortcuts", "default"),
+        ] {
+            assert_eq!(claude_mode(&screen(footer)), Some(mode), "{footer}");
+        }
+        // A dialog hides the footer: unknown, not "default".
+        assert_eq!(
+            claude_mode("Do you want to proceed?\n❯ 1. Yes\n  2. No\n"),
+            None
+        );
+        // The conversation mentioning a mode doesn't count.
+        let talk = "● I'll switch to plan mode on your say-so.\n".repeat(3) + "\n";
+        assert_eq!(claude_mode(&talk), None);
+    }
 
     #[test]
     fn line_state_tracks_partial_input() {

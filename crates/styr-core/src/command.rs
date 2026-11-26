@@ -20,4 +20,9 @@ pub enum Command {
     SetSharing {
         shared: bool,
     },
+    /// Switch the agent's permission mode (Claude: "default", "acceptEdits", "plan",
+    /// "auto", "bypassPermissions"), as Shift+Tab does in its terminal.
+    SetMode {
+        mode: String,
+    },
 }

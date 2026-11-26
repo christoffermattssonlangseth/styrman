@@ -77,6 +77,11 @@ pub enum Request {
         launch_id: String,
         prompt: Option<TerminalPrompt>,
     },
+    /// From a terminal wrapper: the permission mode its agent shows changed.
+    TerminalMode {
+        launch_id: String,
+        mode: Option<String>,
+    },
     /// Everything `styr doctor` / `styr setup` need to know about the daemon.
     Diagnostics,
     /// Record that an agent version passed `styr doctor --live`.
@@ -205,6 +210,10 @@ pub enum Response {
     SelectOption {
         index: usize,
     },
+    /// Switch the agent's permission mode (see `Command::SetMode`).
+    SetMode {
+        mode: String,
+    },
     PromptAccepted {
         /// False: queued until the agent next stops.
         delivered: bool,
@@ -277,6 +286,10 @@ pub struct SessionSummary {
     /// One line on what it's doing or last said ("Run `cargo test`", the reply's first line).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub activity: Option<String>,
+    /// The agent's permission mode as its terminal shows it ("default", "acceptEdits",
+    /// "plan", "auto", "bypassPermissions"); known only inside `styr <agent>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
 }
 
 /// An exit code plus stderr text for `styr hook` to finish with.

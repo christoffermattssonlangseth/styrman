@@ -101,12 +101,14 @@ struct SessionSummary: Codable, Identifiable, Hashable, Sendable {
     var acceptsPrompts: Bool = false
     /// One line on what it's doing or last said (newer daemons).
     var activity: String? = nil
+    /// The agent's permission mode, when its terminal shows it (`styr claude`).
+    var mode: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, agent, cwd, title, model, shared, status
         case nativeId = "native_id", createdMs = "created_ms", updatedMs = "updated_ms", lastSeq = "last_seq"
         case inTerminalWrapper = "in_terminal_wrapper", acceptsPrompts = "accepts_prompts"
-        case activity
+        case activity, mode
     }
 
     init(from decoder: Decoder) throws {
@@ -126,6 +128,7 @@ struct SessionSummary: Codable, Identifiable, Hashable, Sendable {
         // Older daemons don't say; assume yes rather than hide the message box.
         acceptsPrompts = (try? c.decodeIfPresent(Bool.self, forKey: .acceptsPrompts)) ?? true
         activity = (try? c.decodeIfPresent(String.self, forKey: .activity)) ?? nil
+        mode = (try? c.decodeIfPresent(String.self, forKey: .mode)) ?? nil
     }
 
     /// Repository / folder name for the list.
@@ -438,8 +441,9 @@ enum ClientMsg: Encodable, Sendable {
     case startSession(agent: AgentKind, cwd: String, prompt: String?)
     case createFolder(parent: String, name: String)
     case registerActivityToken(kind: String, token: String?)
+    case setMode(session: String, mode: String)
 
-    private enum K: String, CodingKey { case type, kind, session, command, request, option, text, token, env, shared, path, agent, cwd, prompt, parent, name, sinceSeq = "since_seq" }
+    private enum K: String, CodingKey { case type, kind, session, command, request, option, text, token, env, shared, path, agent, cwd, prompt, parent, name, mode, sinceSeq = "since_seq" }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: K.self)
@@ -458,6 +462,11 @@ enum ClientMsg: Encodable, Sendable {
             try cmd.encode("resolve_permission", forKey: .type)
             try cmd.encode(request, forKey: .request)
             try cmd.encode(option, forKey: .option)
+        case .setMode(let s, let mode):
+            try c.encode("command", forKey: .type); try c.encode(s, forKey: .session)
+            var cmd = c.nestedContainer(keyedBy: K.self, forKey: .command)
+            try cmd.encode("set_mode", forKey: .type)
+            try cmd.encode(mode, forKey: .mode)
         case .stopSharing(let s):
             try c.encode("command", forKey: .type); try c.encode(s, forKey: .session)
             var cmd = c.nestedContainer(keyedBy: K.self, forKey: .command)
@@ -575,5 +584,57 @@ struct UsageWindow: Decodable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case title, rolling, usedFraction = "used_fraction", resetsAtMs = "resets_at_ms"
+    }
+}
+
+/// Claude's permission modes, in the order Shift+Tab cycles them.
+enum PermissionMode: String, CaseIterable, Identifiable, Sendable {
+    case manual = "default", acceptEdits, plan, auto, bypassPermissions
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .manual: "Manual"
+        case .acceptEdits: "Accept edits"
+        case .plan: "Plan"
+        case .auto: "Auto"
+        case .bypassPermissions: "Bypass permissions"
+        }
+    }
+
+    /// For the session's header, where room is short.
+    var short: String {
+        switch self {
+        case .manual: "Manual"
+        case .acceptEdits: "Edits"
+        case .plan: "Plan"
+        case .auto: "Auto"
+        case .bypassPermissions: "Bypass"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .manual: "Asks before edits and commands"
+        case .acceptEdits: "Edits files without asking"
+        case .plan: "Plans first, changes nothing"
+        case .auto: "Decides for itself what needs asking"
+        case .bypassPermissions: "Never asks"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .manual: "hand.raised"
+        case .acceptEdits: "pencil.and.list.clipboard"
+        case .plan: "map"
+        case .auto: "bolt"
+        case .bypassPermissions: "exclamationmark.shield"
+        }
+    }
+
+    /// What the phone offers: bypass only when the session already allows it.
+    static func choices(current: PermissionMode) -> [PermissionMode] {
+        current == .bypassPermissions ? allCases : allCases.filter { $0 != .bypassPermissions }
     }
 }

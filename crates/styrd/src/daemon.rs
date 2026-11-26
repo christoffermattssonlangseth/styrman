@@ -447,11 +447,16 @@ impl Daemon {
             in_terminal_wrapper: false,
             accepts_prompts: false,
             activity,
+            mode: None,
         }
     }
 
     fn with_capabilities(&self, mut s: SessionSummary) -> SessionSummary {
         s.in_terminal_wrapper = self.terminals.is_live(&s.id);
+        s.mode = s
+            .in_terminal_wrapper
+            .then(|| self.terminals.mode_of(&s.id))
+            .flatten();
         // Claude can also take prompts through its background Stop hook.
         s.accepts_prompts = s.in_terminal_wrapper || s.agent == AgentKind::Claude;
         s
@@ -740,6 +745,35 @@ impl Daemon {
         );
         tracing::info!(%session, ?delivery, "prompt from the phone");
         Ok(delivery)
+    }
+
+    /// From the phone: switch a session's permission mode. Only Claude, and only inside
+    /// `styr claude` (the wrapper presses Shift+Tab until its footer shows `mode`).
+    pub fn set_mode(&self, session: &SessionId, mode: &str) -> Result<()> {
+        anyhow::ensure!(
+            crate::terminals::MODES.contains(&mode),
+            "unknown mode {mode}"
+        );
+        let summary = self
+            .summary(session)?
+            .filter(|s| s.shared)
+            .context("unknown session")?;
+        anyhow::ensure!(
+            summary.agent == AgentKind::Claude,
+            "Only Claude's mode can be changed from the phone so far."
+        );
+        anyhow::ensure!(
+            summary.status != styr_core::SessionStatus::Done,
+            "the session has ended"
+        );
+        let launch = self
+            .terminals
+            .launch_of(session)
+            .filter(|_| self.terminals.is_live(session))
+            .context("To change its mode from here, start it with `styr claude`.")?;
+        self.terminals.set_mode(&launch, mode);
+        tracing::info!(%session, mode, "mode change from the phone");
+        Ok(())
     }
 
     /// `/styr` (or `/styr off`) caught by a `styr <agent>` terminal wrapper, for an
@@ -1133,12 +1167,23 @@ impl Daemon {
                     Some(crate::terminals::TerminalAction::Select(index)) => {
                         Ok(Response::SelectOption { index })
                     }
+                    Some(crate::terminals::TerminalAction::Mode(mode)) => {
+                        Ok(Response::SetMode { mode })
+                    }
                     None => Err(anyhow::anyhow!("detached")),
                 }
             }
             Request::TerminalPrompt { launch_id, prompt } => self
                 .terminal_prompt(&launch_id, prompt)
                 .map(|()| Response::Ok),
+            Request::TerminalMode { launch_id, mode } => {
+                if self.terminals.note_mode(&launch_id, mode) {
+                    for id in self.terminals.sessions_of(&launch_id) {
+                        let _ = self.bus.send(BusMsg::SessionChanged(id));
+                    }
+                }
+                Ok(Response::Ok)
+            }
             Request::Diagnostics => self.devices().map(|devices| Response::Diagnostics {
                 daemon_version: styr_core::VERSION.to_owned(),
                 pid: std::process::id(),

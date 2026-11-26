@@ -32,7 +32,18 @@ const LIVE_GRACE: Duration = Duration::from_secs(15);
 pub enum TerminalAction {
     Type(String),
     Select(usize),
+    /// Switch the agent's permission mode.
+    Mode(String),
 }
+
+/// Permission modes the phone may ask for (Claude's names).
+pub const MODES: [&str; 5] = [
+    "default",
+    "acceptEdits",
+    "plan",
+    "auto",
+    "bypassPermissions",
+];
 
 /// An on-screen permission menu turned into a permission request.
 #[derive(Debug, Clone)]
@@ -61,6 +72,10 @@ struct Inner {
     typed: HashMap<SessionId, VecDeque<QueuedPrompt>>,
     /// Menu selections not yet handed to the wrapper, per launch.
     selects: HashMap<String, usize>,
+    /// Mode changes not yet handed to the wrapper, per launch.
+    mode_sets: HashMap<String, String>,
+    /// The permission mode the agent shows, per launch.
+    modes: HashMap<String, String>,
     /// The permission menu currently on screen, per launch.
     on_screen: HashMap<String, ScreenPermission>,
     /// The last tool the agent announced, per session (to describe a menu).
@@ -249,9 +264,11 @@ impl Terminals {
         let (tx, rx) = oneshot::channel();
         let mut g = self.lock();
         g.last_seen.insert(launch.to_owned(), Instant::now());
-        // A pending menu selection goes out first.
+        // A pending menu selection goes out first, then a mode change.
         if let Some(i) = g.selects.remove(launch) {
             let _ = tx.send(TerminalAction::Select(i));
+        } else if let Some(m) = g.mode_sets.remove(launch) {
+            let _ = tx.send(TerminalAction::Mode(m));
         } else {
             g.attached.insert(launch.to_owned(), tx);
         }
@@ -297,6 +314,8 @@ impl Terminals {
 
     fn select(&self, launch: &str, index: usize) {
         let mut g = self.lock();
+        // Busy with it, not gone: it stays live until it attaches again.
+        g.last_seen.insert(launch.to_owned(), Instant::now());
         match g.attached.remove(launch) {
             Some(tx) => {
                 if tx.send(TerminalAction::Select(index)).is_err() {
@@ -307,6 +326,39 @@ impl Terminals {
                 g.selects.insert(launch.to_owned(), index);
             }
         }
+    }
+
+    /// Ask the wrapper to switch its agent's permission mode.
+    pub fn set_mode(&self, launch: &str, mode: &str) {
+        let mut g = self.lock();
+        g.last_seen.insert(launch.to_owned(), Instant::now());
+        match g.attached.remove(launch) {
+            Some(tx) => {
+                if tx.send(TerminalAction::Mode(mode.to_owned())).is_err() {
+                    g.mode_sets.insert(launch.to_owned(), mode.to_owned());
+                }
+            }
+            None => {
+                g.mode_sets.insert(launch.to_owned(), mode.to_owned());
+            }
+        }
+    }
+
+    /// The wrapper read a (new) mode off the screen; true if it changed.
+    pub fn note_mode(&self, launch: &str, mode: Option<String>) -> bool {
+        let mut g = self.lock();
+        match mode {
+            Some(m) => g.modes.insert(launch.to_owned(), m.clone()).as_ref() != Some(&m),
+            None => g.modes.remove(launch).is_some(),
+        }
+    }
+
+    pub fn mode_of(&self, session: &SessionId) -> Option<String> {
+        let g = self.lock();
+        g.launch_of
+            .get(session)
+            .and_then(|l| g.modes.get(l))
+            .cloned()
     }
 
     /// If `text` is a prompt we typed for the phone, who sent it.
@@ -579,6 +631,13 @@ mod tests {
         t.select("L", 2);
         let mut rx = t.attach("L");
         assert_eq!(rx.try_recv().unwrap(), TerminalAction::Select(2));
+
+        // A mode change waits for the wrapper too, after any menu answer.
+        t.set_mode("L", "plan");
+        let mut rx = t.attach("L");
+        assert_eq!(rx.try_recv().unwrap(), TerminalAction::Mode("plan".into()));
+        assert!(t.note_mode("L", Some("plan".into())));
+        assert!(!t.note_mode("L", Some("plan".into())), "unchanged");
     }
 
     #[test]

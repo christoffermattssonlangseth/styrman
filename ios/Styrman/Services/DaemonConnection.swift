@@ -332,6 +332,20 @@ final class DaemonConnection {
     }
 
     /// Stop sharing a session with the phones (the session keeps running).
+    /// Switch a session's permission mode (Claude in `styr claude`). The Mac presses
+    /// Shift+Tab until its footer shows it; the session's `mode` follows. If it
+    /// hasn't after a few seconds, say so (that version of Claude may not have it).
+    func setMode(_ session: String, to mode: PermissionMode) {
+        guard state == .connected else { return }
+        send(.setMode(session: session, mode: mode.rawValue))
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(6))
+            guard let self, let s = self.sessions.first(where: { $0.id == session }),
+                  s.mode != mode.rawValue, self.lastError == nil else { return }
+            self.lastError = "Claude didn't switch to \(mode.label). This version may not have that mode, or a dialog is open in its terminal."
+        }
+    }
+
     func stopSharing(_ session: String) {
         guard state == .connected else { return }
         sessions.removeAll { $0.id == session }

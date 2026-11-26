@@ -856,6 +856,21 @@ impl Connection {
                     }
                 }
             }
+            ClientMsg::Command {
+                session,
+                command: styr_core::Command::SetMode { mode },
+            } => match self.daemon.set_mode(&session, &mode) {
+                Ok(()) => Ok(()),
+                Err(e) => {
+                    send(
+                        tx,
+                        &ServerMsg::Error {
+                            message: format!("{e:#}"),
+                        },
+                    )
+                    .await
+                }
+            },
             ClientMsg::Command { .. } => {
                 send(
                     tx,

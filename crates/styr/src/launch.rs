@@ -136,7 +136,17 @@ pub fn exec(agent: AgentKind, args: Vec<OsString>) -> Result<std::convert::Infal
         let mut all: Vec<OsString> = spec.extra_args.iter().map(OsString::from).collect();
         all.extend(args);
         let catch_styr = agent == AgentKind::Codex;
-        let code = crate::pty::run(&bin, &all, &env, &launch_id, detector, catch_styr)?;
+        let mode_reader: Option<crate::pty::ModeReader> = (agent == AgentKind::Claude)
+            .then_some(crate::pty::claude_mode as crate::pty::ModeReader);
+        let code = crate::pty::run(
+            &bin,
+            &all,
+            &env,
+            &launch_id,
+            detector,
+            mode_reader,
+            catch_styr,
+        )?;
         std::process::exit(code);
     }
     let mut cmd = std::process::Command::new(&bin);

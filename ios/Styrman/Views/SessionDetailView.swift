@@ -137,6 +137,13 @@ struct SessionDetailView: View {
                                     Image(systemName: "circle.fill").font(.system(size: 5)).foregroundStyle(Theme.accent)
                                         .symbolEffect(.pulse, options: .repeating)
                                 }
+                                if let mode = summary.mode.flatMap(PermissionMode.init), mode != .manual {
+                                    Text("·").foregroundStyle(.tertiary)
+                                    Text(mode.short)
+                                        .fixedSize()
+                                        .foregroundStyle(mode == .bypassPermissions ? AnyShapeStyle(.red) : AnyShapeStyle(.secondary))
+                                        .accessibilityLabel("\(mode.label) mode")
+                                }
                             }
                             .font(.caption2.weight(.medium))
                             .animation(.easeOut(duration: 0.2), value: summary.status)
@@ -146,6 +153,23 @@ struct SessionDetailView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
+                        if summary.status != .done, let mode = summary.mode.flatMap(PermissionMode.init) {
+                            Picker(selection: Binding(get: { mode }, set: { connection.setMode(sessionId, to: $0) })) {
+                                ForEach(PermissionMode.choices(current: mode)) { m in
+                                    Label {
+                                        Text(m.label)
+                                        Text(m.detail)
+                                    } icon: {
+                                        Image(systemName: m.symbol)
+                                    }
+                                    .tag(m)
+                                }
+                            } label: {
+                                Label("Mode: \(mode.label)", systemImage: mode.symbol)
+                            }
+                            .pickerStyle(.menu)
+                            Divider()
+                        }
                         Toggle(isOn: Binding(get: { speaker.autoRead }, set: { on in
                             speaker.autoRead = on
                             if !on { speaker.stop() }
