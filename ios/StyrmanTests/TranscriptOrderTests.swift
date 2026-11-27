@@ -109,4 +109,27 @@ private let tool = #"{"type":"tool_call","call":"c1","tool":{"name":"Bash","kind
         try await Task.sleep(for: .milliseconds(1_400))
         #expect(t.preview == nil)
     }
+
+    /// A command left running in the background counts until Claude says it's done;
+    /// a compaction doesn't end it, a new Claude process does.
+    @Test func backgroundTasksRunUntilTheyEnd() throws {
+        let now = Int64(SessionTimeline.tasksRecordedSince.timeIntervalSince1970 * 1000) + 60_000
+        let bg = #"{"type":"tool_call","call":"b1","tool":{"name":"Bash","kind":"execute","title":"Run `make`","input":{"command":"make","description":"Build it","run_in_background":true}},"status":"completed"}"#
+        let agent = #"{"type":"tool_call","call":"a1","tool":{"name":"Agent","kind":"other","title":"Agent","input":{"description":"Review the parser","run_in_background":true}},"status":"completed"}"#
+        let t = SessionTimeline(sessionId: "S")
+        t.apply([try event(1, ms: now, bg), try event(2, ms: now + 1, agent), try event(3, ms: now + 2, tool)])
+        #expect(t.runningTasks.map(\.title) == ["Build it", "Review the parser"])
+        #expect(t.runningTasks.map(\.isAgent) == [false, true])
+        t.apply([try event(4, ms: now + 3, #"{"type":"session_started","start":"compact"}"#),
+                 try event(5, ms: now + 4, #"{"type":"task_ended","call":"b1","status":"completed","summary":"Background command \"Build it\" completed (exit code 0)"}"#)])
+        #expect(t.runningTasks.map(\.id) == ["a1"])
+        #expect(t.tasks.first?.ended?.summary == "Background command \"Build it\" completed (exit code 0)")
+        t.apply([try event(6, ms: now + 5, #"{"type":"session_ended"}"#)])
+        #expect(t.runningTasks.isEmpty)
+        // From before endings were recorded: not listed.
+        let old = SessionTimeline(sessionId: "S")
+        old.apply([try event(1, ms: 2_000, bg)])
+        #expect(old.tasks.isEmpty)
+    }
 }
+

@@ -64,7 +64,7 @@ impl Follower {
                 Some(f) => f,
             }
         };
-        let (texts, consumed) = match read_new(&t.path, from, t.native.agent) {
+        let (texts, ended, consumed) = match read_new(&t.path, from, t.native.agent) {
             Ok(r) => r,
             Err(e) => {
                 tracing::debug!(session = %t.id, "reading transcript: {e:#}");
@@ -80,7 +80,7 @@ impl Follower {
             }
             *at = from + consumed;
         }
-        if texts.is_empty() {
+        if texts.is_empty() && ended.is_empty() {
             return;
         }
         let events = texts
@@ -90,6 +90,7 @@ impl Follower {
                 text,
                 mode: TextMode::Final,
             })
+            .chain(ended)
             .collect();
         if let Err(e) = daemon.ingest(
             &SessionUpdate::for_native(t.native.clone()),
@@ -134,12 +135,11 @@ pub async fn run(daemon: Arc<Daemon>, mut stop: watch::Receiver<bool>) {
     }
 }
 
-/// The agent's text in the complete lines after `from`, and how many bytes they took.
-fn read_new(
-    path: &Path,
-    from: u64,
-    agent: AgentKind,
-) -> std::io::Result<(Vec<(String, String)>, u64)> {
+/// What's new in the complete lines after `from`: the agent's text, background tasks
+/// that finished, and how many bytes the lines took.
+type NewLines = (Vec<(String, String)>, Vec<EventKind>, u64);
+
+fn read_new(path: &Path, from: u64, agent: AgentKind) -> std::io::Result<NewLines> {
     let mut f = std::fs::File::open(path)?;
     f.seek(SeekFrom::Start(from))?;
     let mut buf = Vec::new();
@@ -149,6 +149,7 @@ fn read_new(
         // One line longer than MAX_READ: skip it rather than stall.
         return Ok((
             vec![],
+            vec![],
             if buf.len() as u64 >= MAX_READ {
                 buf.len() as u64
             } else {
@@ -156,16 +157,36 @@ fn read_new(
             },
         ));
     };
-    let texts = buf[..end]
+    let lines: Vec<serde_json::Value> = buf[..end]
         .split(|&b| b == b'\n')
-        .filter_map(|line| serde_json::from_slice::<serde_json::Value>(line).ok())
+        .filter_map(|line| serde_json::from_slice(line).ok())
+        .collect();
+    let texts = lines
+        .iter()
         .flat_map(|v| match agent {
-            AgentKind::Claude => claude_text(&v),
-            AgentKind::Codex => codex_text(&v),
+            AgentKind::Claude => claude_text(v),
+            AgentKind::Codex => codex_text(v),
             _ => vec![],
         })
         .collect();
-    Ok((texts, end as u64 + 1))
+    let ended = match agent {
+        AgentKind::Claude => lines.iter().flat_map(claude_tasks_ended).collect(),
+        _ => vec![],
+    };
+    Ok((texts, ended, end as u64 + 1))
+}
+
+/// Claude Code: a background task's notification, queued while the agent works:
+/// `{"type":"queue-operation","operation":"enqueue","content":"<task-notification>…"}`.
+/// (When it's idle, the notification starts a turn and arrives through the hook.)
+fn claude_tasks_ended(v: &serde_json::Value) -> Vec<EventKind> {
+    if v["type"] != "queue-operation" || v["operation"] != "enqueue" {
+        return vec![];
+    }
+    v["content"]
+        .as_str()
+        .map(styr_adapter_claude::task_notifications)
+        .unwrap_or_default()
 }
 
 /// Claude Code: `{"type":"assistant","uuid":…,"message":{"content":[{"type":"text","text":…}]}}`,
@@ -260,6 +281,27 @@ mod tests {
     }
 
     #[test]
+    fn background_tasks_that_finish() {
+        let q = json!({"type": "queue-operation", "operation": "enqueue",
+            "content": "<task-notification>\n<task-id>b1</task-id>\n<tool-use-id>toolu_1</tool-use-id>\n<status>completed</status>\n<summary>Background command \"Build\" completed (exit code 0)</summary>\n</task-notification>"});
+        assert_eq!(
+            claude_tasks_ended(&q),
+            vec![EventKind::TaskEnded {
+                call: styr_core::ids::ToolCallId("toolu_1".into()),
+                status: "completed".into(),
+                summary: Some("Background command \"Build\" completed (exit code 0)".into()),
+            }]
+        );
+        // Taken off the queue again: not a second ending.
+        let mut removed = q.clone();
+        removed["operation"] = json!("remove");
+        assert!(claude_tasks_ended(&removed).is_empty());
+        assert!(
+            claude_tasks_ended(&json!({"type": "user", "message": {"content": "hi"}})).is_empty()
+        );
+    }
+
+    #[test]
     fn reads_whole_lines_and_resumes_after_them() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("t.jsonl");
@@ -268,11 +310,11 @@ mod tests {
         let b = json!({"type": "assistant", "uuid": "b", "message": {"content": [{"type": "text", "text": "Two."}]}});
         // The second line isn't finished yet.
         write!(f, "{a}\n{}", &b.to_string()[..10]).unwrap();
-        let (texts, used) = read_new(&path, 0, AgentKind::Claude).unwrap();
+        let (texts, _, used) = read_new(&path, 0, AgentKind::Claude).unwrap();
         assert_eq!(texts.len(), 1);
         assert_eq!(texts[0].1, "One.");
         writeln!(f, "{}", &b.to_string()[10..]).unwrap();
-        let (texts, _) = read_new(&path, used, AgentKind::Claude).unwrap();
+        let (texts, _, _) = read_new(&path, used, AgentKind::Claude).unwrap();
         assert_eq!(
             texts.iter().map(|t| t.1.as_str()).collect::<Vec<_>>(),
             ["Two."]

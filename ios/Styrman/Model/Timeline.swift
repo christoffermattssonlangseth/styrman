@@ -11,6 +11,27 @@ struct ToolItem: Hashable, Sendable {
     var output: ToolOutput?
 }
 
+/// A shell command or agent the agent left running in the background, from its
+/// start until Claude Code says it's done.
+struct AgentTask: Identifiable, Hashable, Sendable {
+    let id: String          // the tool call
+    var tool: ToolInfo
+    let started: Date
+    /// When and how it ended: "completed", "failed", "killed", …
+    var ended: (at: Date, status: String, summary: String?)?
+
+    var isAgent: Bool { tool.name != "Bash" }
+    var title: String {
+        tool.input["description"]?.string ?? tool.input["command"]?.string ?? tool.title
+    }
+
+    static func == (a: Self, b: Self) -> Bool {
+        a.id == b.id && a.tool == b.tool && a.started == b.started
+            && a.ended?.at == b.ended?.at && a.ended?.status == b.ended?.status
+    }
+    func hash(into h: inout Hasher) { h.combine(id) }
+}
+
 struct PermissionItem: Hashable, Sendable {
     var request: String
     var tool: ToolInfo
@@ -74,6 +95,38 @@ final class SessionTimeline {
     /// The reply the agent is writing right now, as its terminal shows it. Gone when
     /// the real message (or anything else from the agent) arrives.
     private(set) var preview: String?
+
+    /// When the Mac began recording when background tasks end (`task_ended`): tasks
+    /// started earlier have no ending on record and would look running forever.
+    nonisolated static let tasksRecordedSince = Date(timeIntervalSince1970: 1795816657)
+
+    /// Shell commands and agents left running in the background, oldest first.
+    private(set) var tasks: [AgentTask] = []
+    var runningTasks: [AgentTask] { tasks.filter { $0.ended == nil } }
+
+    private func trackTask(_ e: Event) {
+        switch e.kind {
+        case .toolCall(let call, let tool, let status, _)
+            where tool.input["run_in_background"]?.bool == true && !call.isEmpty && e.at >= Self.tasksRecordedSince:
+            if let i = tasks.firstIndex(where: { $0.id == call }) {
+                tasks[i].tool = tool
+                if status == .failed, tasks[i].ended == nil { tasks[i].ended = (e.at, "failed", nil) }
+            } else {
+                tasks.append(AgentTask(id: call, tool: tool, started: e.at,
+                                            ended: status == .failed ? (e.at, "failed", nil) : nil))
+            }
+        case .taskEnded(let call, let status, let summary):
+            if let i = tasks.firstIndex(where: { $0.id == call }), tasks[i].ended == nil {
+                tasks[i].ended = (e.at, status, summary)
+            }
+        case .sessionEnded, .sessionStarted(_, _, "new"), .sessionStarted(_, _, "resume"):
+            // Claude Code's background tasks don't outlive it (they do outlive a
+            // compaction or /clear, which start anew in the same process).
+            for i in tasks.indices where tasks[i].ended == nil { tasks[i].ended = (e.at, "ended", nil) }
+        default:
+            break
+        }
+    }
 
     /// The agent's status line while it works ("Crunching… (3s · thinking)"), and
     /// when it was read (its clock runs on from there).
@@ -284,6 +337,7 @@ final class SessionTimeline {
     }
 
     private func apply(_ e: Event) {
+        trackTask(e)
         let key = "\(e.seq)"
         switch e.kind {
         case .assistantMessage, .userMessage, .permissionRequested, .turnEnded, .sessionEnded:
@@ -354,7 +408,7 @@ final class SessionTimeline {
             append(.notice(id: key, text: text, warning: warning))
         case .error(let message, _):
             append(.notice(id: key, text: message, warning: true))
-        case .turnStarted, .turnEnded, .reasoning, .unknown:
+        case .turnStarted, .turnEnded, .reasoning, .unknown, .taskEnded:
             break
         }
     }

@@ -114,6 +114,30 @@ pub fn is_internal_prompt(prompt: &str) -> bool {
     p.starts_with("<task-notification>") || p.starts_with("<agent-message")
 }
 
+/// Background tasks that finished, from Claude Code's notifications:
+/// `<task-notification><tool-use-id>toolu_1</tool-use-id><status>completed</status>
+/// <summary>Background command "…" completed (exit code 0)</summary></task-notification>`.
+/// A prompt can carry several.
+pub fn task_notifications(text: &str) -> Vec<EventKind> {
+    let tag = |block: &str, name: &str| -> Option<String> {
+        let open = format!("<{name}>");
+        let start = block.find(&open)? + open.len();
+        let end = block[start..].find(&format!("</{name}>"))? + start;
+        Some(block[start..end].trim().to_owned())
+    };
+    text.split("<task-notification>")
+        .skip(1)
+        .filter_map(|block| {
+            let block = block.split("</task-notification>").next()?;
+            Some(EventKind::TaskEnded {
+                call: ToolCallId(tag(block, "tool-use-id").filter(|s| !s.is_empty())?),
+                status: tag(block, "status").unwrap_or_else(|| "completed".into()),
+                summary: tag(block, "summary"),
+            })
+        })
+        .collect()
+}
+
 /// A subagent's report, which Claude Code hands to the main agent as a prompt.
 pub fn is_subagent_report(prompt: &str) -> bool {
     prompt.trim_start().starts_with("<agent-message")
@@ -226,6 +250,7 @@ impl AgentAdapter for ClaudeAdapter {
                     ev.push(EventKind::TurnStarted {
                         turn: s(p, "prompt_id").map(TurnId),
                     });
+                    ev.extend(task_notifications(&prompt));
                     if is_subagent_report(&prompt) {
                         ev.push(EventKind::Notice {
                             level: Level::Info,
@@ -430,5 +455,33 @@ impl AgentAdapter for ClaudeAdapter {
                 ("STYR_WRAPPED".into(), "1".into()),
             ],
         }
+    }
+}
+
+#[cfg(test)]
+mod task_tests {
+    use super::*;
+
+    #[test]
+    fn a_wake_up_prompt_can_end_several_tasks() {
+        let prompt = "<task-notification>\n<task-id>a</task-id>\n<tool-use-id>toolu_a</tool-use-id>\n<status>completed</status>\n<summary>Background command \"Build\" completed (exit code 0)</summary>\n</task-notification>\n<task-notification>\n<tool-use-id>toolu_b</tool-use-id>\n<status>killed</status>\n</task-notification>";
+        assert!(is_internal_prompt(prompt));
+        let ended = task_notifications(prompt);
+        assert_eq!(ended.len(), 2);
+        assert_eq!(
+            ended[1],
+            EventKind::TaskEnded {
+                call: ToolCallId("toolu_b".into()),
+                status: "killed".into(),
+                summary: None
+            }
+        );
+        // A stop-hook wake-up without a tool: nothing ends.
+        assert!(
+            task_notifications(
+                "<task-notification><summary>Stop hook feedback</summary></task-notification>"
+            )
+            .is_empty()
+        );
     }
 }

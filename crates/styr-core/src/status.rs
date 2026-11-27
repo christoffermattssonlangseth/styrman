@@ -138,7 +138,7 @@ impl StatusTracker {
                 };
             }
             Error { fatal: true, .. } => self.phase = Phase::Error,
-            Error { fatal: false, .. } | Notice { .. } => {}
+            Error { fatal: false, .. } | Notice { .. } | TaskEnded { .. } => {}
         }
     }
 

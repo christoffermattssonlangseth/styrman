@@ -111,6 +111,14 @@ pub enum EventKind {
         level: Level,
         text: String,
     },
+    /// A tool call left running in the background (a shell command, an agent)
+    /// finished: Claude Code's `<task-notification>`.
+    TaskEnded {
+        call: ToolCallId,
+        /// `completed`, `failed`, `killed`, …
+        status: String,
+        summary: Option<String>,
+    },
     Error {
         message: String,
         fatal: bool,
@@ -134,6 +142,7 @@ impl EventKind {
             Self::PermissionResolved { .. } => "permission_resolved",
             Self::TurnEnded { .. } => "turn_ended",
             Self::Notice { .. } => "notice",
+            Self::TaskEnded { .. } => "task_ended",
             Self::Error { .. } => "error",
         }
     }

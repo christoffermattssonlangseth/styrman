@@ -250,6 +250,9 @@ struct SessionDetailView: View {
                                    thinkingSince: timeline.thinkingSince, agent: agent).id("status")
                     }
                 }
+                if !timeline.runningTasks.isEmpty {
+                    RunningTasksLink(timeline: timeline, cwd: summary?.cwd).id("tasks")
+                }
                 if timeline.isLive && !timeline.hasContent && timeline.pending.isEmpty {
                     VStack(spacing: 6) {
                         Image(systemName: "ellipsis.bubble").font(.title2).foregroundStyle(.tertiary)
@@ -525,16 +528,13 @@ struct ReplyView: View {
     var isLatest = true
     @State private var speaker = Speaker.shared
     @State private var copied = false
-    /// The reply in a sheet where any part of it can be selected.
-    @State private var selecting = false
 
     var body: some View {
         let playing = speaker.speakingId == id
         let tint = Theme.color(for: agent)
         VStack(alignment: .leading, spacing: 6) {
-            ReplyText(raw: raw).textSelection(.enabled)
-            // Actions under the latest reply only (and the one being read); long-press any reply for them.
-            if isLatest || playing {
+            ReplyText(raw: raw, selectable: true)
+            // Under every reply, as in the Claude app (a long-press selects text).
             HStack(spacing: 2) {
                 ActionIcon(
                     symbol: copied ? "checkmark" : "doc.on.doc",
@@ -544,9 +544,6 @@ struct ReplyView: View {
                     UIPasteboard.general.string = raw
                     copied = true
                     Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
-                }
-                ActionIcon(symbol: "text.cursor", label: "Select text", tint: .secondary) {
-                    selecting = true
                 }
                 ActionIcon(
                     symbol: playing ? "stop.fill" : "speaker.wave.2",
@@ -558,52 +555,15 @@ struct ReplyView: View {
                 }
             }
             .padding(.leading, -8)
-            }
         }
         .padding(.leading, playing ? 12 : 0)
         // An edge in the agent's colour while it's read aloud.
         .overlay(alignment: .leading) {
             if playing { Capsule().fill(tint).frame(width: 4).padding(.vertical, 2) }
         }
-        .contextMenu {
-            Button { UIPasteboard.general.string = raw } label: { Label("Copy", systemImage: "doc.on.doc") }
-            Button { selecting = true } label: { Label("Select text", systemImage: "text.cursor") }
-            Button { speaker.toggle(raw, id: id, agent: agent) } label: {
-                Label(playing ? "Stop reading" : "Read aloud", systemImage: playing ? "stop.fill" : "speaker.wave.2")
-            }
-        }
         .animation(.easeOut(duration: 0.2), value: playing)
         // A tap when it starts; none when it ends (a lone haptic tick sounds like a click).
         .sensoryFeedback(.selection, trigger: playing) { _, now in now }
-        .sheet(isPresented: $selecting) { SelectTextSheet(text: text, raw: raw, agent: agent) }
-    }
-}
-
-/// A reply where any part can be selected and copied (SwiftUI's Text only copies
-/// all of it on iOS).
-struct SelectTextSheet: View {
-    let text: AttributedString
-    let raw: String
-    let agent: AgentKind
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            SelectableText(text: text)
-                .navigationTitle("Select text")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
-                    ToolbarItem(placement: .topBarLeading) {
-                        Button("Copy all") {
-                            UIPasteboard.general.string = raw
-                            dismiss()
-                        }
-                    }
-                }
-        }
-        .tint(Theme.color(for: agent))
-        .presentationDragIndicator(.visible)
     }
 }
 
@@ -1395,7 +1355,7 @@ struct AgentMessageRow: View {
                 Text("From \(message.sender)").font(.caption.weight(.semibold)).foregroundStyle(c)
                 Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.secondary)
             }
-            ReplyText(raw: message.body).textSelection(.enabled)
+            ReplyText(raw: message.body, selectable: true)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1941,5 +1901,140 @@ struct HelperLinks: View {
             .background(Theme.color(for: s.agent).opacity(0.12), in: Capsule())
         }
         .buttonStyle(.plain)
+    }
+}
+
+
+/// "3 running tasks", as the Claude app has it under the conversation: shell
+/// commands and agents left running in the background. Tap for the list.
+struct RunningTasksLink: View {
+    let timeline: SessionTimeline
+    let cwd: String?
+    @State private var open = false
+
+    var body: some View {
+        let n = timeline.runningTasks.count
+        Button { open = true } label: {
+            Text(n == 1 ? "1 running task" : "\(n) running tasks").underline()
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.blue)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 4)
+        .sheet(isPresented: $open) { BackgroundTasksSheet(timeline: timeline, cwd: cwd) }
+    }
+}
+
+/// The background tasks: running ones first, then those that finished, each a card
+/// with what it does, whether it's a shell command or an agent, and for how long.
+struct BackgroundTasksSheet: View {
+    let timeline: SessionTimeline
+    let cwd: String?
+    @Environment(\.dismiss) private var dismiss
+    @State private var showRunning = true
+    @State private var showDone = false
+
+    var body: some View {
+        let running = timeline.runningTasks
+        let done = Array(timeline.tasks.filter { $0.ended != nil }.reversed().prefix(30))
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    section("Running", count: running.count, open: $showRunning)
+                    if showRunning {
+                        if running.isEmpty {
+                            Text("Nothing running now.").font(.subheadline).foregroundStyle(.secondary)
+                        }
+                        ForEach(running) { TaskCard(task: $0, cwd: cwd) }
+                    }
+                    if !done.isEmpty {
+                        section("Finished", count: done.count, open: $showDone).padding(.top, 8)
+                        if showDone { ForEach(done) { TaskCard(task: $0, cwd: cwd) } }
+                    }
+                }
+                .padding(16)
+            }
+            .navigationTitle("Background tasks")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close")
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func section(_ title: String, count: Int, open: Binding<Bool>) -> some View {
+        Button { withAnimation(.snappy) { open.wrappedValue.toggle() } } label: {
+            HStack(spacing: 6) {
+                Text(title)
+                Image(systemName: "chevron.down").font(.caption.weight(.semibold))
+                    .rotationEffect(.degrees(open.wrappedValue ? 0 : -90))
+            }
+            .font(.subheadline).foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// One background task: its mark, what it does (shimmering while it runs), "Shell"
+/// or "Agent" and how long it has run or ran. Tap for the command and output.
+struct TaskCard: View {
+    let task: AgentTask
+    let cwd: String?
+    @State private var open = false
+
+    var body: some View {
+        Button { open = true } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Group {
+                    if task.isAgent { Image(systemName: "diamond").font(.footnote) }
+                    else { StepIcon(kind: .execute) }
+                }
+                .foregroundStyle(.secondary)
+                .frame(width: 22, height: 22)
+                VStack(alignment: .leading, spacing: 4) {
+                    if task.ended == nil {
+                        Shimmer(text: task.title, color: .primary).lineLimit(2)
+                    } else {
+                        Text(task.title).lineLimit(2)
+                    }
+                    TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                        HStack(spacing: 8) {
+                            Text(task.isAgent ? "Agent" : "Shell").fontWeight(.medium)
+                            Text(Self.duration((task.ended?.at ?? ctx.date).timeIntervalSince(task.started)))
+                                .foregroundStyle(.secondary)
+                            if let end = task.ended, end.status != "completed" {
+                                Text(end.status).foregroundStyle(.orange)
+                            }
+                        }
+                        .font(.footnote)
+                    }
+                    if let summary = task.ended?.summary {
+                        Text(summary).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $open) {
+            ToolDetailView(item: ToolItem(call: task.id, tool: task.tool,
+                                          status: task.ended == nil ? .running : .completed, output: nil),
+                           title: displayTitle(task.tool, cwd: cwd))
+        }
+    }
+
+    /// "28s", "4m 2s", "1h 11m", like the Claude app's.
+    static func duration(_ t: TimeInterval) -> String {
+        let s = max(0, Int(t))
+        if s >= 3600 { return "\(s / 3600)h \(s % 3600 / 60)m" }
+        return WorkStatus.duration(s)
     }
 }

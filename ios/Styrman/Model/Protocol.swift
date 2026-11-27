@@ -42,6 +42,11 @@ enum JSONValue: Codable, Hashable, Sendable {
         return nil
     }
 
+    var bool: Bool? {
+        if case .bool(let b) = self { return b }
+        return nil
+    }
+
     /// Compact, human-readable rendering (pretty for containers).
     var pretty: String {
         if case .string(let s) = self { return s }
@@ -252,6 +257,8 @@ enum EventKind: Sendable, Hashable {
     case permissionResolved(request: String, outcome: PermissionOutcome, by: Resolver)
     case turnEnded(reason: String, lastMessage: String?)
     case notice(text: String, warning: Bool)
+    /// A tool call left running in the background finished.
+    case taskEnded(call: String, status: String, summary: String?)
     case error(message: String, fatal: Bool)
     case unknown(type: String)
 }
@@ -259,7 +266,7 @@ enum EventKind: Sendable, Hashable {
 extension EventKind: Decodable {
     private enum K: String, CodingKey {
         case type, cwd, model, start, reason, shared, text, origin, from, message, mode, entries
-        case call, tool, status, output, request, options, outcome, option, kind, by, level, fatal
+        case call, tool, status, output, request, options, outcome, option, kind, by, level, fatal, summary
         case expiresAtMs = "expires_at_ms", lastMessage = "last_message"
     }
 
@@ -322,6 +329,9 @@ extension EventKind: Decodable {
             self = .turnEnded(reason: s(.reason) ?? "end_turn", lastMessage: s(.lastMessage))
         case "notice":
             self = .notice(text: try c.decode(String.self, forKey: .text), warning: s(.level) == "warning")
+        case "task_ended":
+            self = .taskEnded(call: try c.decode(String.self, forKey: .call), status: s(.status) ?? "completed",
+                              summary: s(.summary))
         case "error":
             self = .error(message: try c.decode(String.self, forKey: .message), fatal: (try? c.decode(Bool.self, forKey: .fatal)) ?? false)
         default:
