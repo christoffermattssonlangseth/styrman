@@ -4,12 +4,17 @@ import SwiftUI
 
 struct ReplyText: View {
     let raw: String
+    /// Select any part of it, as on a web page (drag the handles, then Copy). Off for
+    /// text still being written.
+    var selectable = false
 
     var body: some View {
         let blocks = ReplyMarkdown.blocks(raw)
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 switch block {
+                case .text(let t) where selectable:
+                    InlineSelectableText(text: Self.inline(t))
                 case .text(let t):
                     Text(Self.inline(t)).frame(maxWidth: .infinity, alignment: .leading)
                 case .table(let header, let rows):
@@ -72,5 +77,37 @@ struct TableBlock: View {
 
     private func longest(_ column: Int) -> Int {
         ([header] + rows).map { $0.indices.contains(column) ? $0[column].count : 0 }.max() ?? 0
+    }
+}
+
+/// Text in the conversation that selects like text anywhere on iOS: long-press a
+/// word, drag the handles, then Copy, Look Up or Share. A UITextView sized to its
+/// text (SwiftUI's Text only copies all of it).
+struct InlineSelectableText: UIViewRepresentable {
+    let text: AttributedString
+
+    func makeUIView(context: Context) -> UITextView {
+        let v = UITextView()
+        v.isEditable = false
+        v.isSelectable = true
+        v.isScrollEnabled = false
+        v.backgroundColor = .clear
+        v.textContainerInset = .zero
+        v.textContainer.lineFragmentPadding = 0
+        v.adjustsFontForContentSizeCategory = true
+        v.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        v.attributedText = SelectableText.render(text)
+        return v
+    }
+
+    func updateUIView(_ v: UITextView, context: Context) {
+        let new = SelectableText.render(text)
+        if v.attributedText != new { v.attributedText = new }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, uiView v: UITextView, context: Context) -> CGSize? {
+        let width = proposal.width ?? UIScreen.main.bounds.width - 32
+        let fit = v.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
+        return CGSize(width: width, height: ceil(fit.height))
     }
 }
