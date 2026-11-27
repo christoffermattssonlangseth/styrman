@@ -1,6 +1,7 @@
 // The live link to styrd: one WebSocket, the session list, and per-session timelines.
 // Reconnects with backoff and resumes each open timeline from its last seq.
 
+import CryptoKit
 import Foundation
 import Observation
 
@@ -81,14 +82,23 @@ final class DaemonConnection {
     @ObservationIgnored private var loop: Task<Void, Never>?
     @ObservationIgnored private var retryDelay: Task<Void, Never>?
     @ObservationIgnored private var backoff: Duration = .seconds(1)
-    @ObservationIgnored private let session: URLSession = {
+    @ObservationIgnored private let pinner = LanPinner()
+    @ObservationIgnored private let session: URLSession
+    /// How the live connection reaches the Mac (nil while not connected).
+    private(set) var route: Route?
+    @ObservationIgnored private var activeURL: URL?
+
+    enum Route: Equatable {
+        case tailscale
+        /// The local-network fallback (Tailscale was unreachable).
+        case localNetwork
+    }
+
+    init(credentials: Credentials? = CredentialStore.load()) {
         let cfg = URLSessionConfiguration.default
         cfg.waitsForConnectivity = false
         cfg.timeoutIntervalForRequest = 15
-        return URLSession(configuration: cfg)
-    }()
-
-    init(credentials: Credentials? = CredentialStore.load()) {
+        self.session = URLSession(configuration: cfg, delegate: pinner, delegateQueue: nil)
         self.credentials = credentials
         self.host = credentials?.host ?? ""
         self.state = credentials == nil ? .unpaired : .offline("Not connected yet")
@@ -153,7 +163,15 @@ final class DaemonConnection {
     private func run() async {
         while !Task.isCancelled, let creds = credentials {
             state = .connecting
-            let ok = await runOnce(creds)
+            var ok = await runOnce(creds, url: creds.wsURL)
+            // Tailscale unreachable: try the Mac on the local network.
+            if !ok, !Task.isCancelled, state != .unauthorized, let lan = LanRoute(credentials: creds) {
+                pinner.pin(lan)
+                for url in lan.urls where !Task.isCancelled {
+                    ok = await runOnce(creds, url: url, timeout: 4)
+                    if ok || state == .unauthorized { break }
+                }
+            }
             if Task.isCancelled || state == .unauthorized { break }
             if ok { backoff = .seconds(1) }
             let delay = backoff
@@ -170,8 +188,9 @@ final class DaemonConnection {
     }
 
     /// One connection; returns whether it got as far as `hello`.
-    private func runOnce(_ creds: Credentials) async -> Bool {
-        var req = URLRequest(url: creds.wsURL)
+    private func runOnce(_ creds: Credentials, url: URL, timeout: TimeInterval? = nil) async -> Bool {
+        var req = URLRequest(url: url)
+        if let timeout { req.timeoutInterval = timeout }
         req.setValue("Bearer \(creds.token)", forHTTPHeaderField: "Authorization")
         let t = session.webSocketTask(with: req)
         // The default is 1 MiB: a bigger message (a long history from an older Mac
@@ -208,7 +227,11 @@ final class DaemonConnection {
                 // One unreadable message must not drop the connection (it would come
                 // back on reconnect and drop it again, forever).
                 guard let decoded = try? JSONDecoder().decode(ServerMsg.self, from: data) else { continue }
-                if case .hello = decoded { greeted = true }
+                if case .hello = decoded {
+                    greeted = true
+                    activeURL = url
+                    route = url == creds.wsURL ? .tailscale : .localNetwork
+                }
                 handle(decoded)
             }
         } catch {
@@ -221,7 +244,18 @@ final class DaemonConnection {
         }
         sessionsLoaded = false
         for tl in timelines.values { tl.isLive = false }
+        if activeURL == url { activeURL = nil; route = nil }
         return greeted
+    }
+
+    /// Keep the Mac's local-network route (it changes with the Wi-Fi address).
+    private func remember(_ lan: LanRoute?) {
+        guard var creds = credentials, let lan,
+              creds.lanURLs != lan.urls || creds.lanCert != lan.cert else { return }
+        creds.lanURLs = lan.urls
+        creds.lanCert = lan.cert
+        try? CredentialStore.save(creds)
+        credentials = creds
     }
 
     /// Send a message; `failed` runs (on the main actor) if it didn't leave the phone.
@@ -238,7 +272,8 @@ final class DaemonConnection {
 
     private func handle(_ msg: ServerMsg) {
         switch msg {
-        case .hello(_, _, _, let host, let warnings, let usageSupported):
+        case .hello(_, _, _, let host, let warnings, let usageSupported, let lan):
+            remember(lan)
             self.usageSupported = usageSupported
             self.host = host
             self.warnings = warnings
@@ -468,7 +503,9 @@ final class DaemonConnection {
     /// Save an image or file on the Mac for a message; returns its path there.
     func upload(session: String, name: String, data: Data) async throws -> String {
         guard let creds = credentials else { throw QuickAnswer.Failure.status(0, "Not paired") }
-        var c = URLComponents(url: creds.httpBase.appending(path: "v1/upload").appending(path: session),
+        // Over the same route as the live connection (Tailscale or the local network).
+        let base = activeURL.map(Credentials.httpBase(of:)) ?? creds.httpBase
+        var c = URLComponents(url: base.appending(path: "v1/upload").appending(path: session),
                               resolvingAgainstBaseURL: false)!
         c.queryItems = [URLQueryItem(name: "name", value: name)]
         var req = URLRequest(url: c.url!)
@@ -476,7 +513,7 @@ final class DaemonConnection {
         req.setValue("Bearer \(creds.token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         req.timeoutInterval = 60
-        let (body, resp) = try await URLSession.shared.upload(for: req, from: data)
+        let (body, resp) = try await self.session.upload(for: req, from: data)
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
         guard status == 200, let path = json?["path"] as? String else {
@@ -521,4 +558,54 @@ private final class PongFlag: @unchecked Sendable {
     private var value = false
     func set() { lock.withLock { value = true } }
     var isSet: Bool { lock.withLock { value } }
+}
+
+extension LanRoute {
+    init?(credentials c: Credentials) {
+        self.init(urls: (c.lanURLs ?? []).map(\.absoluteString), cert: c.lanCert)
+    }
+}
+
+/// Trusts the Mac's self-signed local-network certificate, and only it: a TLS
+/// server on one of the route's hosts must present the certificate whose
+/// SHA-256 the Mac sent over Tailscale. Other TLS gets the system's checks.
+final class LanPinner: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var hosts: Set<String> = []
+    private var cert: String?
+
+    func pin(_ route: LanRoute) {
+        lock.withLock {
+            hosts = Set(route.urls.compactMap { $0.host() })
+            cert = route.cert
+        }
+    }
+
+    func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        let (d, c) = decide(challenge)
+        completionHandler(d, c)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        let (d, c) = decide(challenge)
+        completionHandler(d, c)
+    }
+
+    private func decide(_ challenge: URLAuthenticationChallenge) -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        let space = challenge.protectionSpace
+        guard space.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              let trust = space.serverTrust else { return (.performDefaultHandling, nil) }
+        let (hosts, cert) = lock.withLock { (self.hosts, self.cert) }
+        guard hosts.contains(space.host) else { return (.performDefaultHandling, nil) }
+        guard let cert, let leaf = (SecTrustCopyCertificateChain(trust) as? [SecCertificate])?.first,
+              Self.fingerprint(SecCertificateCopyData(leaf) as Data) == cert
+        else { return (.cancelAuthenticationChallenge, nil) }
+        return (.useCredential, URLCredential(trust: trust))
+    }
+
+    static func fingerprint(_ der: Data) -> String {
+        SHA256.hash(data: der).map { String(format: "%02x", $0) }.joined()
+    }
 }

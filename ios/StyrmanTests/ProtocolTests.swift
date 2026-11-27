@@ -60,13 +60,20 @@ private func event(_ seq: UInt64, _ kind: String) -> String {
 
     @Test func serverMessagesDecode() throws {
         let hello = try decode(ServerMsg.self, #"{"type":"hello","protocol":1,"daemon_version":"0.1.0","device_id":"D","host":"mac"}"#)
-        guard case .hello(let p, _, let d, let h, let w, let usageSupported) = hello else { Issue.record("not hello"); return }
+        guard case .hello(let p, _, let d, let h, let w, let usageSupported, _) = hello else { Issue.record("not hello"); return }
         #expect((p, d, h) == (1, "D", "mac"))
         #expect(w.isEmpty, "warnings are optional")
         #expect(!usageSupported)
         let warned = try decode(ServerMsg.self, #"{"type":"hello","protocol":1,"daemon_version":"0.1.0","device_id":"D","host":"mac","warnings":["Claude Code 2.2.0 hasn't been checked"]}"#)
-        guard case .hello(_, _, _, _, let w2, _) = warned else { Issue.record("not hello"); return }
+        guard case .hello(_, _, _, _, let w2, _, _) = warned else { Issue.record("not hello"); return }
         #expect(w2.count == 1)
+        let fp = String(repeating: "ab", count: 32)
+        let lanHello = try decode(ServerMsg.self, #"{"type":"hello","protocol":1,"daemon_version":"0.1.0","device_id":"D","host":"mac","lan_urls":["wss://192.168.1.20:4720/v1/ws","wss://8.8.8.8:4720/v1/ws","ws://10.0.0.2:4720/v1/ws"],"lan_cert":"\#(fp)"}"#)
+        guard case .hello(_, _, _, _, _, _, let lan) = lanHello else { Issue.record("not hello"); return }
+        #expect(lan?.urls.map(\.absoluteString) == ["wss://192.168.1.20:4720/v1/ws"], "only wss on private addresses")
+        #expect(lan?.cert == fp)
+        guard case .hello(_, _, _, _, _, _, let none) = hello else { return }
+        #expect(none == nil)
         let sessions = try decode(ServerMsg.self, #"""
         {"type":"sessions","sessions":[{"id":"01S","agent":"claude","native_id":"abc","cwd":"/Users/dev/work/styrman",
          "title":null,"model":"claude-opus-5-5","shared":true,"status":"needs_approval",
@@ -383,5 +390,16 @@ private func event(_ seq: UInt64, _ kind: String) -> String {
         #expect(m?.agent == .claude)
         #expect(m?.body == "what does the parser do with tabs?")
         #expect(AgentMessage("just a normal prompt") == nil)
+    }
+
+    @Test func lanRouteNeedsAPrivateAddressAndAFingerprint() {
+        let fp = String(repeating: "0f", count: 32)
+        #expect(LanRoute(urls: ["wss://10.1.2.3:4720/v1/ws"], cert: fp) != nil)
+        #expect(LanRoute(urls: ["wss://172.20.0.9:4720/v1/ws"], cert: fp) != nil)
+        #expect(LanRoute(urls: ["wss://172.32.0.9:4720/v1/ws"], cert: fp) == nil)
+        #expect(LanRoute(urls: ["wss://10.1.2.3:4720/v1/ws"], cert: nil) == nil)
+        #expect(LanRoute(urls: ["wss://10.1.2.3:4720/v1/ws"], cert: fp.uppercased()) == nil)
+        #expect(LanRoute(urls: ["wss://10.1.2.3:4720/v1/ws"], cert: "abc") == nil)
+        #expect(LanPinner.fingerprint(Data("abc".utf8)) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
     }
 }

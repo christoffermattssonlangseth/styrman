@@ -59,7 +59,8 @@ fun SettingsScreen(connection: DaemonConnection, speaker: Speaker, onClose: () -
             Text("Mac", style = MaterialTheme.typography.titleMedium)
             Text("Name: ${connection.host.ifEmpty { "—" }}")
             Text("Status: " + when (val s = connection.state) {
-                DaemonConnection.State.Connected -> "Connected"
+                DaemonConnection.State.Connected ->
+                    if (connection.overLocalNetwork) "Connected over Wi-Fi (Tailscale unreachable)" else "Connected"
                 DaemonConnection.State.Connecting -> "Connecting"
                 is DaemonConnection.State.Offline -> "Offline"
                 DaemonConnection.State.Unauthorized -> "Not authorized"

@@ -49,7 +49,17 @@ data class PairingLink(val wsUrl: String, val code: String, val name: String) {
     }
 }
 
-data class Credentials(val wsUrl: String, val token: String, val deviceId: String, val host: String)
+data class Credentials(
+    val wsUrl: String,
+    val token: String,
+    val deviceId: String,
+    val host: String,
+    /** Local-network fallback for when Tailscale is down (see [LanRoute]), learned over Tailscale. */
+    val lanUrls: List<String> = emptyList(),
+    val lanCert: String? = null,
+) {
+    val lan: LanRoute? get() = LanRoute.of(lanUrls, lanCert)
+}
 
 object Pairing {
     private val http = OkHttpClient.Builder().callTimeout(15, TimeUnit.SECONDS).build()
@@ -85,7 +95,11 @@ class CredentialStore(context: Context) {
         val url = prefs.getString("ws_url", null) ?: return null
         val sealed = prefs.getString("token", null) ?: return null
         val token = runCatching { decrypt(sealed) }.getOrNull() ?: return null
-        return Credentials(url, token, prefs.getString("device_id", "") ?: "", prefs.getString("host", "") ?: "")
+        return Credentials(
+            url, token, prefs.getString("device_id", "") ?: "", prefs.getString("host", "") ?: "",
+            lanUrls = prefs.getString("lan_urls", null)?.split("\n")?.filter { it.isNotEmpty() }.orEmpty(),
+            lanCert = prefs.getString("lan_cert", null),
+        )
     }
 
     fun save(c: Credentials) {
@@ -94,6 +108,8 @@ class CredentialStore(context: Context) {
             .putString("token", encrypt(c.token))
             .putString("device_id", c.deviceId)
             .putString("host", c.host)
+            .putString("lan_urls", c.lanUrls.joinToString("\n"))
+            .putString("lan_cert", c.lanCert)
             .apply()
     }
 

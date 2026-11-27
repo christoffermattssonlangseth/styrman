@@ -9,9 +9,16 @@ struct Credentials: Codable, Equatable, Sendable {
     let token: String
     let deviceId: String
     let host: String
+    /// The local-network fallback for when Tailscale is down: `wss://` URLs, served
+    /// with the self-signed certificate whose SHA-256 (hex) is `lanCert`. Learned
+    /// from the Mac over Tailscale, so only that certificate is trusted.
+    var lanURLs: [URL]? = nil
+    var lanCert: String? = nil
 
     /// http(s)://host:port/ of the Mac's phone API.
-    var httpBase: URL {
+    var httpBase: URL { Self.httpBase(of: wsURL) }
+
+    static func httpBase(of wsURL: URL) -> URL {
         var c = URLComponents(url: wsURL, resolvingAgainstBaseURL: false)!
         c.scheme = c.scheme == "wss" ? "https" : "http"
         c.path = "/"

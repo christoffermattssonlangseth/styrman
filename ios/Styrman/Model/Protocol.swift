@@ -387,7 +387,7 @@ struct Lossy<T: Decodable>: Decodable {
 // MARK: - Server → phone
 
 enum ServerMsg: Decodable, Sendable {
-    case hello(protocolVersion: Int, daemonVersion: String, deviceId: String, host: String, warnings: [String], usageSupported: Bool)
+    case hello(protocolVersion: Int, daemonVersion: String, deviceId: String, host: String, warnings: [String], usageSupported: Bool, lan: LanRoute?)
     case sessions([SessionSummary])
     case usage([UsageProvider])
     case sessionUpdated(SessionSummary)
@@ -414,7 +414,7 @@ enum ServerMsg: Decodable, Sendable {
 
     private enum K: String, CodingKey {
         case type, `protocol`, host, sessions, session, id, events, event, message, text, position, warnings, listing, cols, branch, diff, truncated, ahead, commit, pushed, models
-        case providers, usageSupported = "usage_supported"
+        case providers, usageSupported = "usage_supported", lanURLs = "lan_urls", lanCert = "lan_cert"
         case daemonVersion = "daemon_version", deviceId = "device_id", lastSeq = "last_seq"
     }
 
@@ -429,7 +429,9 @@ enum ServerMsg: Decodable, Sendable {
                 deviceId: try c.decode(String.self, forKey: .deviceId),
                 host: try c.decode(String.self, forKey: .host),
                 warnings: (try? c.decodeIfPresent([String].self, forKey: .warnings)) ?? [],
-                usageSupported: try c.decodeIfPresent(Bool.self, forKey: .usageSupported) ?? false)
+                usageSupported: try c.decodeIfPresent(Bool.self, forKey: .usageSupported) ?? false,
+                lan: LanRoute(urls: (try? c.decodeIfPresent([String].self, forKey: .lanURLs)) ?? [],
+                              cert: try? c.decodeIfPresent(String.self, forKey: .lanCert)))
         case "usage": self = .usage(try c.decode([UsageProvider].self, forKey: .providers))
         case "sessions": self = .sessions(try c.decode([SessionSummary].self, forKey: .sessions))
         case "session_updated": self = .sessionUpdated(try c.decode(SessionSummary.self, forKey: .session))
@@ -736,5 +738,27 @@ struct ModelChoice: Decodable, Hashable, Identifiable {
     func matches(_ model: String?) -> Bool {
         guard let model = model?.lowercased() else { return false }
         return model == id.lowercased() || (!id.contains("-") && model.contains(id.lowercased()))
+    }
+}
+
+/// How to reach the Mac on the local network when Tailscale is down.
+struct LanRoute: Equatable, Sendable {
+    let urls: [URL]
+    /// SHA-256 (lowercase hex) of the certificate those URLs serve.
+    let cert: String
+
+    /// Only `wss://` URLs on private addresses, and a well-formed fingerprint.
+    init?(urls: [String], cert: String?) {
+        guard let cert, cert.count == 64, cert.allSatisfy({ $0.isHexDigit && !$0.isUppercase }) else { return nil }
+        let ok = urls.compactMap(URL.init(string:)).filter { $0.scheme == "wss" && LanRoute.isPrivate($0.host() ?? "") }
+        guard !ok.isEmpty else { return nil }
+        self.urls = ok
+        self.cert = cert
+    }
+
+    static func isPrivate(_ host: String) -> Bool {
+        let p = host.split(separator: ".").compactMap { UInt8($0) }
+        guard p.count == 4 else { return false }
+        return p[0] == 10 || (p[0] == 172 && (16...31).contains(p[1])) || (p[0] == 192 && p[1] == 168)
     }
 }

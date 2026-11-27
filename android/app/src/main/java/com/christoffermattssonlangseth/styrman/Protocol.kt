@@ -342,7 +342,7 @@ data class UsageProvider(
 // ---- server → phone ----
 
 sealed interface ServerMsg {
-    data class Hello(val host: String, val warnings: List<String>, val usageSupported: Boolean) : ServerMsg
+    data class Hello(val host: String, val warnings: List<String>, val usageSupported: Boolean, val lan: LanRoute? = null) : ServerMsg
     data class Usage(val providers: List<UsageProvider>) : ServerMsg
     data class Sessions(val sessions: List<SessionSummary>) : ServerMsg
     data class SessionUpdated(val session: SessionSummary) : ServerMsg
@@ -371,6 +371,7 @@ sealed interface ServerMsg {
                     o.str("host") ?: "",
                     o.arr("warnings").orEmpty().mapNotNull { (it as? JsonPrimitive)?.contentOrNull },
                     o.bool("usage_supported") ?: false,
+                    LanRoute.of(o.arr("lan_urls").orEmpty().mapNotNull { (it as? JsonPrimitive)?.contentOrNull }, o.str("lan_cert")),
                 )
                 "usage" -> Usage(o.arr("providers").orEmpty().map { UsageProvider.parse(it.jsonObject) })
                 "sessions" -> Sessions(o.arr("sessions").orEmpty().map { SessionSummary.parse(it.jsonObject) })
@@ -429,3 +430,25 @@ object ClientMsg {
 }
 
 private fun JsonArray?.orEmpty(): List<JsonElement> = this ?: emptyList()
+
+/**
+ * How to reach the Mac on the local network when Tailscale is down: `wss://` URLs on
+ * private addresses, served with the self-signed certificate whose SHA-256 is [cert].
+ */
+data class LanRoute(val urls: List<String>, val cert: String) {
+    companion object {
+        fun of(urls: List<String>, cert: String?): LanRoute? {
+            if (cert == null || cert.length != 64 || !cert.all { it in '0'..'9' || it in 'a'..'f' }) return null
+            val ok = urls.filter { u ->
+                u.startsWith("wss://") && isPrivate(u.removePrefix("wss://").substringBefore('/').substringBeforeLast(':'))
+            }
+            return if (ok.isEmpty()) null else LanRoute(ok, cert)
+        }
+
+        fun isPrivate(host: String): Boolean {
+            val p = host.split('.').map { it.toIntOrNull() ?: return false }
+            if (p.size != 4 || p.any { it !in 0..255 }) return false
+            return p[0] == 10 || (p[0] == 172 && p[1] in 16..31) || (p[0] == 192 && p[1] == 168)
+        }
+    }
+}

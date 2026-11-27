@@ -530,6 +530,9 @@ struct SettingsView: View {
                 Section("Mac") {
                     LabeledContent("Name", value: connection.host)
                     LabeledContent("Address", value: connection.credentials?.wsURL.host() ?? "—")
+                    if connection.route == .localNetwork {
+                        LabeledContent("Connected", value: "Over Wi-Fi (Tailscale unreachable)")
+                    }
                     LabeledContent("Status", value: statusText)
                 }
                 VoiceSettings()

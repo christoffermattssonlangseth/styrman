@@ -14,7 +14,12 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import java.security.MessageDigest
+import java.security.cert.CertificateException
+import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLContext
+import javax.net.ssl.X509TrustManager
 
 /** The connection to styrd's phone API, and everything it knows (Compose state). */
 class DaemonConnection(context: Context) {
@@ -51,6 +56,9 @@ class DaemonConnection(context: Context) {
     /** A session to open (just started from the phone). */
     var requestedSession: String? by mutableStateOf(null)
     var folders: FolderListing? by mutableStateOf(null)
+        private set
+    /** True while connected over the local-network fallback (Tailscale unreachable). */
+    var overLocalNetwork by mutableStateOf(false)
         private set
 
     /** A session folder's uncommitted changes, or why they couldn't be read. */
@@ -114,29 +122,54 @@ class DaemonConnection(context: Context) {
         state = State.Unpaired
     }
 
-    private fun connect() {
+    /** [lanIndex] < 0: the Tailscale URL; otherwise that local-network fallback URL. */
+    private fun connect(lanIndex: Int = -1) {
         val c = credentials ?: run { state = State.Unpaired; return }
         if (!wanted) return
         val gen = ++generation
         state = State.Connecting
-        val req = Request.Builder().url(c.wsUrl).header("Authorization", "Bearer ${c.token}").build()
-        ws = http.newWebSocket(req, object : WebSocketListener() {
+        val lan = c.lan
+        val (url, client) = if (lanIndex < 0 || lan == null) c.wsUrl to http
+            else lan.urls[lanIndex] to pinnedClient(lan)
+        overLocalNetwork = lanIndex >= 0
+        val req = Request.Builder().url(url).header("Authorization", "Bearer ${c.token}").build()
+        ws = client.newWebSocket(req, object : WebSocketListener() {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 val msg = runCatching { ServerMsg.parse(text) }.getOrNull() ?: return
                 main.post { if (gen == generation) handle(msg) }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                main.post { if (gen == generation) lost(response?.code == 401, t.message ?: "connection lost") }
+                main.post { if (gen == generation) lost(response?.code == 401, t.message ?: "connection lost", lanIndex) }
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                main.post { if (gen == generation) lost(false, "connection closed") }
+                main.post { if (gen == generation) lost(false, "connection closed", lanIndex) }
             }
         })
     }
 
-    private fun lost(unauthorized: Boolean, why: String) {
+    private var pinned: Pair<LanRoute, OkHttpClient>? = null
+
+    /** A client that trusts only the Mac's local-network certificate (pinned by SHA-256). */
+    private fun pinnedClient(lan: LanRoute): OkHttpClient {
+        pinned?.let { (r, cl) -> if (r == lan) return cl }
+        val tm = PinnedTrust(lan.cert)
+        val ssl = SSLContext.getInstance("TLS").apply { init(null, arrayOf(tm), null) }
+        val hosts = lan.urls.map { it.removePrefix("wss://").substringBefore('/').substringBeforeLast(':') }.toSet()
+        val cl = http.newBuilder()
+            .connectTimeout(4, TimeUnit.SECONDS)
+            .sslSocketFactory(ssl.socketFactory, tm)
+            // The certificate is pinned; it names no address, so check the host is one we were given.
+            .hostnameVerifier { host, _ -> host in hosts }
+            .build()
+        pinned = lan to cl
+        return cl
+    }
+
+    private fun lost(unauthorized: Boolean, why: String, lanIndex: Int = -1) {
+        val wasConnected = state == State.Connected
+        overLocalNetwork = false
         timelines.values.forEach { it.isLive = false }
         awaitingChanges?.let { changes[it] = Changes(null, emptyList(), false, error = "The connection to the Mac was lost.") }
         awaitingChanges = null
@@ -144,11 +177,26 @@ class DaemonConnection(context: Context) {
             state = State.Unauthorized
             return
         }
-        state = State.Offline(if (state == State.Connected) "Connection lost" else "Can't reach ${host.ifEmpty { "the Mac" }}")
+        // Tailscale unreachable: try the Mac on the local network before waiting.
+        val lan = credentials?.lan
+        if (!wasConnected && wanted && lan != null && lanIndex + 1 < lan.urls.size) {
+            connect(lanIndex + 1)
+            return
+        }
+        state = State.Offline(if (wasConnected) "Connection lost" else "Can't reach ${host.ifEmpty { "the Mac" }}")
         if (!wanted) return
         val wait = backoffMs
         backoffMs = (backoffMs * 2).coerceAtMost(30_000)
         main.postDelayed({ if (wanted && state !is State.Connected) connect() }, wait)
+    }
+
+    /** Keep the Mac's local-network route (it changes with its Wi-Fi address). */
+    private fun remember(lan: LanRoute?) {
+        val c = credentials ?: return
+        if (lan == null || (c.lanUrls == lan.urls && c.lanCert == lan.cert)) return
+        val updated = c.copy(lanUrls = lan.urls, lanCert = lan.cert)
+        store.save(updated)
+        credentials = updated
     }
 
     private fun send(o: JsonObject): Boolean = ws?.send(o.toString()) == true
@@ -158,6 +206,7 @@ class DaemonConnection(context: Context) {
     private fun handle(msg: ServerMsg) {
         when (msg) {
             is ServerMsg.Hello -> {
+                remember(msg.lan)
                 host = msg.host
                 warnings = msg.warnings
                 usageSupported = msg.usageSupported
@@ -306,5 +355,23 @@ class DaemonConnection(context: Context) {
         startPrompt = prompt?.trim()?.takeIf { it.isNotEmpty() }
         send(ClientMsg.startSession(agent, cwd, startPrompt))
         return true
+    }
+}
+
+/** Trusts exactly one certificate: the one whose SHA-256 (DER, lowercase hex) is [pin]. */
+class PinnedTrust(private val pin: String) : X509TrustManager {
+    override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {
+        val leaf = chain?.firstOrNull() ?: throw CertificateException("no certificate")
+        if (fingerprint(leaf.encoded) != pin) throw CertificateException("not the Mac's certificate")
+    }
+
+    override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) =
+        throw CertificateException("not a server")
+
+    override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+
+    companion object {
+        fun fingerprint(der: ByteArray): String =
+            MessageDigest.getInstance("SHA-256").digest(der).joinToString("") { "%02x".format(it) }
     }
 }
