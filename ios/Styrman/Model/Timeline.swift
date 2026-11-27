@@ -97,13 +97,25 @@ final class SessionTimeline {
         setPreview(text)
     }
 
+    /// Whether `preview` is a reply already among `items` (as a message). The
+    /// preview is read off the terminal (bold as `**`, a heading as bold, code as
+    /// backticks only where coloured) and the message is Claude's Markdown: compare
+    /// the words, not the markup.
+    nonisolated static func alreadySaid(_ preview: String, in items: some Collection<TimelineItem>) -> Bool {
+        let words = { (s: String) in
+            s.filter { !"*`#>".contains($0) }.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        }
+        let body = String(words(preview.hasPrefix("…") ? String(preview.dropFirst()) : preview).prefix(200))
+        guard !body.isEmpty else { return false }
+        return items.contains { item in
+            if case .assistant(_, let said, _) = item { words(said).contains(body) } else { false }
+        }
+    }
+
     private func setPreview(_ text: String?) {
         guard let text, !text.isEmpty else { preview = nil; return }
         // Already here as a message (the screen redrew a finished reply): no echo.
-        let squash = { (s: String) in s.split(whereSeparator: \.isWhitespace).joined(separator: " ") }
-        let body = squash(text.hasPrefix("…") ? String(text.dropFirst()) : text)
-        if let last = items.last(where: { if case .assistant = $0 { true } else { false } }),
-           case .assistant(_, let said, _) = last, squash(said).contains(body.prefix(200)) {
+        if Self.alreadySaid(text, in: items.suffix(12)) {
             preview = nil
             return
         }

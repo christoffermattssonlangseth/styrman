@@ -417,30 +417,7 @@ pub fn claude_preview(contents: &str) -> Option<String> {
     let tool_like = first
         .find('(')
         .is_some_and(|i| i < 40 && !first[..i].contains(' '))
-        || [
-            "Ran ",
-            "Read ",
-            "Searched ",
-            "Listed ",
-            "Wrote ",
-            "Updated ",
-            "Edited ",
-            "Fetched ",
-            "Called ",
-            "Interrupted",
-            // In progress ("Running 1 shell command…", "Reading 2 files…").
-            "Running ",
-            "Reading ",
-            "Searching ",
-            "Listing ",
-            "Writing ",
-            "Editing ",
-            "Updating ",
-            "Fetching ",
-            "Calling ",
-        ]
-        .iter()
-        .any(|p| first.starts_with(p));
+        || TOOL_VERBS.iter().any(|p| first.starts_with(p));
     // A line with a `⎿` right under it is a tool step (`⏺ Sleeping 5 seconds then
     // printing hi` / `⎿ $ sleep 5`), even while its `⏺` blinks off; reply text never
     // has one.
@@ -454,20 +431,65 @@ pub fn claude_preview(contents: &str) -> Option<String> {
     }
     let mut body = vec![first.to_owned()];
     for (i, l) in lines.iter().enumerate().take(bottom).skip(start + 1) {
-        if detail(i) {
-            return None; // the latest block is a tool whose `⏺` is off right now
-        }
         let t = l.trim_start();
-        // The spinner ("✻ Baked for 4s"), a tool result, the next block.
+        // The spinner ("✻ Baked for 4s"), a tool result, the next block. (The spinner
+        // can have a `⎿ Tip: …` under it: that's not a tool step.)
         if ["⏺", "⎿", "✻", "✶", "✳", "✢", "✽", "·", "*", "❯"]
             .iter()
             .any(|p| t.starts_with(p) && l.len() - t.len() <= 2)
         {
             break;
         }
+        // The latest block is a tool whose `⏺` is off right now: a line with its
+        // details under it, or a summary ("Reading 1 file…"). The reply above it is
+        // finished (it arrives as a message); reading the tool line as more of it
+        // made the preview flip between two texts with every blink.
+        if detail(i) || tool_summary(t) {
+            return None;
+        }
         body.push(l.strip_prefix("  ").unwrap_or(l).trim_end().to_owned());
     }
     reflow(body, scrolled)
+}
+
+/// How Claude starts a tool step's line: done ("Read 3 files") or in progress
+/// ("Reading 2 files…").
+const TOOL_VERBS: [&str; 19] = [
+    "Ran ",
+    "Read ",
+    "Searched ",
+    "Listed ",
+    "Wrote ",
+    "Updated ",
+    "Edited ",
+    "Fetched ",
+    "Called ",
+    "Interrupted",
+    "Running ",
+    "Reading ",
+    "Searching ",
+    "Listing ",
+    "Writing ",
+    "Editing ",
+    "Updating ",
+    "Fetching ",
+    "Calling ",
+];
+
+/// Claude's one-line summary of tool steps ("Reading 1 file…", "Read 3 files (ctrl+o
+/// to expand)", "Listed 1 directory", "Searched for 2 patterns"), not reply text
+/// that happens to start with "Reading".
+fn tool_summary(t: &str) -> bool {
+    let t = t.trim_end();
+    let Some(rest) = TOOL_VERBS
+        .iter()
+        .find_map(|v| t.strip_prefix(v))
+        .filter(|_| t.chars().count() < 90)
+    else {
+        return false;
+    };
+    let rest = rest.strip_prefix("for ").unwrap_or(rest);
+    t.ends_with('…') || t.contains("ctrl+o") || rest.starts_with(|c: char| c.is_ascii_digit())
 }
 
 /// A reply's lines (indent removed) as text: lines the terminal wrapped are joined
@@ -1720,6 +1742,32 @@ mod tests {
             );
             assert_eq!(claude_preview(&running), None, "bullet {bullet:?}");
         }
+        // Claude 2.1.332 puts a step's summary under the text before it, and blinks
+        // its `⏺`: with it on or off, the text is finished and the step is newest.
+        for bullet in ["⏺", " "] {
+            let reading = format!(
+                "⏺ I'll read the notes first, then sum up.\n{bullet} Reading 1 file…\n✢ Razzle-dazzling… (2s · thinking)\n{box_}"
+            );
+            assert_eq!(claude_preview(&reading), None, "bullet {bullet:?}");
+            let listed =
+                format!("⏺ That's part 1.\n\n{bullet} Listed 1 directory \n\n✻ Grooving…\n{box_}");
+            assert_eq!(claude_preview(&listed), None, "bullet {bullet:?}");
+        }
+        // Reply text that starts like one is still text.
+        let prose =
+            format!("⏺ The plan is simple.\n  Reading the code first, I found two bugs.\n\n{box_}");
+        assert_eq!(
+            claude_preview(&prose).as_deref(),
+            Some("The plan is simple. Reading the code first, I found two bugs.")
+        );
+        // A tip under the spinner isn't a tool step.
+        let tip = format!(
+            "⏺ The project is small.\n\n✽ Grooving… (10s · thinking)\n  ⎿  Tip: Run /ultrareview for a review\n\n{box_}"
+        );
+        assert_eq!(
+            claude_preview(&tip).as_deref(),
+            Some("The project is small.")
+        );
         // Lists keep their lines.
         let list = format!("⏺ Two things:\n  - first\n  - second\n\n{box_}");
         assert_eq!(

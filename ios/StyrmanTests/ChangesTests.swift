@@ -149,3 +149,15 @@ struct PreviewResumeTests {
         #expect(LivePreviewRow.resume(before, now: "Keeping a git history tidy") == 26)
     }
 }
+
+struct PreviewEchoTests {
+    @Test func aReplyAlreadyHereIsNotShownAgainAsAPreview() {
+        let said = "## Summary\n\nThe project is a **small harbour project** split across `note1.md` and `note2.md`."
+        let items: [TimelineItem] = [.assistant(id: "1", text: said, at: .now)]
+        // How the terminal reads it back: the heading bold, the code not marked.
+        let screen = "**Summary**\n\nThe project is a **small harbour project** split across note1.md and note2.md."
+        #expect(SessionTimeline.alreadySaid(screen, in: items))
+        #expect(SessionTimeline.alreadySaid("…split across note1.md and note2.md.", in: items))
+        #expect(!SessionTimeline.alreadySaid("Something new that Claude is writing now.", in: items))
+    }
+}
