@@ -31,6 +31,8 @@ thiserror = "2.0.21"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "http2", "rustls"] }
 jsonwebtoken = { version = "12.0.0", features = ["rust_crypto"] }
 libc = "0.2.191"
+rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["aws_lc_rs", "tls12"] }
 
 [dev-dependencies]
 reqwest = { version = "0.13.5", features = ["json"] }

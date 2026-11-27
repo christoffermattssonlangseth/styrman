@@ -5,6 +5,7 @@ mod cmux_access;
 mod codex_hooks;
 pub(crate) mod hook;
 pub(crate) mod launch;
+mod net;
 mod pty;
 mod restart;
 mod service;
@@ -45,6 +46,11 @@ enum Cmd {
     },
     /// Check that styrd is running.
     Ping,
+    /// How the phone reaches this Mac (Tailscale, local network); `restart` restarts Tailscale.
+    Net {
+        #[command(subcommand)]
+        action: Option<NetAction>,
+    },
     /// List sessions known to styrd.
     Status {
         /// Include sessions that are not shared with the phone.
@@ -155,6 +161,12 @@ enum Cmd {
 }
 
 #[derive(Subcommand)]
+enum NetAction {
+    /// Restart Tailscale (`tailscale down`, then `up`) and wait for the phone API to come back.
+    Restart,
+}
+
+#[derive(Subcommand)]
 enum ServiceCmd {
     Install,
     Uninstall,
@@ -233,6 +245,10 @@ fn main() -> Result<()> {
                 })?;
             launch::exec(agent, args)?;
         }
+        Cmd::Net { action } => match action {
+            None => net::status(call(Request::Diagnostics).ok().as_ref()),
+            Some(NetAction::Restart) => net::restart(|| call(Request::Diagnostics).ok())?,
+        },
         Cmd::Ping => match call(Request::Hello)? {
             Response::Hello {
                 protocol,

@@ -6,6 +6,7 @@ pub mod changes;
 pub mod daemon;
 pub mod follow;
 pub mod ipc;
+pub mod lan;
 pub mod launcher;
 pub mod live;
 pub mod models;

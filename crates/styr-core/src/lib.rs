@@ -9,6 +9,7 @@ pub mod ipc;
 pub mod paths;
 pub mod phone;
 pub mod status;
+pub mod tailscale;
 
 pub use command::Command;
 pub use event::{Event, EventKind, EventSource};

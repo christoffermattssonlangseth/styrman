@@ -1,10 +1,12 @@
 //! Phone API: `GET /v1/health`, `POST /v1/pair`, `GET /v1/ws`.
 //!
-//! Bound only to loopback and Tailscale addresses (100.64.0.0/10 and
+//! Bound to loopback and Tailscale addresses (100.64.0.0/10 and
 //! fd7a:115c:a1e0::/48 on a tunnel interface), never to 0.0.0.0. Interfaces are
 //! rescanned periodically so Tailscale coming up later is picked up.
 //! Tailscale encrypts and authenticates the transport; the bearer token
-//! authenticates the device. See `styr_core::phone` for the message protocol.
+//! authenticates the device. As a fallback for when Tailscale is down, the same
+//! API (without pairing) is served over TLS on private local-network addresses;
+//! see `lan`. See `styr_core::phone` for the message protocol.
 
 use crate::daemon::{BusMsg, Daemon};
 use axum::extract::State;
@@ -58,6 +60,11 @@ pub struct ApiConfig {
     pub port: u16,
     pub localhost: bool,
     pub tailscale: bool,
+    /// Also serve TLS on the local network (`lan_port`), for when Tailscale is down.
+    pub lan: bool,
+    pub lan_port: u16,
+    /// Restart Tailscale when it claims to run but this Mac has no Tailscale address.
+    pub heal_tailscale: bool,
     pub rescan: Duration,
 }
 
@@ -73,6 +80,14 @@ impl ApiConfig {
             tailscale: std::env::var("STYR_TAILSCALE")
                 .map(|v| v != "0")
                 .unwrap_or(true),
+            lan: std::env::var("STYR_LAN").map(|v| v != "0").unwrap_or(true),
+            lan_port: std::env::var("STYR_LAN_PORT")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(styr_core::phone::LAN_PORT),
+            heal_tailscale: std::env::var("STYR_TAILSCALE_HEAL")
+                .map(|v| v != "0")
+                .unwrap_or(true),
             rescan: Duration::from_secs(15),
         }
     }
@@ -82,6 +97,9 @@ impl ApiConfig {
             port: 0,
             localhost: true,
             tailscale: false,
+            lan: false,
+            lan_port: 0,
+            heal_tailscale: false,
             rescan: Duration::from_secs(3600),
         }
     }
@@ -116,8 +134,8 @@ pub fn tailscale_addrs() -> Vec<IpAddr> {
 /// The phone connects by this name: iOS App Transport Security can exempt `ts.net`
 /// from TLS, but not raw 100.x addresses.
 pub fn tailscale_dns_name() -> Option<String> {
-    // Reverse DNS of our Tailscale IPv4 through the system resolver: works under
-    // launchd, where the Tailscale app's CLI refuses to run.
+    // Reverse DNS of our Tailscale IPv4 through the system resolver (the CLI
+    // needs `TERM` set under launchd; see `styr_core::tailscale::command`).
     for ip in tailscale_addrs() {
         if let IpAddr::V4(v4) = ip
             && let Some(name) = reverse_dns(v4)
@@ -170,7 +188,7 @@ fn tailscale_dns_name_from_cli() -> Option<String> {
         "/opt/homebrew/bin/tailscale",
     ];
     for bin in candidates {
-        let Ok(out) = std::process::Command::new(bin)
+        let Ok(out) = styr_core::tailscale::command(bin)
             .args(["status", "--json"])
             .stderr(std::process::Stdio::null())
             .output()
@@ -190,6 +208,82 @@ fn tailscale_dns_name_from_cli() -> Option<String> {
     None
 }
 
+/// Close listeners whose address is gone.
+fn close_gone(
+    bound: &mut HashMap<IpAddr, (SocketAddr, tokio::task::JoinHandle<()>)>,
+    want: &[IpAddr],
+) {
+    bound.retain(|ip, (addr, task)| {
+        let keep = want.contains(ip);
+        if !keep {
+            tracing::info!(%addr, "address gone; phone API listener closed");
+            task.abort();
+        }
+        keep
+    });
+}
+
+/// How long Tailscale may claim to run without giving this Mac an address
+/// before it's restarted, and how often at most.
+const HEAL_AFTER: Duration = Duration::from_secs(30);
+const HEAL_EVERY: Duration = Duration::from_secs(10 * 60);
+
+/// Restarts Tailscale when it says Running but this Mac has no Tailscale
+/// address (seen on macOS: the tunnel goes, the app keeps saying Running).
+#[derive(Default)]
+struct Healer {
+    missing_since: Option<std::time::Instant>,
+    last_try: Option<std::time::Instant>,
+}
+
+impl Healer {
+    /// `missing`: no Tailscale address now. `online`: the Mac has a network at all
+    /// (with none, Tailscale can't work and a restart would not help).
+    fn check(&mut self, missing: bool, online: bool) {
+        if !missing {
+            self.missing_since = None;
+            return;
+        }
+        let now = std::time::Instant::now();
+        let since = *self.missing_since.get_or_insert(now);
+        if !should_heal(now, since, self.last_try, online) {
+            return;
+        }
+        self.last_try = Some(now);
+        tokio::task::spawn_blocking(heal_tailscale);
+    }
+}
+
+fn should_heal(
+    now: std::time::Instant,
+    missing_since: std::time::Instant,
+    last_try: Option<std::time::Instant>,
+    online: bool,
+) -> bool {
+    online
+        && now.duration_since(missing_since) >= HEAL_AFTER
+        && last_try.is_none_or(|t| now.duration_since(t) >= HEAL_EVERY)
+}
+
+fn heal_tailscale() {
+    use styr_core::tailscale;
+    let Some(cli) = tailscale::cli() else { return };
+    // Stopped or logged out on purpose: leave it alone.
+    match tailscale::state(&cli) {
+        Some(st) if st.backend == "Running" => {}
+        _ => return,
+    }
+    tracing::warn!("Tailscale says Running but this Mac has no Tailscale address; restarting it");
+    match tailscale::restart(&cli) {
+        Ok(()) => tracing::info!("Tailscale restarted"),
+        Err(e) => tracing::warn!("could not restart Tailscale: {e}"),
+    }
+}
+
+fn wss_url(addr: SocketAddr) -> String {
+    format!("wss://{addr}/v1/ws")
+}
+
 fn ws_url(addr: SocketAddr) -> String {
     match addr {
         SocketAddr::V4(a) => format!("ws://{a}/v1/ws"),
@@ -204,13 +298,20 @@ struct AppState {
 }
 
 pub fn router(daemon: Arc<Daemon>, stop: watch::Receiver<bool>) -> Router {
-    Router::new()
-        .route("/v1/health", get(health))
-        .route(
+    router_with(daemon, stop, true)
+}
+
+/// `pairing`: offer `/v1/pair` (not on the local-network fallback, where the
+/// phone has no pinned certificate yet).
+pub fn router_with(daemon: Arc<Daemon>, stop: watch::Receiver<bool>, pairing: bool) -> Router {
+    let mut r = Router::new().route("/v1/health", get(health));
+    if pairing {
+        r = r.route(
             "/v1/pair",
             post(pair).layer(axum::extract::DefaultBodyLimit::max(16 * 1024)),
-        )
-        .route("/v1/ws", get(ws))
+        );
+    }
+    r.route("/v1/ws", get(ws))
         .route("/v1/live", get(live_snapshot))
         .route("/v1/brief/{session}", get(session_brief))
         .route(
@@ -271,8 +372,27 @@ impl AuthThrottle {
 /// Keep listeners in sync with the wanted addresses until `stop` flips.
 pub async fn run_listeners(daemon: Arc<Daemon>, cfg: ApiConfig, mut stop: watch::Receiver<bool>) {
     let app = router(daemon.clone(), stop.clone());
+    let lan_app = router_with(daemon.clone(), stop.clone(), false);
     let mut bound: HashMap<IpAddr, (SocketAddr, tokio::task::JoinHandle<()>)> = HashMap::new();
+    let mut lan_bound: HashMap<IpAddr, (SocketAddr, tokio::task::JoinHandle<()>)> = HashMap::new();
     let mut warned: HashSet<IpAddr> = HashSet::new();
+    let mut lan_id: Option<crate::lan::Identity> = None;
+    let mut lan_failed = false;
+    let mut heal = Healer::default();
+    if cfg.tailscale && cfg.heal_tailscale {
+        tokio::task::spawn_blocking(|| {
+            match styr_core::tailscale::cli()
+                .and_then(|c| styr_core::tailscale::state(&c).map(|s| (c, s)))
+            {
+                Some((cli, st)) => {
+                    tracing::info!(cli = %cli.display(), state = %st.backend, "Tailscale CLI usable; will restart Tailscale if its tunnel goes")
+                }
+                None => tracing::info!(
+                    "Tailscale CLI not usable here; Tailscale won't be restarted automatically"
+                ),
+            }
+        });
+    }
     let mut dns_name: Option<String> = None;
     let mut rounds: u32 = 0;
     loop {
@@ -280,9 +400,12 @@ pub async fn run_listeners(daemon: Arc<Daemon>, cfg: ApiConfig, mut stop: watch:
         if cfg.localhost {
             want.push(IpAddr::V4(Ipv4Addr::LOCALHOST));
         }
-        if cfg.tailscale {
-            want.extend(tailscale_addrs());
-        }
+        let ts = if cfg.tailscale {
+            tailscale_addrs()
+        } else {
+            vec![]
+        };
+        want.extend(ts.iter().copied());
         for ip in &want {
             if bound.contains_key(ip) {
                 continue;
@@ -311,14 +434,66 @@ pub async fn run_listeners(daemon: Arc<Daemon>, cfg: ApiConfig, mut stop: watch:
                 }
             }
         }
-        bound.retain(|ip, (addr, task)| {
-            let keep = want.contains(ip);
-            if !keep {
-                tracing::info!(%addr, "address gone; phone API listener closed");
-                task.abort();
+        close_gone(&mut bound, &want);
+
+        // Local-network fallback (TLS).
+        let lan_want = if cfg.lan && !lan_failed {
+            crate::lan::lan_addrs()
+        } else {
+            vec![]
+        };
+        if lan_id.is_none() && !lan_want.is_empty() {
+            match daemon.data_dir_path().map(|d| crate::lan::identity(&d)) {
+                Some(Ok(id)) => lan_id = Some(id),
+                Some(Err(e)) => {
+                    tracing::warn!("local-network fallback off: {e:#}");
+                    lan_failed = true;
+                }
+                None => {}
             }
-            keep
-        });
+        }
+        if let Some(id) = &lan_id {
+            for ip in &lan_want {
+                if lan_bound.contains_key(ip) {
+                    continue;
+                }
+                let tcp = match tokio::net::TcpListener::bind((*ip, cfg.lan_port)).await {
+                    Ok(t) => t,
+                    Err(e) => {
+                        if warned.insert(*ip) {
+                            tracing::warn!(%ip, port = cfg.lan_port, "cannot bind local-network API: {e}");
+                        }
+                        continue;
+                    }
+                };
+                let Ok(listener) = crate::lan::TlsListener::new(tcp, id.acceptor.clone()) else {
+                    continue;
+                };
+                let addr = axum::serve::Listener::local_addr(&listener).expect("local addr");
+                let mut s = stop.clone();
+                let app = lan_app.clone();
+                let task = tokio::spawn(async move {
+                    let serve = axum::serve(listener, app).with_graceful_shutdown(async move {
+                        let _ = s.wait_for(|v| *v).await;
+                    });
+                    if let Err(e) = serve.await {
+                        tracing::warn!(%addr, "local-network listener stopped: {e}");
+                    }
+                });
+                tracing::info!(url = %wss_url(addr), "local-network fallback listening");
+                warned.remove(ip);
+                lan_bound.insert(*ip, (addr, task));
+            }
+        }
+        close_gone(&mut lan_bound, &lan_want);
+        let mut lan_urls: Vec<String> = lan_bound.values().map(|(a, _)| wss_url(*a)).collect();
+        lan_urls.sort();
+        daemon.set_lan(lan_urls, lan_id.as_ref().map(|i| i.fingerprint.clone()));
+
+        if cfg.tailscale && cfg.heal_tailscale {
+            heal.check(ts.is_empty(), !crate::lan::lan_addrs().is_empty());
+        }
+
         let mut addrs: Vec<SocketAddr> = bound.values().map(|(a, _)| *a).collect();
         addrs.sort_by_key(|a| (a.ip().is_loopback(), a.is_ipv6(), *a)); // Tailscale v4 first
         let ts_v4 = addrs
@@ -344,6 +519,7 @@ pub async fn run_listeners(daemon: Arc<Daemon>, cfg: ApiConfig, mut stop: watch:
             _ = tokio::time::sleep(cfg.rescan) => {}
         }
     }
+    bound.extend(lan_bound);
     for (_, (_, task)) in bound {
         if tokio::time::timeout(Duration::from_secs(3), task)
             .await
@@ -585,6 +761,7 @@ impl Connection {
         }
         let _live = Live(self.daemon.clone(), self.device.clone());
         let (mut tx, mut rx) = socket.split();
+        let (lan_urls, lan_cert) = self.daemon.lan();
         send(
             &mut tx,
             &ServerMsg::Hello {
@@ -594,6 +771,8 @@ impl Connection {
                 host: Daemon::host_name(),
                 warnings: self.daemon.warnings(),
                 usage_supported: true,
+                lan_urls,
+                lan_cert,
             },
         )
         .await?;
@@ -1141,5 +1320,25 @@ mod page_tests {
         // Still in order, and a lone event bigger than the limit still goes.
         assert_eq!(runs.last().unwrap().last().unwrap().seq, 500);
         assert_eq!(by_size(runs[0].clone(), 10).len(), runs[0].len());
+    }
+}
+
+#[cfg(test)]
+mod heal_tests {
+    use super::*;
+    use std::time::Instant;
+
+    #[test]
+    fn restarts_tailscale_only_after_a_while_and_not_too_often() {
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        assert!(!should_heal(at(10), t0, None, true), "a blip");
+        assert!(should_heal(at(30), t0, None, true));
+        assert!(!should_heal(at(30), t0, None, false), "no network at all");
+        assert!(
+            !should_heal(at(300), t0, Some(at(30)), true),
+            "tried recently"
+        );
+        assert!(should_heal(at(631), t0, Some(at(30)), true));
     }
 }

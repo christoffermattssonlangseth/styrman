@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 pub const PHONE_PROTOCOL: u32 = 1;
 /// Default TCP port of the phone API.
 pub const DEFAULT_PORT: u16 = 4719;
+/// The local-network fallback (TLS with a self-signed certificate the phone pins).
+pub const LAN_PORT: u16 = 4720;
 /// URL scheme of pairing links: `styrman://pair?url=…&code=…&name=…`.
 pub const PAIR_SCHEME: &str = "styrman";
 
@@ -169,6 +171,12 @@ pub enum ServerMsg {
         warnings: Vec<String>,
         #[serde(default)]
         usage_supported: bool,
+        /// Other ways to reach this Mac when Tailscale is down: `wss://` URLs on
+        /// the local network, served with the certificate whose SHA-256 is `lan_cert`.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        lan_urls: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lan_cert: Option<String>,
     },
     Sessions {
         sessions: Vec<SessionSummary>,

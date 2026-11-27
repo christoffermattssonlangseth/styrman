@@ -45,7 +45,7 @@ Open **Usage** from the mobile session list to see the available quota windows, 
         └── styr: launcher + `styr hook` helper (fails open if styrd is down)
 ```
 
-- **`styrd`** is a Rust daemon (tokio) on your Mac. It tracks sessions, keeps their history in SQLite, and serves a token-authenticated WebSocket API on localhost and your Tailscale address only.
+- **`styrd`** is a Rust daemon (tokio) on your Mac. It tracks sessions, keeps their history in SQLite, and serves a token-authenticated WebSocket API on localhost and your Tailscale address, with an encrypted fallback on your local network for when Tailscale is down.
 - **`styr`** is a small Rust CLI. It launches agents (`alias claude='styr claude'`) and is the helper their hooks call (`styr hook <event>`). If the daemon isn't running, it does nothing, and the agent behaves exactly as it would without Styrman.
 - **Adapters** turn each agent's own signals into one common event model:
   - **Claude Code** (first): hooks and a `styrman` plugin
@@ -205,6 +205,7 @@ styr send <ID> <text>         # send a prompt, like the phone does
 styr new <agent> [-C dir] [text]  # start an agent in a new terminal tab, shared
 styr forget <ID>… | --ended   # delete sessions and their history
 styr service restart          # after `cargo install --path crates/styrd`
+styr net [restart]            # how the phone reaches this Mac; restart Tailscale
 ```
 
 Sessions that are never shared stay invisible: only their start and end are recorded (for `styr status --all`). If an agent's process dies without saying goodbye (closed window, crash), its session is marked done within 30 s.
@@ -213,7 +214,8 @@ Sessions that are never shared stay invisible: only their start and end are reco
 
 | | |
 |---|---|
-| **Network** | The phone API binds to loopback and the Mac's Tailscale addresses only (port 4719), never `0.0.0.0`. The phone connects through the Mac's MagicDNS name over the WireGuard tunnel. iOS allows plain `ws://` only to `ts.net` hosts. |
+| **Network** | The phone API binds to loopback and the Mac's Tailscale addresses (port 4719), never `0.0.0.0`. The phone connects through the Mac's MagicDNS name over the WireGuard tunnel. iOS allows plain `ws://` only to `ts.net` hosts. |
+| **Tailscale down** | Tailscale on a Mac can lose its tunnel while still saying Running. When the Mac has had no Tailscale address for 30 s, `styrd` restarts Tailscale (at most every 10 minutes; never when you stopped it yourself). `styr net` shows the state and `styr net restart` does it by hand. Meanwhile, on the same Wi-Fi, the phone falls back to the Mac's private local-network address on port 4720. That listener speaks TLS only, with a certificate made on the Mac; the phone learns its SHA-256 over Tailscale and accepts no other certificate there. Pairing is not offered on it. |
 | **Pairing** | The QR code holds a one-time code (about 49 bits) that expires after 5 minutes. Ten wrong codes cancel all outstanding codes. The link contains no other secret. |
 | **Devices** | Each phone has a 256-bit bearer token, stored in the iOS Keychain and sent only in the `Authorization` header. The daemon stores only SHA-256 of the token and compares in constant time. After 20 failed logins in a minute, logins are refused for a minute. Revoking a phone takes effect immediately. |
 | **Browsers** | Any request carrying an `Origin` header is refused, so a web page on the Mac (including a DNS-rebinding page) can't use the API. |
@@ -257,6 +259,8 @@ Environment variables:
 - `STYR_SOCKET`: socket path. macOS limits socket paths to 103 bytes.
 - `STYR_PORT`: phone API port, default 4719.
 - `STYR_TAILSCALE=0`: listen on loopback only.
+- `STYR_LAN=0`: no local-network fallback. `STYR_LAN_PORT`: its port, default 4720.
+- `STYR_TAILSCALE_HEAL=0`: never restart Tailscale.
 - `STYR_PERMISSION_TIMEOUT`: how long the phone can answer a permission.
 - `STYR_LOG`: daemon log filter.
 - `STYR_BIN`: which `styr` the plugin calls.

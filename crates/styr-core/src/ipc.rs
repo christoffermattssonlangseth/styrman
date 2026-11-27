@@ -223,6 +223,9 @@ pub enum Response {
         daemon_version: String,
         pid: u32,
         api_urls: Vec<String>,
+        /// The local-network fallback (`wss://`), when Tailscale is down.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        lan_urls: Vec<String>,
         push_configured: bool,
         devices: Vec<DeviceInfo>,
         agents: Vec<AgentVersionInfo>,

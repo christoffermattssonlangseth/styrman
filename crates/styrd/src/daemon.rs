@@ -38,6 +38,8 @@ pub struct Daemon {
     pub auth: crate::auth::Auth,
     pub auth_throttle: crate::api::AuthThrottle,
     api_urls: Mutex<Vec<String>>,
+    /// Local-network fallback: `wss://` URLs and the certificate's SHA-256.
+    lan: Mutex<(Vec<String>, Option<String>)>,
     /// Device ids revoked while connected; their WebSockets close.
     pub revoked: broadcast::Sender<String>,
     adapters: HashMap<AgentKind, Arc<dyn AgentAdapter>>,
@@ -135,6 +137,7 @@ impl Daemon {
             auth_throttle: Default::default(),
             revoked: broadcast::channel(16).0,
             api_urls: Mutex::new(Vec::new()),
+            lan: Mutex::new((Vec::new(), None)),
             adapters: adapters.into_iter().map(|a| (a.kind(), a)).collect(),
             broker: Default::default(),
             prompts: Default::default(),
@@ -1191,6 +1194,15 @@ impl Daemon {
             .clone()
     }
 
+    pub fn set_lan(&self, urls: Vec<String>, cert: Option<String>) {
+        *self.lan.lock().unwrap_or_else(|p| p.into_inner()) = (urls, cert);
+    }
+
+    /// The local-network URLs (empty without a certificate) and the certificate's SHA-256.
+    pub fn lan(&self) -> (Vec<String>, Option<String>) {
+        self.lan.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
     pub fn set_api_urls(&self, urls: Vec<String>) {
         *self.api_urls.lock().unwrap_or_else(|p| p.into_inner()) = urls;
     }
@@ -1489,6 +1501,7 @@ impl Daemon {
                 daemon_version: styr_core::VERSION.to_owned(),
                 pid: std::process::id(),
                 api_urls: self.api_urls(),
+                lan_urls: self.lan().0,
                 push_configured: self.pusher().is_some(),
                 devices,
                 agents: self.agent_versions(),
