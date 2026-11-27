@@ -97,6 +97,9 @@ pub enum Request {
     TerminalPreview {
         launch_id: String,
         text: Option<String>,
+        /// Its status line (absent from older wrappers).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<crate::phone::WorkStatus>,
     },
     /// From a terminal wrapper: the permission mode its agent shows changed.
     TerminalMode {

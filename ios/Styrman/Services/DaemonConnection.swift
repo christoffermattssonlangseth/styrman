@@ -314,8 +314,9 @@ final class DaemonConnection {
             commitResult[sid] = CommitText.result(commit: commit, pushed: pushed)
         case .screen(let sid, let text, let cols):
             screens[sid] = (text, cols)
-        case .preview(let sid, let text):
+        case .preview(let sid, let text, let status):
             timelines[sid]?.showPreview(text)
+            timelines[sid]?.showStatus(status)
         case .sessionStarting(let sid):
             // Open it right away; it fills in as the agent starts.
             if let p = startPrompt { timeline(for: sid).addPending(p); startPrompt = nil }

@@ -824,9 +824,9 @@ impl Connection {
                             send(&mut tx, &ServerMsg::Screen { session, text, cols }).await?;
                         }
                     }
-                    Ok(BusMsg::Preview(session, text)) => {
+                    Ok(BusMsg::Preview(session, text, status)) => {
                         if self.subs.contains_key(&session) {
-                            send(&mut tx, &ServerMsg::Preview { session, text }).await?;
+                            send(&mut tx, &ServerMsg::Preview { session, text, status }).await?;
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {

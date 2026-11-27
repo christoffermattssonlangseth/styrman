@@ -68,12 +68,23 @@ final class SessionTimeline {
     /// History caught up and live events flowing.
     var isLive = false {
         didSet {
-            if isLive { loaded = true } else { preview = nil }
+            if isLive { loaded = true } else { preview = nil; status = nil }
         }
     }
     /// The reply the agent is writing right now, as its terminal shows it. Gone when
     /// the real message (or anything else from the agent) arrives.
     private(set) var preview: String?
+
+    /// The agent's status line while it works ("Crunching… (3s · thinking)"), and
+    /// when it was read (its clock runs on from there).
+    private(set) var status: WorkStatus?
+    private(set) var statusAt = Date()
+
+    func showStatus(_ s: WorkStatus?) {
+        guard s != status else { return }
+        status = s
+        statusAt = .now
+    }
 
     /// A shorter preview waiting to be shown (see `showPreview`).
     @ObservationIgnored private var shrinkTask: Task<Void, Never>?
@@ -274,6 +285,8 @@ final class SessionTimeline {
         case .assistantMessage, .userMessage, .permissionRequested, .turnEnded, .sessionEnded:
             shrinkTask?.cancel()
             preview = nil
+            if case .turnEnded = e.kind { status = nil }
+            if case .sessionEnded = e.kind { status = nil }
         // Live, a new step is held back a moment (see `hold`) for the text written
         // before it: that text, still showing as the preview, becomes the message in
         // place instead of blinking out first.

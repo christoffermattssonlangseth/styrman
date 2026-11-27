@@ -242,7 +242,10 @@ class DaemonConnection(context: Context) {
                 changes[msg.session] = Changes(msg.branch, GitChanges.files(msg.diff), msg.truncated)
             }
             is ServerMsg.Screen -> screens[msg.session] = msg
-            is ServerMsg.Preview -> timelines[msg.session]?.showPreview(msg.text)
+            is ServerMsg.Preview -> timelines[msg.session]?.let {
+                it.showPreview(msg.text)
+                it.showStatus(msg.status)
+            }
             is ServerMsg.Error -> {
                 val waiting = awaitingChanges
                 if (waiting != null) {

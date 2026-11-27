@@ -264,7 +264,30 @@ pub enum ServerMsg {
         session: SessionId,
         #[serde(default)]
         text: Option<String>,
+        /// The agent's status line while it works (absent from older daemons).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<WorkStatus>,
     },
+}
+
+/// What an agent's status line says while it works, as its terminal shows it:
+/// `✻ Crunching… (1m 3s · ↓ 2.1k tokens · thinking)`, `• Working (3s • esc to interrupt)`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkStatus {
+    /// "Crunching…"
+    pub label: String,
+    /// How long the turn has run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_secs: Option<u64>,
+    /// "↓ 74.0k tokens"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens: Option<String>,
+    /// Thinking right now.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub thinking: bool,
+    /// Anything else it says: "running PreToolUse hooks… 2/3", "thought for 3s".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

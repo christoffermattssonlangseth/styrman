@@ -141,10 +141,12 @@ pub fn exec(agent: AgentKind, args: Vec<OsString>) -> Result<std::convert::Infal
             AgentKind::Claude => crate::pty::ScreenReaders {
                 mode: Some(crate::pty::claude_mode),
                 preview: Some(crate::pty::claude_preview),
+                status: Some(crate::pty::claude_status),
             },
             AgentKind::Codex => crate::pty::ScreenReaders {
                 mode: None,
                 preview: Some(crate::pty::codex_preview),
+                status: Some(crate::pty::codex_status),
             },
             _ => crate::pty::ScreenReaders::default(),
         };

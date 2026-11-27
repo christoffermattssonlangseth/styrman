@@ -401,7 +401,7 @@ enum ServerMsg: Decodable, Sendable {
     case folders(FolderListing)
     case sessionStarting(session: String)
     /// The reply being written right now (nil: none), read off the agent's terminal.
-    case preview(session: String, text: String?)
+    case preview(session: String, text: String?, status: WorkStatus?)
     /// The session's terminal screen, while this phone watches it.
     case screen(session: String, text: String, cols: Int)
     /// The session folder's uncommitted changes (a unified diff).
@@ -413,7 +413,7 @@ enum ServerMsg: Decodable, Sendable {
     case unknown(type: String)
 
     private enum K: String, CodingKey {
-        case type, `protocol`, host, sessions, session, id, events, event, message, text, position, warnings, listing, cols, branch, diff, truncated, ahead, commit, pushed, models
+        case type, `protocol`, host, sessions, session, id, events, event, message, text, position, warnings, listing, cols, branch, diff, truncated, ahead, commit, pushed, models, status
         case providers, usageSupported = "usage_supported", lanURLs = "lan_urls", lanCert = "lan_cert"
         case daemonVersion = "daemon_version", deviceId = "device_id", lastSeq = "last_seq"
     }
@@ -463,7 +463,8 @@ enum ServerMsg: Decodable, Sendable {
                                       text: try c.decode(String.self, forKey: .text),
                                       cols: try c.decode(Int.self, forKey: .cols))
         case "preview": self = .preview(session: try c.decode(String.self, forKey: .session),
-                                        text: try c.decodeIfPresent(String.self, forKey: .text))
+                                        text: try c.decodeIfPresent(String.self, forKey: .text),
+                                        status: try? c.decodeIfPresent(WorkStatus.self, forKey: .status))
         default: self = .unknown(type: type)
         }
     }
@@ -760,5 +761,50 @@ struct LanRoute: Equatable, Sendable {
         let p = host.split(separator: ".").compactMap { UInt8($0) }
         guard p.count == 4 else { return false }
         return p[0] == 10 || (p[0] == 172 && (16...31).contains(p[1])) || (p[0] == 192 && p[1] == 168)
+    }
+}
+
+/// What the agent's status line says while it works, as its terminal shows it:
+/// `✻ Crunching… (1m 3s · ↓ 2.1k tokens · thinking)`.
+struct WorkStatus: Decodable, Equatable, Sendable {
+    var label: String
+    var elapsedSecs: Int?
+    var tokens: String?
+    var thinking = false
+    /// Anything else it says: "running PreToolUse hooks… 2/3", "thought for 3s".
+    var note: String?
+
+    private enum K: String, CodingKey { case label, elapsedSecs = "elapsed_secs", tokens, thinking, note }
+
+    init(label: String, elapsedSecs: Int? = nil, tokens: String? = nil, thinking: Bool = false, note: String? = nil) {
+        self.label = label; self.elapsedSecs = elapsedSecs; self.tokens = tokens; self.thinking = thinking; self.note = note
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: K.self)
+        label = try c.decode(String.self, forKey: .label)
+        elapsedSecs = try? c.decodeIfPresent(Int.self, forKey: .elapsedSecs)
+        tokens = try? c.decodeIfPresent(String.self, forKey: .tokens)
+        thinking = (try? c.decodeIfPresent(Bool.self, forKey: .thinking)) ?? false
+        note = try? c.decodeIfPresent(String.self, forKey: .note)
+    }
+
+    /// The bracketed part, as Claude writes it: "18m 5s · ↓ 73.6k tokens · thinking",
+    /// with the time `extra` seconds on from when it was read.
+    func detail(extra: Int = 0) -> String {
+        var parts: [String] = []
+        if let note { parts.append(note) }
+        if let s = elapsedSecs { parts.append(Self.duration(s + max(0, extra))) }
+        if let tokens { parts.append(tokens) }
+        if thinking { parts.append("thinking") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// "4s", "18m 5s", "1h 2m 3s", like Claude's.
+    static func duration(_ s: Int) -> String {
+        let (h, m, sec) = (s / 3600, s % 3600 / 60, s % 60)
+        if h > 0 { return "\(h)h \(m)m \(sec)s" }
+        if m > 0 { return "\(m)m \(sec)s" }
+        return "\(sec)s"
     }
 }

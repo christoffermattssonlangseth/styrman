@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use styr_core::ipc::{Client, IpcError, Request, Response, TerminalPrompt};
 use styr_core::paths::Paths;
+use styr_core::phone::WorkStatus;
 
 /// Catches `/styr` typed into an agent that has no hook for it (Codex rejects unknown
 /// slash commands): the Enter is swallowed, the line erased, and the command returned.
@@ -377,11 +378,109 @@ pub type ModeReader = fn(&str) -> Option<&'static str>;
 /// Reads the reply the agent is writing off its screen.
 pub type PreviewReader = fn(&str) -> Option<String>;
 
+/// Reads the agent's status line ("✻ Crunching… (3s · thinking)") off its screen.
+pub type StatusReader = fn(&str) -> Option<WorkStatus>;
+
 /// What the wrapper reads off an agent's screen besides permission menus.
 #[derive(Default, Clone, Copy)]
 pub struct ScreenReaders {
     pub mode: Option<ModeReader>,
     pub preview: Option<PreviewReader>,
+    pub status: Option<StatusReader>,
+}
+
+/// Claude's status line while it works, above its input box:
+/// `✻ Crunching… (1m 3s · ↓ 2.1k tokens · thinking)`. A long one wraps onto the
+/// next line. Nothing once the turn is over (`✻ Crunched for 1m 3s`).
+pub fn claude_status(contents: &str) -> Option<WorkStatus> {
+    let lines: Vec<&str> = contents.lines().collect();
+    let rule = |l: &str| l.trim().len() >= 20 && l.trim().chars().all(|c| c == '─');
+    let bottom = lines
+        .iter()
+        .rposition(|l| l.starts_with('❯'))
+        .and_then(|i| (0..i).rev().find(|&j| rule(lines[j])))
+        .unwrap_or(lines.len());
+    let (i, rest) = (0..bottom).rev().find_map(|i| {
+        let l = lines[i];
+        let t = l.trim_start();
+        let rest = ["✻", "✶", "✳", "✢", "✽", "·", "*"]
+            .iter()
+            .find_map(|g| t.strip_prefix(g)?.strip_prefix(' '))?;
+        (l.len() - t.len() <= 2).then_some((i, rest))
+    })?;
+    let (label, detail) = match rest.split_once(" (") {
+        Some((label, d)) => {
+            let mut d = d.trim_end().to_owned();
+            for next in lines.iter().take(bottom).skip(i + 1).take(2) {
+                if d.ends_with(')') {
+                    break;
+                }
+                d = format!("{} {}", d.trim_end(), next.trim());
+            }
+            (label, Some(d.trim_end_matches(')').to_owned()))
+        }
+        None => (rest.trim_end(), None),
+    };
+    let word = label.strip_suffix('…')?;
+    if word.is_empty() || word.contains(' ') || !word.starts_with(char::is_alphabetic) {
+        return None;
+    }
+    Some(status_parts(label, detail.as_deref(), " · "))
+}
+
+/// Codex's status line while it works: `• Working (3s • esc to interrupt)`, or
+/// what it's doing in its place (`• Running tests (12s • esc to interrupt)`).
+pub fn codex_status(contents: &str) -> Option<WorkStatus> {
+    let lines: Vec<&str> = contents.lines().collect();
+    let input = lines.iter().rposition(|l| l.starts_with("› "))?;
+    lines[..input].iter().rev().take(6).find_map(|l| {
+        let t = l.trim().strip_prefix("• ")?;
+        let (label, d) = t.split_once(" (")?;
+        let d = d.strip_suffix(')')?;
+        d.contains("esc to interrupt")
+            .then(|| status_parts(label, Some(d), " • "))
+    })
+}
+
+/// A status line's label and the parts in its brackets.
+fn status_parts(label: &str, detail: Option<&str>, sep: &str) -> WorkStatus {
+    let mut st = WorkStatus {
+        label: label.trim().to_owned(),
+        elapsed_secs: None,
+        tokens: None,
+        thinking: false,
+        note: None,
+    };
+    let mut notes = vec![];
+    for part in detail.unwrap_or("").split(sep).map(str::trim) {
+        if part.is_empty() || part.starts_with("esc to") {
+            continue;
+        } else if let Some(secs) = duration_secs(part).filter(|_| st.elapsed_secs.is_none()) {
+            st.elapsed_secs = Some(secs);
+        } else if part.ends_with("tokens") {
+            st.tokens = Some(part.to_owned());
+        } else if part == "thinking" {
+            st.thinking = true;
+        } else {
+            notes.push(part);
+        }
+    }
+    st.note = (!notes.is_empty()).then(|| notes.join(" · "));
+    st
+}
+
+/// "1h 2m 3s", "18m 9s", "4s" in seconds.
+fn duration_secs(s: &str) -> Option<u64> {
+    s.split(' ').try_fold(0u64, |acc, w| {
+        let n: u64 = w.get(..w.len().checked_sub(1)?)?.parse().ok()?;
+        let unit = match w.chars().last()? {
+            'h' => 3600,
+            'm' => 60,
+            's' => 1,
+            _ => return None,
+        };
+        Some(acc + n * unit)
+    })
 }
 
 /// The reply Claude is writing, from its screen: the last `⏺` block above the input
@@ -1283,30 +1382,38 @@ pub fn run(
     }
     // The reply being written → daemon, whenever it grows (only forwarded while the
     // session is working).
-    if let Some(read) = readers.preview {
+    // With its status line ("✻ Crunching… (3s · thinking)").
+    if readers.preview.is_some() || readers.status.is_some() {
+        let (read, read_status) = (readers.preview, readers.status);
         let (screen, done) = (screen.clone(), done.clone());
         let launch_id = launch_id.to_owned();
         std::thread::spawn(move || {
             let client =
                 Client::new(Paths::resolve().socket).with_timeout(Some(Duration::from_secs(2)));
             let mut last: Option<String> = None;
+            let mut last_status: Option<WorkStatus> = None;
             while !done.load(Ordering::Relaxed) {
                 std::thread::sleep(Duration::from_millis(300));
-                let read_now = styled_preview(
-                    read,
-                    screen.lock().unwrap_or_else(|p| p.into_inner()).screen(),
-                );
+                let (read_now, status) = {
+                    let s = screen.lock().unwrap_or_else(|p| p.into_inner());
+                    (
+                        read.and_then(|r| styled_preview(r, s.screen())),
+                        read_status.and_then(|r| r(&s.screen().contents())),
+                    )
+                };
                 // Past a screenful, add to what was read rather than show the tail.
                 let now = read_now.map(|n| match &last {
                     Some(seen) => grow_preview(seen, &n),
                     None => n,
                 });
-                if now != last {
+                if now != last || status != last_status {
                     let _ = client.call(&Request::TerminalPreview {
                         launch_id: launch_id.clone(),
                         text: now.clone(),
+                        status: status.clone(),
                     });
                     last = now;
+                    last_status = status;
                 }
             }
         });
@@ -1867,6 +1974,54 @@ mod tests {
             reflow(table, false).as_deref(),
             Some("What's in it:\n| Folder | Contents |\n| runs/ | 638 run folders |")
         );
+    }
+
+    #[test]
+    fn reads_the_status_line() {
+        let rule = "─".repeat(40);
+        let box_ = format!("{rule}\n❯ \n{rule}\n  ⏵⏵ auto mode on · esc to interrupt");
+        let screen = |spinner: &str| {
+            format!("⏺ Reading the notes.\n\n{spinner}\n  ⎿  Tip: Use /btw\n\n{box_}")
+        };
+        let st =
+            claude_status(&screen("✢ Crunching… (18m 5s · ↓ 73.6k tokens · thinking)")).unwrap();
+        assert_eq!(st.label, "Crunching…");
+        assert_eq!(st.elapsed_secs, Some(18 * 60 + 5));
+        assert_eq!(st.tokens.as_deref(), Some("↓ 73.6k tokens"));
+        assert!(st.thinking);
+        assert_eq!(st.note, None);
+        // Wrapped onto a second line, with a note.
+        let st = claude_status(&screen(
+            "✳ Crunching… (running PreToolUse hooks… 2/3 · 17m 54s · \n↓ 73.1k tokens)",
+        ))
+        .unwrap();
+        assert_eq!(st.elapsed_secs, Some(17 * 60 + 54));
+        assert_eq!(st.tokens.as_deref(), Some("↓ 73.1k tokens"));
+        assert_eq!(st.note.as_deref(), Some("running PreToolUse hooks… 2/3"));
+        let st = claude_status(&screen("· Razzle-dazzling… (2s · thought for 1s)")).unwrap();
+        assert_eq!(st.label, "Razzle-dazzling…");
+        assert_eq!(
+            (st.thinking, st.note.as_deref()),
+            (false, Some("thought for 1s"))
+        );
+        assert_eq!(
+            claude_status(&screen("✻ Pondering…")).unwrap().elapsed_secs,
+            None
+        );
+        // Over: no status.
+        assert_eq!(claude_status(&screen("✻ Crunched for 18m 9s")), None);
+        assert_eq!(claude_status(&format!("⏺ Done.\n\n{box_}")), None);
+        // A list item in a reply isn't a status line.
+        assert_eq!(
+            claude_status(&format!("⏺ Two:\n  * one thing…\n\n{box_}")),
+            None
+        );
+
+        let codex =
+            |status: &str| format!("• Reading.\n\n{status}\n\n› Ask Codex\n  gpt-5 · 80% left");
+        let st = codex_status(&codex("• Working (1m 3s • esc to interrupt)")).unwrap();
+        assert_eq!((st.label.as_str(), st.elapsed_secs), ("Working", Some(63)));
+        assert_eq!(codex_status(&codex("─ Worked for 13s ─")), None);
     }
 
     #[test]

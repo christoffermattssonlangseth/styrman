@@ -402,4 +402,20 @@ private func event(_ seq: UInt64, _ kind: String) -> String {
         #expect(LanRoute(urls: ["wss://10.1.2.3:4720/v1/ws"], cert: "abc") == nil)
         #expect(LanPinner.fingerprint(Data("abc".utf8)) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
     }
+
+    @Test func previewCarriesTheStatusLine() throws {
+        let json = #"{"type":"preview","session":"s1","status":{"label":"Crunching…","elapsed_secs":1085,"tokens":"↓ 73.6k tokens","thinking":true}}"#
+        guard case .preview(let sid, let text, let status?) = try JSONDecoder().decode(ServerMsg.self, from: Data(json.utf8)) else {
+            Issue.record("no status"); return
+        }
+        #expect(sid == "s1" && text == nil)
+        #expect(status.label == "Crunching…")
+        #expect(status.detail() == "18m 5s · ↓ 73.6k tokens · thinking")
+        #expect(status.detail(extra: 60) == "19m 5s · ↓ 73.6k tokens · thinking")
+        #expect(WorkStatus(label: "Working", elapsedSecs: 3725, note: "running hooks").detail() == "running hooks · 1h 2m 5s")
+        // An older daemon: no status.
+        guard case .preview(_, _, nil) = try JSONDecoder().decode(ServerMsg.self, from: Data(#"{"type":"preview","session":"s1","text":"Hi"}"#.utf8)) else {
+            Issue.record("status from nowhere"); return
+        }
+    }
 }

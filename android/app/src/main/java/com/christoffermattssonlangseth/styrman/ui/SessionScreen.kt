@@ -90,6 +90,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -98,6 +99,7 @@ import com.christoffermattssonlangseth.styrman.AgentKind
 import com.christoffermattssonlangseth.styrman.DaemonConnection
 import com.christoffermattssonlangseth.styrman.Dictation
 import com.christoffermattssonlangseth.styrman.FileDiff
+import com.christoffermattssonlangseth.styrman.WorkStatus
 import com.christoffermattssonlangseth.styrman.PermissionMode
 import com.christoffermattssonlangseth.styrman.SessionSummary
 import com.christoffermattssonlangseth.styrman.SessionStatus
@@ -145,6 +147,7 @@ fun SessionScreen(connection: DaemonConnection, speaker: Speaker, sessionId: Str
         }
     }
     val preview = timeline.preview?.takeIf { summary?.status == SessionStatus.Working }
+    val status = timeline.status?.takeIf { summary?.status == SessionStatus.Working }
     LaunchedEffect(timeline.items.size + timeline.pending.size) {
         val n = timeline.items.size + timeline.pending.size
         if (n > 0) list.animateScrollToItem(n - 1)
@@ -248,6 +251,8 @@ fun SessionScreen(connection: DaemonConnection, speaker: Speaker, sessionId: Str
                 PendingRow(p) { timeline.dismissUnconfirmed(p.id) }
             }
             if (preview != null) item(key = "preview") { LivePreviewRow(preview, agent) }
+            // Under it, as in the terminal: what the agent is doing, and for how long.
+            if (status != null) item(key = "status") { StatusRow(status, timeline.statusAtMs, agent) }
             if (timeline.isLive && !timeline.hasContent && timeline.pending.isEmpty()) item {
                 Notice("Nothing yet. Prompts, tool calls and replies show up here as they happen.")
             }
@@ -668,6 +673,47 @@ private fun ModeDialog(current: PermissionMode, onDismiss: () -> Unit, choose: (
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
+}
+
+/** The agent's status line, as its terminal draws it: a spinning glyph, the word it
+ *  picked ("Crunching…") with a shimmer passing over it, and in brackets how long it's
+ *  been, the tokens so far and whether it's thinking. The clock runs on between readings. */
+@Composable
+private fun StatusRow(status: WorkStatus, sinceMs: Long, agent: AgentKind) {
+    val tint = agentColor(agent)
+    var now by androidx.compose.runtime.remember { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        while (true) { kotlinx.coroutines.delay(120); now = System.currentTimeMillis() }
+    }
+    val frames = listOf("·", "✢", "✳", "✶", "✻", "✽", "✽", "✻", "✶", "✳", "✢", "·")
+    val label = status.label
+    val head = ((now / 90) % (label.length + 12)).toInt() - 3
+    val detail = status.detail(extra = (now - sinceMs) / 1000)
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        Modifier.fillMaxWidth().semantics { contentDescription = "${agent.displayName}: $label ${status.detail()}" },
+        verticalAlignment = Alignment.Top,
+    ) {
+        Text(frames[((now / 120) % frames.size).toInt()], color = tint, fontFamily = FontFamily.Monospace,
+            modifier = Modifier.width(18.dp))
+        Text(
+            androidx.compose.ui.text.buildAnnotatedString {
+                label.forEachIndexed { i, ch ->
+                    pushStyle(androidx.compose.ui.text.SpanStyle(color = if (kotlin.math.abs(i - head) <= 1) tint.copy(alpha = 0.45f) else tint))
+                    append(ch)
+                    pop()
+                }
+                if (detail.isNotEmpty()) {
+                    pushStyle(androidx.compose.ui.text.SpanStyle(color = muted))
+                    append("  ($detail)")
+                    pop()
+                }
+            },
+            fontFamily = FontFamily.Monospace,
+            style = MaterialTheme.typography.bodyMedium,
+            maxLines = 2,
+        )
+    }
 }
 
 /** The reply being written right now, as the terminal shows it: grows, with a blinking

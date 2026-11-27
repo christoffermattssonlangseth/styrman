@@ -40,8 +40,21 @@ class SessionTimeline(val sessionId: String) {
         set(value) {
             liveState = value
             // Offline, nothing keeps it current.
-            if (!value) preview = null
+            if (!value) { preview = null; status = null }
         }
+
+    /** The agent's status line while it works, and when it was read (its clock runs
+     *  on from there). */
+    var status: WorkStatus? by mutableStateOf(null)
+        private set
+    var statusAtMs = 0L
+        private set
+
+    fun showStatus(s: WorkStatus?) {
+        if (s == status) return
+        statusAtMs = System.currentTimeMillis()
+        status = s
+    }
 
     /** The reply the agent is writing right now, as its terminal shows it. Gone when
      *  the real message (or anything else from the agent) arrives. */
@@ -134,6 +147,7 @@ class SessionTimeline(val sessionId: String) {
             is EventKind.PermissionRequested, EventKind.TurnEnded, is EventKind.SessionEnded -> preview = null
             else -> {}
         }
+        if (e.kind == EventKind.TurnEnded || e.kind is EventKind.SessionEnded) status = null
         when (val k = e.kind) {
             is EventKind.SessionStarted ->
                 items += TimelineItem.Divider(key, if (k.start == "resume") "Session resumed" else "Session started", e.atMs)

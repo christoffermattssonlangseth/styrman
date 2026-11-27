@@ -243,7 +243,11 @@ struct SessionDetailView: View {
                 if summary?.status == .working, timeline.pending.isEmpty || timeline.preview != nil {
                     if let text = timeline.preview {
                         LivePreviewRow(text: text, agent: agent, sessionId: sessionId).id("preview")
-                    } else {
+                    }
+                    // Under it, as in the terminal: what the agent is doing, and for how long.
+                    if let status = timeline.status {
+                        StatusRow(status: status, since: timeline.statusAt, agent: agent).id("status")
+                    } else if timeline.preview == nil {
                         WorkingRow(agent: agent).id("preview")
                     }
                 }
@@ -1532,6 +1536,55 @@ struct WorkingRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityLabel("\(agent.displayName) is working")
+    }
+}
+
+/// The agent's status line, as its terminal draws it: a spinning glyph, the word it
+/// picked ("Crunching…") with a shimmer passing over it, and in brackets how long
+/// it's been, the tokens so far and whether it's thinking. The clock runs on between
+/// readings.
+struct StatusRow: View {
+    let status: WorkStatus
+    let since: Date
+    let agent: AgentKind
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Claude's spinner, there and back.
+    static let frames = ["·", "✢", "✳", "✶", "✻", "✽", "✽", "✻", "✶", "✳", "✢", "·"]
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: reduceMotion ? 1 : 0.12)) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            let extra = Int(ctx.date.timeIntervalSince(since))
+            let detail = status.detail(extra: extra)
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                Text(reduceMotion ? "✻" : Self.frames[Int(t / 0.12) % Self.frames.count])
+                    .foregroundStyle(Theme.color(for: agent))
+                    .frame(width: 14)
+                (Text(shimmer(status.label, at: t))
+                 + Text(detail.isEmpty ? "" : "  (\(detail))").foregroundColor(.secondary))
+                    .lineLimit(2)
+            }
+            .font(.system(.subheadline, design: .monospaced))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(agent.displayName): \(status.label) \(status.detail())")
+    }
+
+    /// The label in the agent's colour, a lighter band moving across it.
+    private func shimmer(_ s: String, at t: TimeInterval) -> AttributedString {
+        var out = AttributedString()
+        let n = s.count
+        let base = Theme.color(for: agent)
+        // One pass about every two seconds, with a pause off the end.
+        let head = reduceMotion ? -10 : Int((t / 0.09).truncatingRemainder(dividingBy: Double(n + 12))) - 3
+        for (i, ch) in s.enumerated() {
+            var a = AttributedString(String(ch))
+            a.foregroundColor = abs(i - head) <= 1 ? base.opacity(0.45) : base
+            out += a
+        }
+        return out
     }
 }
 

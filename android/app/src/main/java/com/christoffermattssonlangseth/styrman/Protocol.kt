@@ -359,7 +359,7 @@ sealed interface ServerMsg {
     /** The terminal as it looks now, while this phone watches it. */
     data class Screen(val session: String, val text: String, val cols: Int) : ServerMsg
     /** The reply being written right now; null: none in progress. */
-    data class Preview(val session: String, val text: String?) : ServerMsg
+    data class Preview(val session: String, val text: String?, val status: WorkStatus? = null) : ServerMsg
     data class Error(val message: String) : ServerMsg
     data class Unknown(val type: String) : ServerMsg
 
@@ -386,7 +386,7 @@ sealed interface ServerMsg {
                 "session_starting" -> SessionStarting(o.str("session") ?: "")
                 "changes" -> Changes(o.str("session") ?: "", o.str("branch"), o.str("diff") ?: "", o.bool("truncated") ?: false)
                 "screen" -> Screen(o.str("session") ?: "", o.str("text") ?: "", o.long("cols")?.toInt() ?: 80)
-                "preview" -> Preview(o.str("session") ?: "", o.str("text"))
+                "preview" -> Preview(o.str("session") ?: "", o.str("text"), o.obj("status")?.let(WorkStatus::of))
                 "error" -> Error(o.str("message") ?: "")
                 else -> Unknown(type ?: "?")
             }
@@ -449,6 +449,41 @@ data class LanRoute(val urls: List<String>, val cert: String) {
             val p = host.split('.').map { it.toIntOrNull() ?: return false }
             if (p.size != 4 || p.any { it !in 0..255 }) return false
             return p[0] == 10 || (p[0] == 172 && p[1] in 16..31) || (p[0] == 192 && p[1] == 168)
+        }
+    }
+}
+
+/** What the agent's status line says while it works, as its terminal shows it:
+ *  `✻ Crunching… (1m 3s · ↓ 2.1k tokens · thinking)`. */
+data class WorkStatus(
+    val label: String,
+    val elapsedSecs: Long? = null,
+    val tokens: String? = null,
+    val thinking: Boolean = false,
+    /** Anything else it says: "running PreToolUse hooks… 2/3", "thought for 3s". */
+    val note: String? = null,
+) {
+    /** The bracketed part, as Claude writes it, with the time `extra` seconds on. */
+    fun detail(extra: Long = 0): String = listOfNotNull(
+        note,
+        elapsedSecs?.let { duration(it + maxOf(0, extra)) },
+        tokens,
+        "thinking".takeIf { thinking },
+    ).joinToString(" · ")
+
+    companion object {
+        fun of(o: JsonObject): WorkStatus? = o.str("label")?.let {
+            WorkStatus(it, o.long("elapsed_secs"), o.str("tokens"), o.bool("thinking") ?: false, o.str("note"))
+        }
+
+        /** "4s", "18m 5s", "1h 2m 3s", like Claude's. */
+        fun duration(s: Long): String {
+            val (h, m, sec) = Triple(s / 3600, s % 3600 / 60, s % 60)
+            return when {
+                h > 0 -> "${h}h ${m}m ${sec}s"
+                m > 0 -> "${m}m ${sec}s"
+                else -> "${sec}s"
+            }
         }
     }
 }
