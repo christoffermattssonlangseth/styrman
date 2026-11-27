@@ -1027,11 +1027,7 @@ struct Composer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if status == .working {
-                Text(canStop ? "\(agent) is working. A message goes when it finishes; ■ stops it."
-                             : "\(agent) is working. Your message is sent when it finishes.")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else if status == .done {
+            if status == .done {
                 Text("This session has ended.").font(.caption).foregroundStyle(.secondary)
             }
             if !attachments.isEmpty {

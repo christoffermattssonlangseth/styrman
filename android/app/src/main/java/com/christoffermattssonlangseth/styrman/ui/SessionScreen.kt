@@ -505,7 +505,6 @@ private fun Composer(connection: DaemonConnection, sessionId: String, status: Se
     val showsStop = canStop && text.isBlank() && (status == SessionStatus.Working || status == SessionStatus.NeedsApproval)
 
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
-        if (status == SessionStatus.Working) Text("${agent.displayName} is working. Your message is sent when it finishes.", style = MaterialTheme.typography.labelSmall)
         if (status == SessionStatus.Done) Text("This session has ended.", style = MaterialTheme.typography.labelSmall)
         Row(verticalAlignment = Alignment.Bottom) {
             OutlinedTextField(
