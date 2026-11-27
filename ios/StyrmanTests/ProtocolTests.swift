@@ -464,3 +464,25 @@ struct ShellHighlightTests {
         #expect(colour(of: "S=/tmp") == nil)
     }
 }
+
+@MainActor
+struct PeerNoteTests {
+    @Test func notesBetweenAgentsAreRecognised() {
+        let r = PeerNote("agy (styrman) replied: - **§710** — NOT YET")
+        #expect(r == PeerNote(kind: .replied, agent: .antigravity, repo: "styrman", text: "- **§710** — NOT YET"))
+        #expect(PeerNote("Asked Codex (reCORD): Review §705 (the plan)")?.text == "Review §705 (the plan)")
+        #expect(PeerNote("Asked Codex (reCORD): Review §705")?.kind == .asked(started: false))
+        #expect(PeerNote("Started Codex (my app) for this and asked: Check it")?.repo == "my app")
+        #expect(PeerNote("No reply from Claude (reCORD) in time")?.kind == .noReply)
+        #expect(PeerNote("A subagent reported back") == nil)
+    }
+
+    @Test func anAskIsOpenUntilItsReply() {
+        let items: [TimelineItem] = [
+            .notice(id: "1", text: "Asked Codex (reCORD): one", warning: false),
+            .notice(id: "2", text: "Asked agy (styrman): two", warning: false),
+            .notice(id: "3", text: "Codex (reCORD) replied: done", warning: false),
+        ]
+        #expect(PeerNote.openAsks(items) == ["2"])
+    }
+}

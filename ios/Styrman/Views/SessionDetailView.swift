@@ -222,6 +222,7 @@ struct SessionDetailView: View {
                 let busy = summary?.status == .working || summary?.status == .needsApproval
                 let latest = busy ? nil : latestReply(timeline)?.id
                 let rows = DisplayRow.rows(merged(timeline.shownItems))
+                let openAsks = PeerNote.openAsks(timeline.shownItems)
                 if rows.count > shown {
                     Button("Show earlier") { shown += 150 }
                         .font(.footnote.weight(.medium))
@@ -232,7 +233,7 @@ struct SessionDetailView: View {
                     switch row {
                     case .item(let item):
                         TimelineRow(item: item, cwd: summary?.cwd, sessionId: sessionId, agent: agent,
-                                    latestReplyId: latest).id(item.id)
+                                    latestReplyId: latest, openAsks: openAsks).id(item.id)
                     case .tools(let id, let tools):
                         StepsRow(tools: tools, cwd: summary?.cwd).id(id)
                     }
@@ -453,6 +454,8 @@ struct TimelineRow: View {
     var sessionId: String = ""
     var agent: AgentKind = .unknown
     var latestReplyId: String? = nil
+    /// Asks to other agents still waiting for their reply (notice ids).
+    var openAsks: Set<String> = []
 
     var body: some View {
         switch item {
@@ -501,6 +504,8 @@ struct TimelineRow: View {
             PermissionCard(item: p, title: displayTitle(p.tool, cwd: cwd), sessionId: sessionId, cwd: cwd)
         case .plan(_, let entries):
             PlanCard(entries: entries)
+        case .notice(let id, let text, _) where PeerNote(text) != nil:
+            PeerCard(note: PeerNote(text)!, asker: agent, sessionId: sessionId, waiting: openAsks.contains(id))
         case .notice(_, let text, let warning):
             // Another agent's reply quoted here is Markdown: bold as bold, not `**`.
             Label { Text(ReplyText.inline(text)) } icon: { Image(systemName: warning ? "exclamationmark.triangle" : "bell") }
@@ -1586,6 +1591,7 @@ struct StepIcon: View {
         Group {
             if kind == .execute {
                 Text(">_").font(.system(.footnote, design: .monospaced).weight(.semibold))
+                    .lineLimit(1).fixedSize()
             } else {
                 Image(systemName: Theme.symbol(for: kind)).font(.footnote)
             }
@@ -1891,10 +1897,14 @@ struct HelperLinks: View {
     private func chip(_ s: SessionSummary, _ title: String, _ symbol: String) -> some View {
         NavigationLink(value: s.id) {
             HStack(spacing: 6) {
-                Image(systemName: symbol)
+                AgentAvatar(agent: s.agent, size: 20)
                 Text(title).lineLimit(1)
-                Circle().fill(Theme.color(for: s.agent)).frame(width: 6, height: 6)
-                    .opacity(s.status == .working ? 1 : 0)
+                // What it's doing now: working, waiting on you, or done.
+                switch s.status {
+                case .working: WorkingDots(color: Theme.color(for: s.agent))
+                case .needsApproval: Image(systemName: "hand.raised.fill").foregroundStyle(Theme.attention)
+                default: Image(systemName: "checkmark").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+                }
             }
             .font(.footnote.weight(.medium))
             .padding(.horizontal, 10).padding(.vertical, 6)
@@ -2036,5 +2046,172 @@ struct TaskCard: View {
         let s = max(0, Int(t))
         if s >= 3600 { return "\(s / 3600)h \(s % 3600 / 60)m" }
         return WorkStatus.duration(s)
+    }
+}
+
+
+/// What the Mac notes in a session when its agent talks to another one:
+/// "Asked Codex (reCORD): …", "Started Codex (reCORD) for this and asked: …",
+/// "Codex (reCORD) replied: …", "No reply from Codex (reCORD) in time".
+struct PeerNote: Equatable {
+    enum Kind: Equatable { case asked(started: Bool), replied, noReply }
+    let kind: Kind
+    let agent: AgentKind
+    /// "reCORD": the other agent's folder.
+    let repo: String
+    let text: String
+
+    init(kind: Kind, agent: AgentKind, repo: String, text: String) {
+        (self.kind, self.agent, self.repo, self.text) = (kind, agent, repo, text)
+    }
+
+    /// "Codex (reCORD)".
+    var who: String { "\(agent.displayName) (\(repo))" }
+
+    init?(_ note: String) {
+        func split(_ s: Substring) -> (AgentKind, String)? {
+            guard let open = s.lastIndex(of: "("), s.hasSuffix(")") else { return nil }
+            let name = s[..<open].trimmingCharacters(in: .whitespaces).lowercased()
+            let agent: AgentKind = name.hasPrefix("claude") ? .claude : name.hasPrefix("codex") ? .codex
+                : name.hasPrefix("agy") || name.hasPrefix("antigravity") ? .antigravity : .unknown
+            guard agent != .unknown else { return nil }
+            return (agent, String(s[s.index(after: open)..<s.index(before: s.endIndex)]))
+        }
+        let n = note[...]
+        if let r = n.range(of: ") replied: "), let who = split(n[..<n.index(after: r.lowerBound)]) {
+            (kind, agent, repo, text) = (.replied, who.0, who.1, String(n[r.upperBound...]))
+        } else if n.hasPrefix("Asked "), let r = n.range(of: "): "),
+                  let who = split(n[n.index(n.startIndex, offsetBy: 6)..<n.index(after: r.lowerBound)]) {
+            (kind, agent, repo, text) = (.asked(started: false), who.0, who.1, String(n[r.upperBound...]))
+        } else if n.hasPrefix("Started "), let r = n.range(of: ") for this and asked: "),
+                  let who = split(n[n.index(n.startIndex, offsetBy: 8)..<n.index(after: r.lowerBound)]) {
+            (kind, agent, repo, text) = (.asked(started: true), who.0, who.1, String(n[r.upperBound...]))
+        } else if n.hasPrefix("No reply from "), n.hasSuffix(" in time"),
+                  let who = split(n.dropFirst(14).dropLast(8)) {
+            (kind, agent, repo, text) = (.noReply, who.0, who.1, "")
+        } else {
+            return nil
+        }
+    }
+
+    /// The asks no reply (or "no reply in time") has come for yet, by notice id.
+    static func openAsks(_ items: [TimelineItem]) -> Set<String> {
+        var open: [String: String] = [:]   // who → notice id of the latest ask
+        for item in items {
+            guard case .notice(let id, let text, _) = item, let note = PeerNote(text) else { continue }
+            switch note.kind {
+            case .asked: open[note.who] = id
+            case .replied, .noReply: open[note.who] = nil
+            }
+        }
+        return Set(open.values)
+    }
+}
+
+/// Agents talking to each other, as cards. An ask: who asked whom, the question,
+/// and while it's out, what the other agent is doing. A reply: in the other agent's
+/// colour, its Markdown, folded when long, with a way into its session.
+struct PeerCard: View {
+    @Environment(DaemonConnection.self) private var connection
+    let note: PeerNote
+    /// The agent of this session (the one asking).
+    let asker: AgentKind
+    let sessionId: String
+    var waiting = false
+    @State private var expanded = false
+
+    /// The other agent's session, if it's one helping this one.
+    private var helper: SessionSummary? {
+        connection.sessions.first { $0.agent == note.agent && $0.repoName == note.repo && $0.helperOf == sessionId }
+            ?? connection.sessions.first { $0.agent == note.agent && $0.repoName == note.repo && $0.status != .done }
+    }
+
+    var body: some View {
+        let c = Theme.color(for: note.agent)
+        switch note.kind {
+        case .asked(let started):
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    AgentAvatar(agent: asker, size: 20)
+                    Image(systemName: "arrow.right").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+                    AgentAvatar(agent: note.agent, size: 20)
+                    Text(started ? "Started \(note.agent.displayName) and asked" : "Asked \(note.agent.displayName)")
+                        .font(.footnote.weight(.semibold))
+                    Text(note.repo).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Text(ReplyText.inline(note.text))
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .lineLimit(expanded ? nil : 3)
+                    .onTapGesture { withAnimation(.snappy) { expanded.toggle() } }
+                if waiting { status(c) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
+        case .replied:
+            let long = note.text.count > 420
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    AgentAvatar(agent: note.agent, size: 24)
+                    Text("\(note.agent.displayName) replied").font(.subheadline.weight(.semibold)).foregroundStyle(c)
+                    Text(note.repo).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer(minLength: 4)
+                    if let helper { open(helper, c) }
+                }
+                ReplyText(raw: note.text, selectable: true)
+                    .frame(maxHeight: long && !expanded ? 170 : nil, alignment: .top)
+                    .clipped()
+                    .overlay(alignment: .bottom) {
+                        if long && !expanded {
+                            LinearGradient(colors: [.clear, Color(.systemBackground).opacity(0.9)],
+                                           startPoint: .top, endPoint: .bottom)
+                                .frame(height: 50).allowsHitTesting(false)
+                        }
+                    }
+                if long {
+                    Button(expanded ? "Show less" : "Show more") { withAnimation(.snappy) { expanded.toggle() } }
+                        .font(.footnote.weight(.semibold)).foregroundStyle(c)
+                }
+            }
+            .padding(14)
+            .background(c.opacity(0.08), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(c.opacity(0.3)))
+        case .noReply:
+            Label("No reply from \(note.agent.displayName) in time", systemImage: "clock.badge.exclamationmark")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+
+    /// While the other agent works on it: its dots and state, live.
+    @ViewBuilder private func status(_ c: Color) -> some View {
+        let name = note.agent.displayName
+        HStack(spacing: 8) {
+            switch helper?.status {
+            case .needsApproval:
+                Image(systemName: "hand.raised.fill").foregroundStyle(Theme.attention)
+                Text("\(name) needs you").foregroundStyle(Theme.attention)
+            case .working, nil:
+                WorkingDots(color: c)
+                Shimmer(text: "\(name) is on it…", color: c)
+            default:
+                WorkingDots(color: c)
+                Text("Waiting for \(name)'s reply").foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 4)
+            if let helper { open(helper, c) }
+        }
+        .font(.footnote)
+    }
+
+    private func open(_ s: SessionSummary, _ c: Color) -> some View {
+        NavigationLink(value: s.id) {
+            HStack(spacing: 2) {
+                Text("Open")
+                Image(systemName: "chevron.right").font(.caption2.weight(.bold))
+            }
+            .font(.footnote.weight(.medium)).foregroundStyle(c)
+        }
+        .buttonStyle(.plain)
     }
 }

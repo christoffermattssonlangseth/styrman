@@ -295,7 +295,8 @@ impl Daemon {
         if let Some(f) = from {
             match &outcome {
                 AskOutcome::Reply(r) => {
-                    self.note(f, format!("{} replied: {}", who(target), short(r, 400)))
+                    // Whole (up to a long answer's worth): phones fold it.
+                    self.note(f, format!("{} replied: {}", who(target), short(r, 6000)))
                 }
                 AskOutcome::TimedOut => {
                     self.note(f, format!("No reply from {} in time", who(target)))
