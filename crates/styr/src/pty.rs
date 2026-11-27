@@ -417,7 +417,8 @@ pub fn claude_preview(contents: &str) -> Option<String> {
     let tool_like = first
         .find('(')
         .is_some_and(|i| i < 40 && !first[..i].contains(' '))
-        || TOOL_VERBS.iter().any(|p| first.starts_with(p));
+        || TOOL_VERBS.iter().any(|p| first.starts_with(p))
+        || timed_step(first);
     // A line with a `⎿` right under it is a tool step (`⏺ Sleeping 5 seconds then
     // printing hi` / `⎿ $ sleep 5`), even while its `⏺` blinks off; reply text never
     // has one.
@@ -444,12 +445,28 @@ pub fn claude_preview(contents: &str) -> Option<String> {
         // details under it, or a summary ("Reading 1 file…"). The reply above it is
         // finished (it arrives as a message); reading the tool line as more of it
         // made the preview flip between two texts with every blink.
-        if detail(i) || tool_summary(t) {
+        if detail(i) || tool_summary(t) || timed_step(t) {
             return None;
         }
         body.push(l.strip_prefix("  ").unwrap_or(l).trim_end().to_owned());
     }
+    if let Some(last) = body.iter_mut().rev().find(|l| !l.trim().is_empty()) {
+        *last = without_tag(last).to_owned();
+    }
     reflow(body, scrolled)
+}
+
+/// Claude tags some replies after their last word (" · summary", joined with a
+/// no-break space): screen furniture, not part of the reply.
+fn without_tag(line: &str) -> &str {
+    match line.rsplit_once(" ·\u{a0}") {
+        Some((text, tag))
+            if !tag.is_empty() && tag.chars().all(|c| c.is_ascii_lowercase() || c == ' ') =>
+        {
+            text
+        }
+        _ => line,
+    }
 }
 
 /// How Claude starts a tool step's line: done ("Read 3 files") or in progress
@@ -490,6 +507,21 @@ fn tool_summary(t: &str) -> bool {
     };
     let rest = rest.strip_prefix("for ").unwrap_or(rest);
     t.ends_with('…') || t.contains("ctrl+o") || rest.starts_with(|c: char| c.is_ascii_digit())
+}
+
+/// A running step with its timer: Claude shows a command by its description while
+/// it runs ("Waiting for the smoke test output · 1m 28s", "Running 1 shell command
+/// · 2s…"), often with no `⎿` details under it.
+fn timed_step(t: &str) -> bool {
+    let t = t.trim_end().trim_end_matches('…');
+    let Some((what, time)) = t.rsplit_once(" · ") else {
+        return false;
+    };
+    let unit = |w: &str| {
+        w.strip_suffix(['h', 'm', 's'])
+            .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+    };
+    !what.trim().is_empty() && t.chars().count() < 120 && time.split(' ').all(unit)
 }
 
 /// A reply's lines (indent removed) as text: lines the terminal wrapped are joined
@@ -1753,6 +1785,26 @@ mod tests {
                 format!("⏺ That's part 1.\n\n{bullet} Listed 1 directory \n\n✻ Grooving…\n{box_}");
             assert_eq!(claude_preview(&listed), None, "bullet {bullet:?}");
         }
+        // A command shown by its description while it runs, with its timer and no
+        // details: the text above is finished.
+        for bullet in ["⏺", " "] {
+            for timer in ["1m 28s", "9s", "2s…"] {
+                let waiting = format!(
+                    "⏺ Fixes are in. Next I'm running a quick smoke test.\n\n{bullet} Waiting for the smoke test output · {timer}\n\n✳ Crunching… (14m 26s · ↓ 57.1k tokens)\n{box_}"
+                );
+                assert_eq!(claude_preview(&waiting), None, "{bullet:?} {timer}");
+            }
+        }
+        let tagged = format!(
+            "⏺ About 27% is the glial map. I'll explain once\n  they have reviewed them. ·\u{a0}summary\n\n✶ Crunching… (16m 8s)\n{box_}"
+        );
+        assert_eq!(
+            claude_preview(&tagged).as_deref(),
+            Some("About 27% is the glial map. I'll explain once they have reviewed them.")
+        );
+        assert!(timed_step("Running 1 shell command · 2s…"));
+        assert!(!timed_step("It costs about · 5 dollars"));
+        assert!(!timed_step("Done · 12 files"));
         // Reply text that starts like one is still text.
         let prose =
             format!("⏺ The plan is simple.\n  Reading the code first, I found two bugs.\n\n{box_}");

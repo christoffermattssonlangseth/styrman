@@ -422,6 +422,20 @@ impl Store {
         Ok(out)
     }
 
+    /// The device that sent the session's latest prompt (`origin.device`), if any.
+    pub fn last_prompt_device(&self, session: &SessionId) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT json_extract(body, '$.origin.device') FROM events
+                 WHERE session_id = ?1 AND kind = 'user_message' ORDER BY seq DESC LIMIT 1",
+                [session.as_str()],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten())
+    }
+
     /// All event kinds of a session, oldest first (for rebuilding status on start).
     pub fn event_kinds(&self, session: &SessionId) -> Result<Vec<EventKind>> {
         let mut st = self

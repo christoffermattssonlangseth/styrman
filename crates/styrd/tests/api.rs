@@ -456,3 +456,66 @@ async fn screen_permission_reaches_a_watching_phone_live() {
     assert_eq!(r, Response::SelectOption { index: 0 });
     d.stop().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_session_another_agent_prompts_shows_as_helping_it() {
+    let d = Daemon::start().await;
+    let from = |device: &str, text: &str| EventKind::UserMessage {
+        text: text.into(),
+        origin: Origin::Remote(DeviceId::from(device)),
+    };
+    for n in ["asker", "reviewer"] {
+        d.call(Request::SetSharing {
+            native: NativeSessionRef::new(AgentKind::Claude, n),
+            shared: true,
+        })
+        .await;
+    }
+    d.ingest("asker", vec![user("plan the analysis")]).await;
+    d.ingest("reviewer", vec![from("PHONE", "what is this repo?")])
+        .await;
+    let sessions = all_sessions(&d).await;
+    let id = |n: &str| {
+        sessions
+            .iter()
+            .find(|s| s.native_id == n)
+            .unwrap()
+            .id
+            .clone()
+    };
+    let (asker, reviewer) = (id("asker"), id("reviewer"));
+    let helper_of = |s: &[styr_core::ipc::SessionSummary]| {
+        s.iter()
+            .find(|s| s.id == reviewer)
+            .unwrap()
+            .helper_of
+            .clone()
+    };
+    assert_eq!(helper_of(&sessions), None, "you started it");
+
+    // The asker's agent sends it a review by id.
+    d.ingest(
+        "reviewer",
+        vec![from(&format!("agent:{asker}"), "review §694")],
+    )
+    .await;
+    assert_eq!(helper_of(&all_sessions(&d).await), Some(asker.clone()));
+
+    // Your own prompt takes it back.
+    d.ingest("reviewer", vec![from("PHONE", "thanks, now this")])
+        .await;
+    assert_eq!(helper_of(&all_sessions(&d).await), None);
+    d.stop().await;
+}
+
+async fn all_sessions(d: &Daemon) -> Vec<styr_core::ipc::SessionSummary> {
+    let Response::Sessions { sessions } = d
+        .call(Request::ListSessions {
+            include_unshared: true,
+        })
+        .await
+    else {
+        panic!()
+    };
+    sessions
+}

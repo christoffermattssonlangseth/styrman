@@ -306,15 +306,20 @@ impl Daemon {
         outcome
     }
 
-    /// The session that started `helper` to ask it something, if one did.
+    /// The session `helper` is working for: the one that started it to ask it
+    /// something, or else the agent that sent its latest prompt (a session you
+    /// started can become another agent's reviewer). From the history, so it
+    /// survives a restart; a prompt of your own ends it.
     pub fn helper_of(&self, helper: &SessionId) -> Option<SessionId> {
-        self.peer_state
+        let started = self
+            .peer_state
             .helpers
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .iter()
             .find(|(_, h)| *h == helper)
-            .map(|((asker, _), _)| asker.clone())
+            .map(|((asker, _), _)| asker.clone());
+        started.or_else(|| self.prompted_by_agent(helper))
     }
 
     /// Who `to` means. An agent name, asked from a session in a folder, means a

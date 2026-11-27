@@ -562,6 +562,14 @@ impl Daemon {
             .collect())
     }
 
+    /// The agent session that sent `id`'s latest prompt, if an agent did.
+    pub(crate) fn prompted_by_agent(&self, id: &SessionId) -> Option<SessionId> {
+        let g = self.lock();
+        let device = g.store.last_prompt_device(id).ok().flatten()?;
+        let asker = SessionId::from(device.strip_prefix(crate::peers::AGENT_DEVICE_PREFIX)?);
+        (asker != *id && g.store.session(&asker).ok().flatten().is_some()).then_some(asker)
+    }
+
     pub fn summary(&self, id: &SessionId) -> Result<Option<SessionSummary>> {
         let s = {
             let g = self.lock();
