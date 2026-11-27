@@ -486,3 +486,19 @@ struct PeerNoteTests {
         #expect(PeerNote.openAsks(items) == ["2"])
     }
 }
+
+@MainActor
+struct ExchangeTests {
+    @Test func eachReplyPairsWithItsAsk() {
+        let items: [TimelineItem] = [
+            .notice(id: "1", text: "Asked Codex (reCORD): first?", warning: false),
+            .notice(id: "2", text: "Asked agy (styrman): second?", warning: false),
+            .notice(id: "3", text: "Codex (reCORD) replied: one", warning: false),
+            .notice(id: "4", text: "Asked Codex (reCORD): again?", warning: false),
+            .notice(id: "5", text: "No reply from agy (styrman) in time", warning: false),
+        ]
+        let x = PeerNote.exchanges(items)
+        #expect(x == [PeerExchange(id: "3", askId: "1", agent: .codex, repo: "reCORD", question: "first?", answer: "one")])
+        #expect(PeerNote.openAsks(items) == ["4"])
+    }
+}

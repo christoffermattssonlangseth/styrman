@@ -221,7 +221,10 @@ struct SessionDetailView: View {
                 // from reply to reply while it works would shift everything each time.
                 let busy = summary?.status == .working || summary?.status == .needsApproval
                 let latest = busy ? nil : latestReply(timeline)?.id
-                let rows = DisplayRow.rows(merged(timeline.shownItems))
+                // An answered ask shows with its reply, where the reply came.
+                let exchanges = PeerNote.exchanges(timeline.shownItems)
+                let answered = Set(exchanges.map(\.askId))
+                let rows = DisplayRow.rows(merged(timeline.shownItems.filter { !answered.contains($0.id) }))
                 let openAsks = PeerNote.openAsks(timeline.shownItems)
                 if rows.count > shown {
                     Button("Show earlier") { shown += 150 }
@@ -233,7 +236,7 @@ struct SessionDetailView: View {
                     switch row {
                     case .item(let item):
                         TimelineRow(item: item, cwd: summary?.cwd, sessionId: sessionId, agent: agent,
-                                    latestReplyId: latest, openAsks: openAsks).id(item.id)
+                                    latestReplyId: latest, openAsks: openAsks, exchanges: exchanges).id(item.id)
                     case .tools(let id, let tools):
                         StepsRow(tools: tools, cwd: summary?.cwd).id(id)
                     }
@@ -456,6 +459,8 @@ struct TimelineRow: View {
     var latestReplyId: String? = nil
     /// Asks to other agents still waiting for their reply (notice ids).
     var openAsks: Set<String> = []
+    /// Asks and their replies, paired.
+    var exchanges: [PeerExchange] = []
 
     var body: some View {
         switch item {
@@ -504,6 +509,9 @@ struct TimelineRow: View {
             PermissionCard(item: p, title: displayTitle(p.tool, cwd: cwd), sessionId: sessionId, cwd: cwd)
         case .plan(_, let entries):
             PlanCard(entries: entries)
+        case .notice(let id, _, _) where exchanges.contains { $0.id == id }:
+            ExchangeCard(exchange: exchanges.first { $0.id == id }!, asker: agent, sessionId: sessionId,
+                         thread: exchanges)
         case .notice(let id, let text, _) where PeerNote(text) != nil:
             PeerCard(note: PeerNote(text)!, asker: agent, sessionId: sessionId, waiting: openAsks.contains(id))
         case .notice(_, let text, let warning):
@@ -2094,6 +2102,25 @@ struct PeerNote: Equatable {
         }
     }
 
+    /// Each reply with the ask it answers (the latest ask to that agent before it).
+    static func exchanges(_ items: [TimelineItem]) -> [PeerExchange] {
+        var asks: [String: (id: String, text: String)] = [:]
+        var out: [PeerExchange] = []
+        for item in items {
+            guard case .notice(let id, let text, _) = item, let note = PeerNote(text) else { continue }
+            switch note.kind {
+            case .asked: asks[note.who] = (id, note.text)
+            case .replied:
+                if let ask = asks.removeValue(forKey: note.who) {
+                    out.append(PeerExchange(id: id, askId: ask.id, agent: note.agent, repo: note.repo,
+                                            question: ask.text, answer: note.text))
+                }
+            case .noReply: asks[note.who] = nil
+            }
+        }
+        return out
+    }
+
     /// The asks no reply (or "no reply in time") has come for yet, by notice id.
     static func openAsks(_ items: [TimelineItem]) -> Set<String> {
         var open: [String: String] = [:]   // who → notice id of the latest ask
@@ -2213,5 +2240,142 @@ struct PeerCard: View {
             .font(.footnote.weight(.medium)).foregroundStyle(c)
         }
         .buttonStyle(.plain)
+    }
+}
+
+
+/// One question to another agent and its answer.
+struct PeerExchange: Identifiable, Equatable {
+    /// The reply's notice id.
+    let id: String
+    let askId: String
+    let agent: AgentKind
+    let repo: String
+    let question: String
+    let answer: String
+}
+
+/// An ask and its reply as one card, where the reply came: the question in the
+/// asking agent's bubble, the answer in the helper's. Tap for the whole thread
+/// between the two.
+struct ExchangeCard: View {
+    let exchange: PeerExchange
+    let asker: AgentKind
+    let sessionId: String
+    /// Every exchange in this session (the thread is those with the same agent).
+    let thread: [PeerExchange]
+    @State private var open = false
+
+    var body: some View {
+        let c = Theme.color(for: exchange.agent)
+        let mine = Theme.color(for: asker)
+        Button { open = true } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 6) {
+                    AgentAvatar(agent: asker, size: 20)
+                    Image(systemName: "arrow.left.arrow.right").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+                    AgentAvatar(agent: exchange.agent, size: 20)
+                    (Text(exchange.agent.displayName).fontWeight(.semibold)
+                     + Text(" · \(exchange.repo)").foregroundColor(.secondary))
+                        .font(.footnote).lineLimit(1)
+                    Spacer(minLength: 4)
+                    let n = thread.filter { $0.agent == exchange.agent && $0.repo == exchange.repo }.count
+                    if n > 1 { Text("\(n) exchanges").font(.caption).foregroundStyle(.secondary).lineLimit(1).fixedSize() }
+                    Image(systemName: "chevron.right").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+                }
+                // The question: the asker's, on the right.
+                HStack {
+                    Spacer(minLength: 48)
+                    Text(ReplyText.inline(exchange.question))
+                        .font(.subheadline).lineLimit(3)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(mine.opacity(0.16), in: BubbleShape(mine: true))
+                }
+                // The answer: the helper's, on the left.
+                HStack(alignment: .bottom, spacing: 8) {
+                    AgentAvatar(agent: exchange.agent, size: 22)
+                    Text(ReplyText.inline(exchange.answer))
+                        .font(.subheadline).lineLimit(6)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(c.opacity(0.14), in: BubbleShape(mine: false))
+                    Spacer(minLength: 24)
+                }
+            }
+            .multilineTextAlignment(.leading)
+            .padding(12)
+            .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Shows the whole conversation between the two agents")
+        .sheet(isPresented: $open) {
+            ExchangeThread(asker: asker, agent: exchange.agent, repo: exchange.repo,
+                           exchanges: thread.filter { $0.agent == exchange.agent && $0.repo == exchange.repo })
+        }
+    }
+}
+
+/// Everything two agents said to each other, as a chat: the asking agent's
+/// messages on the right, the helper's on the left, in full and selectable.
+struct ExchangeThread: View {
+    @Environment(\.dismiss) private var dismiss
+    let asker: AgentKind
+    let agent: AgentKind
+    let repo: String
+    let exchanges: [PeerExchange]
+
+    var body: some View {
+        let c = Theme.color(for: agent)
+        let mine = Theme.color(for: asker)
+        NavigationStack {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(spacing: 14) {
+                        ForEach(exchanges) { x in
+                            HStack(alignment: .bottom, spacing: 8) {
+                                Spacer(minLength: 40)
+                                ReplyText(raw: x.question, selectable: true)
+                                    .padding(.horizontal, 14).padding(.vertical, 10)
+                                    .background(mine.opacity(0.16), in: BubbleShape(mine: true))
+                                AgentAvatar(agent: asker, size: 26)
+                            }
+                            HStack(alignment: .bottom, spacing: 8) {
+                                AgentAvatar(agent: agent, size: 26)
+                                ReplyText(raw: x.answer, selectable: true)
+                                    .padding(.horizontal, 14).padding(.vertical, 10)
+                                    .background(c.opacity(0.14), in: BubbleShape(mine: false))
+                                Spacer(minLength: 40)
+                            }
+                            .id(x.id)
+                        }
+                    }
+                    .padding(16)
+                }
+                .onAppear { if let last = exchanges.last { proxy.scrollTo(last.id, anchor: .top) } }
+            }
+            .navigationTitle("\(asker.displayName) and \(agent.displayName)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close")
+                }
+            }
+        }
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+    }
+}
+
+/// A chat bubble: round, with a smaller corner at the bottom on the speaker's side.
+struct BubbleShape: Shape {
+    let mine: Bool
+    func path(in r: CGRect) -> Path {
+        let big: CGFloat = 18, small: CGFloat = 6
+        return UnevenRoundedRectangle(
+            topLeadingRadius: big, bottomLeadingRadius: mine ? big : small,
+            bottomTrailingRadius: mine ? small : big, topTrailingRadius: big,
+            style: .continuous
+        ).path(in: r)
     }
 }
