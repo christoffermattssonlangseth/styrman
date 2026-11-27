@@ -80,4 +80,33 @@ private let tool = #"{"type":"tool_call","call":"c1","tool":{"name":"Bash","kind
         try await Task.sleep(for: .milliseconds(1_200))
         #expect(t.preview == nil, "gone for real after a moment")
     }
+
+    /// Live, a step that starts while its text still shows as the preview doesn't
+    /// blank it: the text turns into the message in place, the step shows after.
+    @Test func theTextBeforeAStepStaysUntilItArrives() async throws {
+        let t = SessionTimeline(sessionId: "S")
+        t.isLive = true
+        t.showPreview("I'll read the notes first.")
+        t.apply([try event(1, ms: 2_000, tool)])
+        #expect(t.preview == "I'll read the notes first.")
+        #expect(!t.shownItems.contains { if case .tool = $0 { true } else { false } }, "the step waits")
+        t.apply([try event(2, ms: 1_900, source: "transcript",
+                           #"{"type":"assistant_message","message":"m1","text":"I'll read the notes first.","mode":"final"}"#)])
+        #expect(t.preview == nil)
+        try await Task.sleep(for: .milliseconds(1_400))
+        let kinds = t.shownItems.map { item -> String in
+            switch item { case .assistant: "assistant"; case .tool: "tool"; default: "other" }
+        }
+        #expect(kinds == ["assistant", "tool"])
+    }
+
+    /// If no text comes, the preview left from before the step goes when it shows.
+    @Test func aLeftoverPreviewGoesWhenTheStepShows() async throws {
+        let t = SessionTimeline(sessionId: "S")
+        t.isLive = true
+        t.showPreview("Checking.")
+        t.apply([try event(1, ms: 2_000, tool)])
+        try await Task.sleep(for: .milliseconds(1_400))
+        #expect(t.preview == nil)
+    }
 }

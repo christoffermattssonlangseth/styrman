@@ -208,7 +208,7 @@ final class SessionTimeline {
     /// splitting a group of steps apart: the conversation would jump.
     @ObservationIgnored private var holdUntil: [String: Date] = [:]
     private var reveals = 0
-    static let toolHold: Duration = .milliseconds(700)
+    static let toolHold: Duration = .milliseconds(1300)
 
     /// `items` as shown: without tool calls still held back.
     var shownItems: [TimelineItem] {
@@ -222,10 +222,13 @@ final class SessionTimeline {
     }
 
     private func hold(_ id: String) {
-        holdUntil[id] = Date().addingTimeInterval(0.7)
+        holdUntil[id] = Date().addingTimeInterval(1.3)
+        let before = preview
         Task { [weak self] in
             try? await Task.sleep(for: Self.toolHold + .milliseconds(20))
             guard let self else { return }
+            // The step shows now: the text before it is done, if it's still here.
+            if before != nil, self.preview == before { self.shrinkTask?.cancel(); self.preview = nil }
             self.holdUntil[id] = nil
             self.reveals &+= 1
         }
@@ -268,8 +271,13 @@ final class SessionTimeline {
     private func apply(_ e: Event) {
         let key = "\(e.seq)"
         switch e.kind {
-        case .assistantMessage, .userMessage, .toolCall, .permissionRequested, .turnEnded, .sessionEnded:
+        case .assistantMessage, .userMessage, .permissionRequested, .turnEnded, .sessionEnded:
             shrinkTask?.cancel()
+            preview = nil
+        // Live, a new step is held back a moment (see `hold`) for the text written
+        // before it: that text, still showing as the preview, becomes the message in
+        // place instead of blinking out first.
+        case .toolCall where !isLive:
             preview = nil
         default:
             break
