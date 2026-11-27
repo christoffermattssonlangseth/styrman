@@ -193,6 +193,19 @@ impl Daemon {
         prompt: Option<String>,
         device: DeviceId,
     ) -> Result<SessionId> {
+        self.start_session_in(agent, cwd, prompt, device, None)
+    }
+
+    /// `start_session`, as a new tab in cmux workspace `workspace` when given (an
+    /// agent's `styr new`: the new agent opens beside it, like ⌘T, not ⌘N).
+    pub fn start_session_in(
+        self: &Arc<Self>,
+        agent: AgentKind,
+        cwd: &str,
+        prompt: Option<String>,
+        device: DeviceId,
+        workspace: Option<&str>,
+    ) -> Result<SessionId> {
         let name = command_name(agent).context("that agent can't be started from the phone")?;
         if !launchable_agents().contains(&agent) {
             bail!("{} isn't set up on the Mac (run `styr setup`)", agent);
@@ -219,7 +232,7 @@ impl Daemon {
         // Only fixed text and a hex id go into the command; the folder is passed
         // separately (or quoted).
         let command = format!("STYR_PRESET_LAUNCH_ID={launch} {name}");
-        let opened = match open_terminal(&title, &cwd, &command, &launch) {
+        let opened = match open_terminal(&title, &cwd, &command, &launch, workspace) {
             Ok(w) => w,
             Err(e) => {
                 self.end_unstarted(&session, &format!("{e:#}"));
@@ -268,20 +281,54 @@ impl Daemon {
 /// shell, so its and Styrman's routing apply as when you type the command), else a
 /// tmux session (`tmux attach` to see it), else a Terminal window. Returns what was
 /// opened, for messages.
-fn open_terminal(title: &str, cwd: &Path, command: &str, launch: &str) -> Result<&'static str> {
+fn open_terminal(
+    title: &str,
+    cwd: &Path,
+    command: &str,
+    launch: &str,
+    workspace: Option<&str>,
+) -> Result<&'static str> {
     let mut why = vec![];
     if let Some(cmux) = cmux_bin() {
-        let mut cmd = std::process::Command::new(&cmux);
-        cmd.env("CMUX_QUIET", "1");
-        // styrd isn't a cmux process: cmux lets it in with the password `styr setup`
-        // set up (password mode).
-        if let Some(pw) = home()
-            .ok()
-            .and_then(|h| std::fs::read_to_string(h.join(".styrman/cmux-password")).ok())
-        {
-            cmd.env("CMUX_SOCKET_PASSWORD", pw.trim());
+        let cmux_cmd = || {
+            let mut cmd = std::process::Command::new(&cmux);
+            cmd.env("CMUX_QUIET", "1");
+            // styrd isn't a cmux process: cmux lets it in with the password `styr
+            // setup` set up (password mode).
+            if let Some(pw) = home()
+                .ok()
+                .and_then(|h| std::fs::read_to_string(h.join(".styrman/cmux-password")).ok())
+            {
+                cmd.env("CMUX_SOCKET_PASSWORD", pw.trim());
+            }
+            cmd
+        };
+        if let Some(ws) = workspace.filter(|w| valid_cmux_id(w)) {
+            // A tab in that workspace runs a shell in no particular folder: cd first.
+            let out = cmux_cmd()
+                .args(["new-surface", "--workspace", ws])
+                .args([
+                    "--command",
+                    &format!("cd {} && {command}", shell_quote(&cwd.to_string_lossy())),
+                ])
+                .args(["--focus", "false"])
+                .output()
+                .context("couldn't run cmux")?;
+            if out.status.success() {
+                if let Some(surface) = surface_ref(&String::from_utf8_lossy(&out.stdout)) {
+                    let _ = cmux_cmd()
+                        .args(["rename-tab", "--workspace", ws, "--surface", surface, title])
+                        .output();
+                }
+                return Ok("cmux tab");
+            }
+            // The workspace closed, most likely: open one of its own instead.
+            tracing::info!(
+                "cmux couldn't open a tab in workspace {ws} ({}); opening a workspace",
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
         }
-        let out = cmd
+        let out = cmux_cmd()
             .args(["new-workspace", "--name", title])
             .arg("--cwd")
             .arg(cwd)
@@ -327,6 +374,22 @@ fn open_terminal(title: &str, cwd: &Path, command: &str, launch: &str) -> Result
         String::from_utf8_lossy(&out.stderr).trim()
     ));
     bail!("Couldn't open a terminal on the Mac ({})", why.join("; "))
+}
+
+/// A cmux workspace id or ref as cmux gives them (UUID, `workspace:3`): nothing else
+/// goes on its command line.
+fn valid_cmux_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && !id.starts_with('-')
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == ':')
+}
+
+/// The `surface:N` in cmux's `OK surface:N pane:M workspace:K`.
+fn surface_ref(out: &str) -> Option<&str> {
+    out.split_whitespace().find(|w| w.starts_with("surface:"))
 }
 
 fn tmux_bin() -> Option<PathBuf> {
@@ -386,6 +449,24 @@ fn agent_label(agent: AgentKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_cmux_id_reaches_its_command_line() {
+        assert!(valid_cmux_id("DA99B0BC-CB8F-4895-89A7-962CC9FADC31"));
+        assert!(valid_cmux_id("workspace:3"));
+        for bad in ["", "--focus", "a b", "x;rm", "$(id)", &"a".repeat(65)] {
+            assert!(!valid_cmux_id(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_new_tab_is_found_in_cmuxs_answer() {
+        assert_eq!(
+            surface_ref("OK surface:1000040119 pane:1000040052 workspace:1000040020\n"),
+            Some("surface:1000040119")
+        );
+        assert_eq!(surface_ref("OK"), None);
+    }
 
     #[test]
     fn tmux_and_terminal_commands_quote_the_folder() {

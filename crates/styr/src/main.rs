@@ -84,7 +84,7 @@ enum Cmd {
         /// The prompt.
         text: Vec<String>,
     },
-    /// Start an agent in a folder in a new cmux tab, shared with the phone
+    /// Start an agent in a folder in a new cmux tab (in this workspace when run inside cmux), shared with the phone
     /// (what the phone's New session does).
     New {
         /// claude, codex or agy.
@@ -414,7 +414,19 @@ fn main() -> Result<()> {
             };
             let cwd = std::fs::canonicalize(dir.unwrap_or(std::env::current_dir()?))?;
             let prompt = (!prompt.is_empty()).then(|| prompt.join(" "));
-            match call(Request::StartSession { agent, cwd, prompt })? {
+            let cmux_workspace = std::env::var("CMUX_WORKSPACE_ID").ok();
+            let here = cmux_workspace.is_some();
+            match call(Request::StartSession {
+                agent,
+                cwd,
+                prompt,
+                cmux_workspace,
+            })? {
+                Response::SessionStarting { session } if here => {
+                    println!(
+                        "started {session} in a new tab in this cmux workspace (shared with your phone)"
+                    )
+                }
                 Response::SessionStarting { session } => {
                     println!("started {session} in a new cmux tab (shared with your phone)")
                 }

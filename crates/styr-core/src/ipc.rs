@@ -145,6 +145,10 @@ pub enum Request {
         cwd: std::path::PathBuf,
         #[serde(default)]
         prompt: Option<String>,
+        /// The cmux workspace `styr new` ran in (an agent starting another): the new
+        /// agent opens as a tab there instead of in a workspace of its own.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cmux_workspace: Option<String>,
     },
     /// `/styr` caught by a `styr <agent>` terminal wrapper (Codex rejects unknown
     /// slash commands before any hook sees them).

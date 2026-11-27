@@ -1330,8 +1330,19 @@ impl Daemon {
                     host: Self::host_name(),
                 })
             }
-            Request::StartSession { agent, cwd, prompt } => self
-                .start_session(agent, &cwd.to_string_lossy(), prompt, "cli".into())
+            Request::StartSession {
+                agent,
+                cwd,
+                prompt,
+                cmux_workspace,
+            } => self
+                .start_session_in(
+                    agent,
+                    &cwd.to_string_lossy(),
+                    prompt,
+                    "cli".into(),
+                    cmux_workspace.as_deref(),
+                )
                 .map(|session| Response::SessionStarting { session }),
             Request::ShareLaunch {
                 launch_id,
