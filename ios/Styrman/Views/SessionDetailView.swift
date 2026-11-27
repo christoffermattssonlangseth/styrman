@@ -919,58 +919,151 @@ struct PlanCard: View {
     }
 }
 
+/// One step, as the Claude app shows it when you tap it: the tool's name on top,
+/// what the step was for, then its command and its output, each with a copy button.
 struct ToolDetailView: View {
     let item: ToolItem
     let title: String
     @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                StepDetail(item: item, title: title).padding(16)
+            }
+            .navigationTitle(item.tool.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close")
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+}
+
+/// A step's details: what it was for (unless `heading` is off), its command or
+/// input, an edit's changes, and its output.
+struct StepDetail: View {
+    let item: ToolItem
+    let title: String
+    var heading = true
+
+    /// Long output shows its first part (a whole log would make scrolling crawl).
+    static let maxOutput = 20_000
 
     private var outputText: String {
         guard let output = item.output else {
             return item.status == .completed || item.status == .failed ? "(no output)" : "Still running…"
         }
         let text = output.displayText
-        return text.isEmpty ? "(no output)" : text
+        if text.isEmpty { return "(no output)" }
+        return text.count > Self.maxOutput ? String(text.prefix(Self.maxOutput)) + "\n…" : text
     }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text(title)
-                        .font(item.tool.kind == .execute ? Theme.mono : .body)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12)
-                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-                    if item.tool.kind == .edit, let diffs = FileDiff.from(item.tool) {
-                        Text("Changes").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-                        DiffPreview(diffs: diffs)
-                    }
-                    Text("Output").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
-                    ScrollView(.horizontal) {
-                        Text(outputText)
-                            .font(.system(.footnote, design: .monospaced))
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .padding(12)
-                    }
-                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
-                }
-                .padding(16)
+        let shell = item.tool.kind == .execute
+        VStack(alignment: .leading, spacing: 18) {
+            if heading, shell, let d = item.tool.input["description"]?.string {
+                Text(d).font(.title3)
             }
-            .navigationTitle(item.tool.name)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { UIPasteboard.general.string = outputText } label: { Image(systemName: "doc.on.doc") }
-                        .accessibilityLabel("Copy output")
+            DetailCard(label: shell ? "Command" : "Input", copy: title) {
+                Text(shell ? ShellHighlight.attributed(title) : AttributedString(title))
+            }
+            if item.tool.kind == .edit, let diffs = FileDiff.from(item.tool) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Changes").font(.subheadline).foregroundStyle(.secondary)
+                    DiffPreview(diffs: diffs)
                 }
+            }
+            DetailCard(label: "Output", copy: outputText) {
+                Text(outputText)
             }
         }
-        .presentationDetents([.medium, .large])
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
+
+/// "Command" / "Output": a label with a copy button, the text in a rounded card.
+struct DetailCard<Content: View>: View {
+    let label: String
+    let copy: String
+    @ViewBuilder let content: Content
+    @State private var copied = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(label).font(.subheadline).foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    UIPasteboard.general.string = copy
+                    copied = true
+                    Task { try? await Task.sleep(for: .seconds(1.5)); copied = false }
+                } label: {
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc").font(.footnote)
+                }
+                .foregroundStyle(.secondary)
+                .accessibilityLabel("Copy \(label.lowercased())")
+            }
+            content
+                .font(.system(.footnote, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(14)
+                .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+    }
+}
+
+/// A shell command coloured the way the Claude app does: commands in orange,
+/// quoted strings in green, the rest plain.
+enum ShellHighlight {
+    static let command = Color(red: 0.95, green: 0.55, blue: 0.35)
+    static let string = Color(red: 0.55, green: 0.78, blue: 0.45)
+
+    static func attributed(_ cmd: String) -> AttributedString {
+        var out = AttributedString()
+        var word = ""
+        var atStart = true   // the next word is a command
+        var quote: Character? = nil
+        var str = ""
+        func flushWord() {
+            guard !word.isEmpty else { return }
+            var a = AttributedString(word)
+            // `VAR=value` before a command isn't the command.
+            if atStart, !word.contains("=") { a.foregroundColor = command; atStart = false }
+            else if atStart, word.contains("=") { /* still waiting for the command */ }
+            out += a
+            word = ""
+        }
+        var chars = Array(cmd)[...]
+        while let c = chars.first {
+            chars = chars.dropFirst()
+            if let q = quote {
+                str.append(c)
+                if c == q { var a = AttributedString(str); a.foregroundColor = string; out += a; str = ""; quote = nil }
+                continue
+            }
+            switch c {
+            case "'", "\"":
+                flushWord(); atStart = false; quote = c; str = String(c)
+            case " ", "\t":
+                flushWord(); out += AttributedString(String(c))
+            case "\n", ";", "|", "&", "(":
+                flushWord(); out += AttributedString(String(c)); atStart = true
+            default:
+                word.append(c)
+            }
+        }
+        flushWord()
+        if !str.isEmpty { var a = AttributedString(str); a.foregroundColor = string; out += a }
+        return out
+    }
+}
+
 
 /// Message box at the bottom of a session.
 struct Composer: View {
@@ -1359,17 +1452,14 @@ struct StepsRow: View {
         let failed = tools.filter { $0.status == .failed }.count
         Button { open = true } label: {
             HStack(spacing: 8) {
-                let kind = (tools.last ?? tools[0]).tool.kind
                 Group {
                     if tools.count > 1 && !running {
-                        Image(systemName: "list.bullet")
-                    } else if kind == .execute {
-                        Text(">_").font(.system(.footnote, design: .monospaced).weight(.semibold))
+                        Image(systemName: "list.bullet").font(.footnote)
                     } else {
-                        Image(systemName: Theme.symbol(for: kind))
+                        StepIcon(kind: (tools.last ?? tools[0]).tool.kind)
                     }
                 }
-                .font(.footnote).frame(width: 18)
+                .frame(width: 18)
                 if running {
                     Shimmer(text: Self.doing((tools.last ?? tools[0]).tool.kind), color: .secondary)
                 } else {
@@ -1454,7 +1544,8 @@ struct StepsRow: View {
     }
 }
 
-/// The steps of a run, each a tap away from its command and output.
+/// The steps of a run, as the Claude app lists them: one under another, joined by a
+/// thin line, each opening in place to its command and output.
 struct StepsSheet: View {
     let tools: [ToolItem]
     let cwd: String?
@@ -1462,15 +1553,84 @@ struct StepsSheet: View {
 
     var body: some View {
         NavigationStack {
-            List(Array(tools.enumerated()), id: \.offset) { _, t in
-                ToolCallRow(item: t, title: displayTitle(t.tool, cwd: cwd), bare: true)
-                    .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(Array(tools.enumerated()), id: \.offset) { i, t in
+                        StepEntry(item: t, cwd: cwd, last: i == tools.count - 1)
+                    }
+                }
+                .padding(16)
             }
             .navigationTitle(StepsRow.summary(tools))
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close")
+                }
+            }
         }
         .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+}
+
+/// One step in a run's list: its icon on the line, what it did, and a chevron that
+/// opens it.
+struct StepEntry: View {
+    let item: ToolItem
+    let cwd: String?
+    let last: Bool
+    @State private var open = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(spacing: 6) {
+                StepIcon(kind: item.tool.kind).frame(height: 22)
+                if !last {
+                    Rectangle().fill(Color.secondary.opacity(0.3)).frame(width: 1).frame(maxHeight: .infinity)
+                }
+            }
+            .frame(width: 22)
+            VStack(alignment: .leading, spacing: 12) {
+                Button { withAnimation(.snappy) { open.toggle() } } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(StepsRow.title(item, cwd: cwd))
+                            .lineLimit(open ? nil : 1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if item.status == .failed {
+                            Image(systemName: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
+                        } else if item.status == .running || item.status == .pending {
+                            ProgressView().controlSize(.mini)
+                        }
+                        Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(open ? 90 : 0))
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                if open {
+                    StepDetail(item: item, title: displayTitle(item.tool, cwd: cwd), heading: false)
+                        .transition(.opacity)
+                }
+            }
+            .padding(.bottom, last ? 0 : 22)
+        }
+    }
+}
+
+/// A step's mark: `>_` for a command, the tool's symbol otherwise.
+struct StepIcon: View {
+    let kind: ToolKind
+    var body: some View {
+        Group {
+            if kind == .execute {
+                Text(">_").font(.system(.footnote, design: .monospaced).weight(.semibold))
+            } else {
+                Image(systemName: Theme.symbol(for: kind)).font(.footnote)
+            }
+        }
+        .foregroundStyle(.secondary)
     }
 }
 

@@ -4,6 +4,7 @@
 import Foundation
 import Testing
 @testable import Styrman
+import SwiftUI
 
 private func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
     try JSONDecoder().decode(T.self, from: Data(json.utf8))
@@ -443,5 +444,23 @@ struct StepsTests {
         var d = s; d.note = "thought for 1s"
         #expect(WorkingRow.timeLine(d, extra: 2, thinkingFor: nil) == "22s · thought for 1s")
         #expect(WorkingRow.timeLine(nil, extra: 0, thinkingFor: nil) == nil)
+    }
+}
+
+@MainActor
+struct ShellHighlightTests {
+    @Test func commandsAndStringsAreColoured() {
+        let a = ShellHighlight.attributed("S=/tmp; tail -n 3 'a b' && rm x | head")
+        func colour(of word: String) -> Color? {
+            guard let r = a.range(of: word) else { return nil }
+            return a[r].runs.first?.foregroundColor
+        }
+        #expect(String(a.characters) == "S=/tmp; tail -n 3 'a b' && rm x | head")
+        #expect(colour(of: "tail") == ShellHighlight.command)
+        #expect(colour(of: "rm") == ShellHighlight.command)
+        #expect(colour(of: "head") == ShellHighlight.command)
+        #expect(colour(of: "'a b'") == ShellHighlight.string)
+        #expect(colour(of: "-n") == nil)
+        #expect(colour(of: "S=/tmp") == nil)
     }
 }
