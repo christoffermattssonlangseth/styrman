@@ -51,10 +51,7 @@ class SessionTimeline(val sessionId: String) {
     fun showPreview(text: String?) {
         if (text.isNullOrEmpty()) { preview = null; return }
         // Already here as a message (the screen redrew a finished reply): no echo.
-        fun squash(s: String) = s.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
-        val body = squash(text.removePrefix("…")).take(200)
-        val last = items.lastOrNull { it is TimelineItem.Assistant } as? TimelineItem.Assistant
-        preview = if (last != null && squash(last.text).contains(body)) null else text
+        preview = if (alreadySaid(text, items.takeLast(12))) null else text
     }
 
     /** The diffs a permission is about: from its own input, or else from the latest edit
@@ -192,6 +189,16 @@ class SessionTimeline(val sessionId: String) {
     }
 
     companion object {
+        /** Whether [preview] is a reply already among [items]. The preview is read off
+         *  the terminal (a heading as bold, code without backticks) and the message is
+         *  Markdown: compare the words, not the markup. */
+        fun alreadySaid(preview: String, items: List<TimelineItem>): Boolean {
+            fun words(s: String) = s.filterNot { it in "*`#>" }.split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
+            val body = words(preview.removePrefix("…")).take(200)
+            if (body.isEmpty()) return false
+            return items.any { it is TimelineItem.Assistant && words(it.text).contains(body) }
+        }
+
         fun resolutionText(k: EventKind.PermissionResolved): String {
             val where = when (k.by) {
                 "phone" -> "on a phone"
