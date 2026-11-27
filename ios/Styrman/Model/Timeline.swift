@@ -80,8 +80,12 @@ final class SessionTimeline {
     private(set) var status: WorkStatus?
     private(set) var statusAt = Date()
 
+    /// Since when it's been thinking (for "still thinking…").
+    private(set) var thinkingSince: Date?
+
     func showStatus(_ s: WorkStatus?) {
         guard s != status else { return }
+        if s?.thinking == true { if status?.thinking != true { thinkingSince = .now } } else { thinkingSince = nil }
         status = s
         statusAt = .now
     }

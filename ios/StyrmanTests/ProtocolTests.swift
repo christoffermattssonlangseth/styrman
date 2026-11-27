@@ -419,3 +419,29 @@ private func event(_ seq: UInt64, _ kind: String) -> String {
         }
     }
 }
+
+@MainActor
+struct StepsTests {
+    func step(_ kind: ToolKind, _ status: ToolStatus = .completed) -> ToolItem {
+        ToolItem(call: "c", tool: ToolInfo(name: "T", kind: kind, title: "t", input: .null, locations: nil),
+                 status: status, output: nil)
+    }
+
+    @Test func aRunReadsLikeTheClaudeApp() {
+        #expect(StepsRow.summary([step(.execute), step(.execute), step(.read), step(.execute, .failed)])
+                == "Ran 3 commands, read a file (1 failed)")
+        #expect(StepsRow.summary([step(.read), step(.read), step(.edit)]) == "Read 2 files, edited a file")
+        #expect(StepsRow.summary([step(.search), step(.search)]) == "Searched 2 times")
+    }
+
+    @Test func thinkingShowsTheTimeInsteadOfTheWord() {
+        let s = WorkStatus(label: "Brewing…", elapsedSecs: 20)
+        #expect(WorkingRow.timeLine(s, extra: 0, thinkingFor: nil) == nil)
+        var t = s; t.thinking = true
+        #expect(WorkingRow.timeLine(t, extra: 2, thinkingFor: 1) == "22s · thinking…")
+        #expect(WorkingRow.timeLine(t, extra: 6, thinkingFor: 9) == "26s · still thinking…")
+        var d = s; d.note = "thought for 1s"
+        #expect(WorkingRow.timeLine(d, extra: 2, thinkingFor: nil) == "22s · thought for 1s")
+        #expect(WorkingRow.timeLine(nil, extra: 0, thinkingFor: nil) == nil)
+    }
+}

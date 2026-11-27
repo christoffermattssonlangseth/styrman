@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -252,7 +253,9 @@ fun SessionScreen(connection: DaemonConnection, speaker: Speaker, sessionId: Str
             }
             if (preview != null) item(key = "preview") { LivePreviewRow(preview, agent) }
             // Under it, as in the terminal: what the agent is doing, and for how long.
-            if (status != null) item(key = "status") { StatusRow(status, timeline.statusAtMs, agent) }
+            if (summary?.status == SessionStatus.Working && (status != null || preview == null)) item(key = "status") {
+                StatusRow(status, timeline.statusAtMs, timeline.thinkingSinceMs, agent)
+            }
             if (timeline.isLive && !timeline.hasContent && timeline.pending.isEmpty()) item {
                 Notice("Nothing yet. Prompts, tool calls and replies show up here as they happen.")
             }
@@ -675,45 +678,61 @@ private fun ModeDialog(current: PermissionMode, onDismiss: () -> Unit, choose: (
     )
 }
 
-/** The agent's status line, as its terminal draws it: a spinning glyph, the word it
- *  picked ("Crunching…") with a shimmer passing over it, and in brackets how long it's
- *  been, the tokens so far and whether it's thinking. The clock runs on between readings. */
+/** While the agent works, as the Claude app shows it: four dots taking turns and the
+ *  word Claude picked ("Brewing…") in its colour, a lighter band passing over it; while
+ *  it thinks, or just after, how long it's been ("26s · still thinking…"). */
 @Composable
-private fun StatusRow(status: WorkStatus, sinceMs: Long, agent: AgentKind) {
+private fun StatusRow(status: WorkStatus?, sinceMs: Long, thinkingSinceMs: Long?, agent: AgentKind) {
     val tint = agentColor(agent)
     var now by androidx.compose.runtime.remember { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
     androidx.compose.runtime.LaunchedEffect(Unit) {
-        while (true) { kotlinx.coroutines.delay(120); now = System.currentTimeMillis() }
+        while (true) { kotlinx.coroutines.delay(70); now = System.currentTimeMillis() }
     }
-    val frames = listOf("·", "✢", "✳", "✶", "✻", "✽", "✽", "✻", "✶", "✳", "✢", "·")
-    val label = status.label
-    val head = ((now / 90) % (label.length + 12)).toInt() - 3
-    val detail = status.detail(extra = (now - sinceMs) / 1000)
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val time = timeLine(status, (now - sinceMs) / 1000, thinkingSinceMs?.let { (now - it) / 1000 })
+    val label = status?.label ?: "Working…"
+    val lit = ((now / 180) % 4).toInt()
     Row(
-        Modifier.fillMaxWidth().semantics { contentDescription = "${agent.displayName}: $label ${status.detail()}" },
-        verticalAlignment = Alignment.Top,
+        Modifier.fillMaxWidth().semantics { contentDescription = "${agent.displayName} is working" },
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(frames[((now / 120) % frames.size).toInt()], color = tint, fontFamily = FontFamily.Monospace,
-            modifier = Modifier.width(18.dp))
-        Text(
-            androidx.compose.ui.text.buildAnnotatedString {
-                label.forEachIndexed { i, ch ->
-                    pushStyle(androidx.compose.ui.text.SpanStyle(color = if (kotlin.math.abs(i - head) <= 1) tint.copy(alpha = 0.45f) else tint))
-                    append(ch)
-                    pop()
-                }
-                if (detail.isNotEmpty()) {
-                    pushStyle(androidx.compose.ui.text.SpanStyle(color = muted))
-                    append("  ($detail)")
-                    pop()
-                }
-            },
-            fontFamily = FontFamily.Monospace,
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = 2,
-        )
+        Box(Modifier.width(22.dp).height(14.dp)) {
+            listOf(0 to -4, 4 to 0, 0 to 4, -4 to 0).forEachIndexed { i, (x, y) ->
+                Box(
+                    Modifier.align(Alignment.Center)
+                        .offset(x = x.dp, y = y.dp)
+                        .size(3.5.dp)
+                        .background(tint.copy(alpha = if (i == lit) 1f else 0.4f), androidx.compose.foundation.shape.CircleShape),
+                )
+            }
+        }
+        if (time != null) {
+            Text(time, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+        } else {
+            val head = ((now / 70) % (label.length + 14)).toInt() - 3
+            Text(
+                androidx.compose.ui.text.buildAnnotatedString {
+                    label.forEachIndexed { i, ch ->
+                        val d = kotlin.math.abs(i - head)
+                        pushStyle(androidx.compose.ui.text.SpanStyle(color = tint.copy(alpha = if (d <= 2) 0.45f + 0.2f * d else 1f)))
+                        append(ch)
+                        pop()
+                    }
+                },
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
     }
+}
+
+/** While it thinks or right after: "26s · still thinking…", "22s · thought for 1s".
+ *  Null otherwise (the word shows). */
+internal fun timeLine(s: WorkStatus?, extra: Long, thinkingFor: Long?): String? {
+    val secs = s?.elapsedSecs ?: return null
+    val time = WorkStatus.duration(secs + maxOf(0, extra))
+    if (s.thinking) return "$time · ${if ((thinkingFor ?: 0) >= 8) "still thinking…" else "thinking…"}"
+    val note = s.note
+    if (note != null && note.startsWith("thought for")) return "$time · $note"
+    return null
 }
 
 /** The reply being written right now, as the terminal shows it: grows, with a blinking

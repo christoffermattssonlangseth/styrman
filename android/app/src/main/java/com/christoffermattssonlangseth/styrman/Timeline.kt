@@ -50,8 +50,13 @@ class SessionTimeline(val sessionId: String) {
     var statusAtMs = 0L
         private set
 
+    /** Since when it's been thinking (for "still thinking…"). */
+    var thinkingSinceMs: Long? = null
+        private set
+
     fun showStatus(s: WorkStatus?) {
         if (s == status) return
+        thinkingSinceMs = if (s?.thinking == true) thinkingSinceMs.takeIf { status?.thinking == true } ?: System.currentTimeMillis() else null
         statusAtMs = System.currentTimeMillis()
         status = s
     }

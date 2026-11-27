@@ -234,7 +234,7 @@ struct SessionDetailView: View {
                         TimelineRow(item: item, cwd: summary?.cwd, sessionId: sessionId, agent: agent,
                                     latestReplyId: latest).id(item.id)
                     case .tools(let id, let tools):
-                        ToolRunCard(tools: tools, cwd: summary?.cwd).id(id)
+                        StepsRow(tools: tools, cwd: summary?.cwd).id(id)
                     }
                 }
                 ForEach(timeline.pending) { p in
@@ -245,10 +245,9 @@ struct SessionDetailView: View {
                         LivePreviewRow(text: text, agent: agent, sessionId: sessionId).id("preview")
                     }
                     // Under it, as in the terminal: what the agent is doing, and for how long.
-                    if let status = timeline.status {
-                        StatusRow(status: status, since: timeline.statusAt, agent: agent).id("status")
-                    } else if timeline.preview == nil {
-                        WorkingRow(agent: agent).id("preview")
+                    if timeline.status != nil || timeline.preview == nil {
+                        WorkingRow(status: timeline.status, since: timeline.statusAt,
+                                   thinkingSince: timeline.thinkingSince, agent: agent).id("status")
                     }
                 }
                 if timeline.isLive && !timeline.hasContent && timeline.pending.isEmpty {
@@ -500,7 +499,8 @@ struct TimelineRow: View {
         case .plan(_, let entries):
             PlanCard(entries: entries)
         case .notice(_, let text, let warning):
-            Label(text, systemImage: warning ? "exclamationmark.triangle" : "bell")
+            // Another agent's reply quoted here is Markdown: bold as bold, not `**`.
+            Label { Text(ReplyText.inline(text)) } icon: { Image(systemName: warning ? "exclamationmark.triangle" : "bell") }
                 .font(.footnote).foregroundStyle(warning ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
         }
     }
@@ -1302,7 +1302,7 @@ struct AgentMessageRow: View {
                 Text("From \(message.sender)").font(.caption.weight(.semibold)).foregroundStyle(c)
                 Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.secondary)
             }
-            Text(message.body).textSelection(.enabled)
+            ReplyText(raw: message.body).textSelection(.enabled)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1328,10 +1328,8 @@ enum DisplayRow: Identifiable {
         var out: [DisplayRow] = []
         var run: [(String, ToolItem)] = []
         func flush() {
-            if run.count >= 2 {
-                out.append(.tools(id: run[0].0, run.map(\.1)))
-            } else if let (id, t) = run.first {
-                out.append(.item(.tool(id: id, t)))
+            if let first = run.first {
+                out.append(.tools(id: first.0, run.map(\.1)))
             }
             run = []
         }
@@ -1348,46 +1346,159 @@ enum DisplayRow: Identifiable {
     }
 }
 
-/// Several tool calls in a row, as one card: the latest few, the rest a tap away.
-struct ToolRunCard: View {
+/// A run of steps, as the Claude app shows it: one quiet line. "Ran 3 commands,
+/// read a file", a single step's description, or while one runs, "Running". Tap
+/// for the steps, their commands and output.
+struct StepsRow: View {
     let tools: [ToolItem]
     let cwd: String?
-    @State private var expanded = false
-    private let visible = 3
+    @State private var open = false
 
     var body: some View {
-        let hidden = expanded ? 0 : max(0, tools.count - visible)
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                withAnimation(.snappy) { expanded.toggle() }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "square.stack.3d.up").font(.caption2)
-                    Text("\(tools.count) steps").font(.caption.weight(.semibold))
-                    if tools.contains(where: { $0.status == .pending || $0.status == .running }) {
-                        ProgressView().controlSize(.mini)
-                    }
-                    Spacer()
-                    if tools.count > visible {
-                        Text(expanded ? "Show fewer" : "\(hidden) more").font(.caption2)
-                        Image(systemName: "chevron.down").font(.caption2.weight(.semibold))
-                            .rotationEffect(.degrees(expanded ? 180 : 0))
+        let running = tools.last.map { $0.status == .pending || $0.status == .running } ?? false
+        let failed = tools.filter { $0.status == .failed }.count
+        Button { open = true } label: {
+            HStack(spacing: 8) {
+                let kind = (tools.last ?? tools[0]).tool.kind
+                Group {
+                    if tools.count > 1 && !running {
+                        Image(systemName: "list.bullet")
+                    } else if kind == .execute {
+                        Text(">_").font(.system(.footnote, design: .monospaced).weight(.semibold))
+                    } else {
+                        Image(systemName: Theme.symbol(for: kind))
                     }
                 }
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 2)
-                .contentShape(Rectangle())
+                .font(.footnote).frame(width: 18)
+                if running {
+                    Shimmer(text: Self.doing((tools.last ?? tools[0]).tool.kind), color: .secondary)
+                } else {
+                    Text(tools.count == 1 ? Self.title(tools[0], cwd: cwd) : Self.summary(tools))
+                        .lineLimit(1).truncationMode(.tail)
+                    if tools.count == 1, tools[0].tool.kind == .edit, let diffs = FileDiff.from(tools[0].tool) {
+                        DiffCounts(diffs: diffs)
+                    }
+                    if failed > 0 {
+                        Image(systemName: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
+                    }
+                }
+                Image(systemName: "chevron.right").font(.caption2.weight(.semibold))
+                Spacer(minLength: 0)
             }
-            .buttonStyle(.plain)
-            .disabled(tools.count <= visible)
-            ForEach(Array(tools.enumerated().dropFirst(hidden)), id: \.offset) { _, t in
-                ToolCallRow(item: t, title: displayTitle(t.tool, cwd: cwd), bare: true)
-                    .transition(.opacity)
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Shows the steps, their commands and output")
+        .sheet(isPresented: $open) {
+            if tools.count == 1 {
+                ToolDetailView(item: tools[0], title: displayTitle(tools[0].tool, cwd: cwd))
+            } else {
+                StepsSheet(tools: tools, cwd: cwd)
             }
         }
-        .padding(.bottom, 3)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.primary.opacity(0.05)))
+    }
+
+    /// What one step says: Claude's description of a command ("Run the parser
+    /// tests"), else the command or the tool's title.
+    static func title(_ t: ToolItem, cwd: String?) -> String {
+        (t.tool.kind == .execute ? t.tool.input["description"]?.string : nil) ?? displayTitle(t.tool, cwd: cwd)
+    }
+
+    /// A step in progress: "Running", "Reading", …
+    static func doing(_ kind: ToolKind) -> String {
+        switch kind {
+        case .execute: "Running"
+        case .read: "Reading"
+        case .edit: "Editing"
+        case .delete: "Deleting"
+        case .move: "Moving"
+        case .search: "Searching"
+        case .fetch: "Fetching"
+        case .think: "Planning"
+        case .mcp, .other: "Working"
+        }
+    }
+
+    /// "Ran 3 commands, read a file (1 failed)", kinds in the order they came.
+    static func summary(_ tools: [ToolItem]) -> String {
+        var order: [String] = []
+        var counts: [String: Int] = [:]
+        for t in tools {
+            let key: String = switch t.tool.kind {
+            case .execute: "ran|command|commands"
+            case .read: "read|file|files"
+            case .edit: "edited|file|files"
+            case .delete: "deleted|file|files"
+            case .move: "moved|file|files"
+            case .search: "searched|time|times"
+            case .fetch: "fetched|page|pages"
+            case .think: "updated|plan|plans"
+            case .mcp, .other: "used|tool|tools"
+            }
+            if counts[key] == nil { order.append(key) }
+            counts[key, default: 0] += 1
+        }
+        var text = order.map { key in
+            let w = key.split(separator: "|").map(String.init)
+            let n = counts[key]!
+            if w[1] == "time" { return n == 1 ? "searched once" : "searched \(n) times" }
+            if w[1] == "plan" { return "updated the plan" }
+            return n == 1 ? "\(w[0]) a \(w[1])" : "\(w[0]) \(n) \(w[2])"
+        }.joined(separator: ", ")
+        let failed = tools.filter { $0.status == .failed }.count
+        if failed > 0 { text += " (\(failed) failed)" }
+        return text.prefix(1).uppercased() + text.dropFirst()
+    }
+}
+
+/// The steps of a run, each a tap away from its command and output.
+struct StepsSheet: View {
+    let tools: [ToolItem]
+    let cwd: String?
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List(Array(tools.enumerated()), id: \.offset) { _, t in
+                ToolCallRow(item: t, title: displayTitle(t.tool, cwd: cwd), bare: true)
+                    .listRowInsets(EdgeInsets(top: 2, leading: 8, bottom: 2, trailing: 8))
+            }
+            .navigationTitle(StepsRow.summary(tools))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        .presentationDetents([.medium, .large])
+    }
+}
+
+/// Text with a lighter band passing over it, as the Claude app draws what's in progress.
+struct Shimmer: View {
+    let text: String
+    var color: Color
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        if reduceMotion {
+            Text(text).foregroundStyle(color)
+        } else {
+            TimelineView(.animation(minimumInterval: 1.0 / 20)) { ctx in
+                let n = text.count
+                // One pass about every two seconds, with a pause off the end.
+                let head = (ctx.date.timeIntervalSinceReferenceDate / 0.07)
+                    .truncatingRemainder(dividingBy: Double(n + 14)) - 3
+                var out = AttributedString()
+                for (i, ch) in text.enumerated() {
+                    var a = AttributedString(String(ch))
+                    let d = abs(Double(i) - head)
+                    a.foregroundColor = color.opacity(d < 2.5 ? 0.45 + 0.2 * d : 1)
+                    out += a
+                }
+                return Text(out)
+            }
+        }
     }
 }
 
@@ -1515,76 +1626,63 @@ struct LivePreviewRow: View {
     }
 }
 
-/// While the agent works and nothing it writes shows yet: one quiet line, like the
-/// Claude app's, in place of a preview.
+/// While the agent works, as the Claude app shows it: a little spinner and the
+/// word Claude picked ("Brewing…") in its colour; while it thinks, or just after,
+/// how long it's been ("26s · still thinking…", "22s · thought for 1s").
 struct WorkingRow: View {
+    var status: WorkStatus? = nil
+    var since = Date()
+    var thinkingSince: Date? = nil
     let agent: AgentKind
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.4)) { ctx in
-            let n = Int(ctx.date.timeIntervalSinceReferenceDate / 0.4) % 3
-            HStack(spacing: 8) {
-                HStack(spacing: 3) {
-                    ForEach(0..<3) { i in
-                        Circle().frame(width: 4, height: 4).opacity(i == n ? 1 : 0.3)
-                    }
+        let tint = Theme.color(for: agent)
+        HStack(spacing: 8) {
+            WorkingDots(color: tint).frame(width: 18)
+            TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                if let time = Self.timeLine(status, extra: Int(ctx.date.timeIntervalSince(since)),
+                                            thinkingFor: thinkingSince.map { ctx.date.timeIntervalSince($0) }) {
+                    Text(time).foregroundStyle(.secondary)
+                } else {
+                    Shimmer(text: status?.label ?? "Working…", color: tint)
                 }
-                Text("Working…")
             }
-            .foregroundStyle(Theme.color(for: agent))
-            .font(.subheadline)
         }
+        .font(.subheadline)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(agent.displayName) is working")
+    }
+
+    /// While it thinks or right after: "26s · still thinking…", "22s · thought for 1s".
+    /// Nil otherwise (the word shows).
+    static func timeLine(_ s: WorkStatus?, extra: Int, thinkingFor: TimeInterval?) -> String? {
+        guard let s, let secs = s.elapsedSecs else { return nil }
+        let time = WorkStatus.duration(secs + max(0, extra))
+        if s.thinking { return "\(time) · \((thinkingFor ?? 0) >= 8 ? "still thinking…" : "thinking…")" }
+        if let note = s.note, note.hasPrefix("thought for") { return "\(time) · \(note)" }
+        return nil
     }
 }
 
-/// The agent's status line, as its terminal draws it: a spinning glyph, the word it
-/// picked ("Crunching…") with a shimmer passing over it, and in brackets how long
-/// it's been, the tokens so far and whether it's thinking. The clock runs on between
-/// readings.
-struct StatusRow: View {
-    let status: WorkStatus
-    let since: Date
-    let agent: AgentKind
+/// Four dots taking turns, the Claude app's working mark.
+struct WorkingDots: View {
+    let color: Color
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// Claude's spinner, there and back.
-    static let frames = ["·", "✢", "✳", "✶", "✻", "✽", "✽", "✻", "✶", "✳", "✢", "·"]
-
     var body: some View {
-        TimelineView(.periodic(from: .now, by: reduceMotion ? 1 : 0.12)) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
-            let extra = Int(ctx.date.timeIntervalSince(since))
-            let detail = status.detail(extra: extra)
-            HStack(alignment: .firstTextBaseline, spacing: 7) {
-                Text(reduceMotion ? "✻" : Self.frames[Int(t / 0.12) % Self.frames.count])
-                    .foregroundStyle(Theme.color(for: agent))
-                    .frame(width: 14)
-                (Text(shimmer(status.label, at: t))
-                 + Text(detail.isEmpty ? "" : "  (\(detail))").foregroundColor(.secondary))
-                    .lineLimit(2)
+        TimelineView(.periodic(from: .now, by: 0.18)) { ctx in
+            let lit = reduceMotion ? -1 : Int(ctx.date.timeIntervalSinceReferenceDate / 0.18) % 4
+            let spots: [CGPoint] = [.init(x: 0, y: -4), .init(x: 4, y: 0), .init(x: 0, y: 4), .init(x: -4, y: 0)]
+            ZStack {
+                ForEach(0..<4, id: \.self) { i in
+                    Circle().fill(color.opacity(i == lit ? 1 : 0.4))
+                        .frame(width: 3.5, height: 3.5)
+                        .offset(x: spots[i].x, y: spots[i].y)
+                }
             }
-            .font(.system(.subheadline, design: .monospaced))
+            .frame(width: 12, height: 12)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(agent.displayName): \(status.label) \(status.detail())")
-    }
-
-    /// The label in the agent's colour, a lighter band moving across it.
-    private func shimmer(_ s: String, at t: TimeInterval) -> AttributedString {
-        var out = AttributedString()
-        let n = s.count
-        let base = Theme.color(for: agent)
-        // One pass about every two seconds, with a pause off the end.
-        let head = reduceMotion ? -10 : Int((t / 0.09).truncatingRemainder(dividingBy: Double(n + 12))) - 3
-        for (i, ch) in s.enumerated() {
-            var a = AttributedString(String(ch))
-            a.foregroundColor = abs(i - head) <= 1 ? base.opacity(0.45) : base
-            out += a
-        }
-        return out
     }
 }
 
