@@ -599,6 +599,13 @@ struct SessionLineTests {
 }
 
 struct FixesTests {
+    /// The working star never turns into an emoji (a blinking green square).
+    @Test func theSpinnerHasNoEmoji() {
+        for f in WorkingDots.frames {
+            #expect(!f.unicodeScalars.contains { $0.properties.isEmoji }, "\(f)")
+        }
+    }
+
     /// An option kind from a newer Mac doesn't hide the whole approval.
     @Test func anUnknownOptionKindStillDecodes() throws {
         let o = try JSONDecoder().decode(PermissionOption.self,

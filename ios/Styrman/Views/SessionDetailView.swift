@@ -1892,8 +1892,9 @@ struct WorkingRow: View {
 struct WorkingDots: View {
     let color: Color
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// Out and back: · ✢ ✳ ✶ ✻ ✽ ✻ ✶ ✳ ✢
-    static let frames = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"]
+    /// Out and back: · ✢ ✶ ✻ ✽ ✻ ✶ ✢. (Not ✳ or ✴: iOS draws those as emoji,
+    /// a green square blinking with every turn.)
+    static let frames = ["·", "✢", "✶", "✻", "✽", "✻", "✶", "✢"]
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.12)) { ctx in
