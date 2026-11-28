@@ -515,3 +515,19 @@ struct ExchangeTests {
         #expect(PeerExchange.full("Nothing like it in there, not at all, no…", in: helper) == nil)
     }
 }
+
+@MainActor
+struct SessionRowTests {
+    @Test func shortTimes() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        #expect(SessionCard.ago(now, now: now) == "now")
+        #expect(SessionCard.ago(now.addingTimeInterval(-240), now: now) == "4m")
+        #expect(SessionCard.ago(now.addingTimeInterval(-22 * 3600), now: now) == "22h")
+        #expect(SessionCard.ago(now.addingTimeInterval(-3 * 86_400), now: now) == "3d")
+    }
+
+    @Test func halfABoldPairIsDropped() {
+        #expect(SessionCard.balanced("NOT YET.** Two issues") == "NOT YET. Two issues")
+        #expect(SessionCard.balanced("a **bold** word") == "a **bold** word")
+    }
+}

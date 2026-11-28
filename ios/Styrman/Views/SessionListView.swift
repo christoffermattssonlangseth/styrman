@@ -187,23 +187,25 @@ struct SessionListView: View {
         let timeline = connection.timeline(for: s.id)
         let asker = s.helperOf.flatMap { connection.session($0) }
         return VStack(alignment: .leading, spacing: 6) {
-            if let asker {
-                Label("Helping \(asker.agent.displayName) · \(asker.repoName)", systemImage: "arrow.turn.down.right")
-                    .font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                    .padding(.leading, 4)
+            HStack(spacing: 6) {
+                if asker != nil {
+                    Image(systemName: "arrow.turn.down.right")
+                        .font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                }
+                Button { path.append(s.id) } label: {
+                    SessionCard(session: s, compact: compact)
+                }
+                .buttonStyle(CardPressStyle())
+                .accessibilityHint(asker.map { "Helping \($0.agent.displayName) in \($0.repoName)" } ?? "")
             }
-            Button { path.append(s.id) } label: {
-                SessionCard(session: s, compact: compact)
-            }
-            .buttonStyle(CardPressStyle())
             if s.status == .needsApproval, timeline.isLive,
                let permission = timeline.openPermissions.last {
                 SessionQuickApproval(session: s.id, cwd: s.cwd, permission: permission)
                     .id(permission.request)
             }
         }
-        .padding(.leading, asker == nil ? 0 : 18)
-        .plainRow(top: 5, bottom: 5)
+        .padding(.leading, asker == nil ? 0 : 6)
+        .plainRow(top: 3, bottom: 3)
         .swipeActions(edge: .trailing) {
             Button(s.status == .done ? "Remove" : "Stop sharing", role: .destructive) {
                 connection.stopSharing(s.id)
@@ -361,65 +363,84 @@ struct SessionCard: View {
     private var tint: Color { Theme.color(for: session.agent) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: compact ? 4 : 10) {
-            HStack(alignment: .center, spacing: 12) {
-                WorkingAvatar(agent: session.agent, working: session.status == .working, size: compact ? 30 : 40)
-                VStack(alignment: .leading, spacing: 1) {
+        // Two lines, as a chat list has them: the repo and when; then a status
+        // dot and what it's doing. Waiting on you shows in the dot and a thin edge.
+        HStack(alignment: .center, spacing: 11) {
+            WorkingAvatar(agent: session.agent, working: session.status == .working, size: compact ? 28 : 34)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(session.repoName)
-                        .font(compact ? .subheadline.weight(.semibold) : .headline)
+                        .font(.subheadline.weight(.semibold))
                         .lineLimit(1).truncationMode(.middle)
-                    HStack(spacing: 4) {
-                        Text(session.agent.displayName).foregroundStyle(tint).fontWeight(.semibold)
-                        if let cwd = session.cwd, !cwd.isEmpty {
-                            Text("· \(shortPath(cwd))").foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
+                    Text(session.agent.displayName)
+                        .font(.caption.weight(.medium)).foregroundStyle(tint)
+                        .lineLimit(1).fixedSize()
+                    Spacer(minLength: 4)
+                    Text(Self.ago(session.updated))
+                        .font(.caption2).monospacedDigit().foregroundStyle(.tertiary)
+                        .lineLimit(1).fixedSize()
+                }
+                if !compact {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        let asks = session.status == .needsApproval
+                        Image(systemName: asks ? "hand.raised.fill" : "circle.fill")
+                            .font(.system(size: asks ? 10 : 6))
+                            .foregroundStyle(dot)
+                            .symbolEffect(.pulse, options: .repeating, isActive: session.status == .working)
+                            .accessibilityLabel(Theme.label(for: session.status))
+                        Group {
+                            if let line = activity {
+                                Text(line)
+                                    .font(session.status == .needsApproval
+                                          ? .system(.footnote, design: .monospaced) : .footnote)
+                            } else {
+                                Text(Theme.label(for: session.status)).font(.footnote)
+                            }
                         }
-                    }
-                    .font(.caption)
-                }
-                Spacer(minLength: 4)
-                VStack(alignment: .trailing, spacing: 4) {
-                    if !compact { StatusChip(status: session.status).fixedSize() }
-                    Text(session.updated, format: .relative(presentation: .named))
-                        .font(.caption2).foregroundStyle(.tertiary).lineLimit(1).fixedSize()
-                }
-            }
-            if !compact, let line = activity {
-                if session.status == .needsApproval {
-                    // What it wants to run, as code.
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Image(systemName: "hand.raised.fill").font(.caption).foregroundStyle(Theme.attention)
-                        Text(line)
-                            .font(.system(.footnote, design: .monospaced))
-                            .lineLimit(2)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .padding(.horizontal, 10).padding(.vertical, 8)
-                    .background(Theme.attention.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
-                } else {
-                    Text(line)
-                        .font(.subheadline)
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(1)
                         .contentTransition(.opacity)
+                    }
                 }
             }
         }
-        .padding(compact ? 12 : 14)
+        .padding(.horizontal, 12).padding(.vertical, compact ? 8 : 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))
-                .shadow(color: needs ? Theme.attention.opacity(0.22) : .black.opacity(0.05), radius: needs ? 14 : 6, y: needs ? 4 : 2)
         }
         .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .strokeBorder(needs ? Theme.attention.opacity(0.55) : Color.primary.opacity(0.05), lineWidth: needs ? 1.5 : 1)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(needs ? Theme.attention.opacity(0.45) : Color.primary.opacity(0.05), lineWidth: 1)
         }
         .opacity(compact ? 0.85 : 1)
         .animation(.easeOut(duration: 0.25), value: session.activity)
         .animation(.easeOut(duration: 0.25), value: session.status)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
+    }
+
+    private var dot: Color {
+        session.status == .working ? Theme.accent : Theme.color(for: session.status)
+    }
+
+    /// A line cut out of a reply can hold half of a bold pair ("NOT YET.**"):
+    /// then drop the markers rather than show them.
+    static func balanced(_ s: String) -> String {
+        s.components(separatedBy: "**").count % 2 == 0 ? s.replacingOccurrences(of: "**", with: "") : s
+    }
+
+    /// "now", "4m", "22h", "3d": short, as a chat list has it.
+    static func ago(_ date: Date, now: Date = .now) -> String {
+        let s = max(0, Int(now.timeIntervalSince(date)))
+        switch s {
+        case ..<60: return "now"
+        case ..<3600: return "\(s / 60)m"
+        case ..<86_400: return "\(s / 3600)h"
+        case ..<(86_400 * 7): return "\(s / 86_400)d"
+        default: return "\(s / (86_400 * 7))w"
+        }
     }
 
     /// What it's doing right now (paths relative to its folder), else its first message.
@@ -442,6 +463,7 @@ struct SessionCard: View {
         } else {
             return nil
         }
+        raw = Self.balanced(raw)
         return (try? AttributedString(markdown: raw, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
             ?? AttributedString(raw)
     }
