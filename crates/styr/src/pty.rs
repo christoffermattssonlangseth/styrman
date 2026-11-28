@@ -500,8 +500,11 @@ pub fn claude_preview(contents: &str) -> Option<String> {
     let top = lines.iter().position(|l| !l.trim().is_empty())?;
     let (start, scrolled) = match (0..bottom).rev().find(|&i| lines[i].starts_with("⏺ ")) {
         Some(i) => (i, false),
+        // Reply text sits two spaces in (four in a list); deeper is a tool's
+        // output whose `⏺` line scrolled off (a file being written, numbered).
         None if top < bottom
             && lines[top].starts_with("  ")
+            && lines[top].len() - lines[top].trim_start().len() <= 4
             && !lines[top].trim_start().starts_with('⎿') =>
         {
             (top, true)
@@ -544,7 +547,7 @@ pub fn claude_preview(contents: &str) -> Option<String> {
         // details under it, or a summary ("Reading 1 file…"). The reply above it is
         // finished (it arrives as a message); reading the tool line as more of it
         // made the preview flip between two texts with every blink.
-        if detail(i) || tool_summary(t) || timed_step(t) {
+        if detail(i) || tool_summary(t) || timed_step(t) || folded_output(t) {
             return None;
         }
         body.push(l.strip_prefix("  ").unwrap_or(l).trim_end().to_owned());
@@ -606,6 +609,14 @@ fn tool_summary(t: &str) -> bool {
     };
     let rest = rest.strip_prefix("for ").unwrap_or(rest);
     t.ends_with('…') || t.contains("ctrl+o") || rest.starts_with(|c: char| c.is_ascii_digit())
+}
+
+/// Where Claude folds a tool's long output: "… +102 lines (ctrl+o to expand)",
+/// "… +102 lines (~7 KB)". Reply text never has it.
+fn folded_output(t: &str) -> bool {
+    t.strip_prefix("… +")
+        .and_then(|r| r.split_once(' '))
+        .is_some_and(|(n, rest)| n.chars().all(|c| c.is_ascii_digit()) && rest.starts_with("line"))
 }
 
 /// A running step with its timer: Claude shows a command by its description while
@@ -1939,6 +1950,23 @@ mod tests {
             claude_preview(&scrolled).as_deref(),
             Some("…the start is gone and this goes on")
         );
+    }
+
+    /// A file being written whose `⏺ Write(…)` line has scrolled off is not a reply.
+    #[test]
+    fn a_tool_output_scrolled_up_is_no_preview() {
+        let rule = "─".repeat(60);
+        let box_ = format!("{rule}\n❯ \n{rule}\n  ⏵⏵ auto mode on · esc to interrupt");
+        let screen = format!(
+            "       1 \"\"\"§741 arm G: matched random-programme null for t\n       2 he Feng 2025 MERSCOPE result\n       3\n       4 Same tiles, covariates, NB fit\n      … +102 lines (~7 KB)\n\n✻ Applying final fixes… (3s)\n{box_}"
+        );
+        assert_eq!(claude_preview(&screen), None);
+        // Folded output under reply-deep text is still a tool's.
+        let screen = format!("  some output line\n  … +12 lines (ctrl+o to expand)\n\n{box_}");
+        assert_eq!(claude_preview(&screen), None);
+        // A long reply scrolled off keeps its preview.
+        let screen = format!("  the middle of a long reply that\n  goes on here.\n\n{box_}");
+        assert_eq!(claude_preview(&screen).as_deref(), Some("…the middle of a long reply that goes on here."));
     }
 
     #[test]
