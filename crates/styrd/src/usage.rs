@@ -71,4 +71,22 @@ mod tests {
         assert!(decode(fixture.replacen("1", "2", 1).as_bytes()).is_empty());
         assert!(decode(fixture.replace("0.6", "1.6").as_bytes()).is_empty());
     }
+
+    /// Karv's newer fields come through: plan, history, pace.
+    #[test]
+    fn reads_karvs_pace_and_history() {
+        let fixture = r#"{"version":1,"providers":[{"id":"claude","estimated":false,
+            "observed_at_ms":1800000000000,"plan_name":"Max 5x","history":[{"at_ms":1,"used_fraction":0.4}],
+            "windows":[{"title":"Weekly Cap","used_fraction":0.53,"resets_at_ms":1800000060000,
+            "rolling":false,"window_seconds":604800,"pace":{"state":"over","reserve":-0.1,
+            "reserve_seconds":-39877.8,"exhausts_at_ms":1800000030000}}]}]}"#;
+        let p = &decode(fixture.as_bytes())[0];
+        assert_eq!(p.plan_name.as_deref(), Some("Max 5x"));
+        assert_eq!(p.history.len(), 1);
+        let pace = p.windows[0].pace.as_ref().unwrap();
+        assert_eq!(
+            (pace.state.as_str(), pace.exhausts_at_ms),
+            ("over", Some(1800000030000))
+        );
+    }
 }

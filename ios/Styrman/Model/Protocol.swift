@@ -660,9 +660,15 @@ struct UsageProvider: Decodable, Identifiable, Sendable {
     let estimated: Bool
     let observedAtMs: Int64
     let windows: [UsageWindow]
+    // From newer Karvs only.
+    let planName: String?
+    let source: String?
+    let statusNote: String?
+    let history: [UsagePoint]?
 
     enum CodingKeys: String, CodingKey {
-        case id, estimated, windows, observedAtMs = "observed_at_ms"
+        case id, estimated, windows, source, history, observedAtMs = "observed_at_ms"
+        case planName = "plan_name", statusNote = "status_note"
     }
 
     var name: String {
@@ -680,9 +686,34 @@ struct UsageWindow: Decodable, Sendable {
     let usedFraction: Double
     let resetsAtMs: Int64
     let rolling: Bool
+    // From newer Karvs only.
+    let subtitle: String?
+    let detailText: String?
+    let windowSeconds: Double?
+    let pace: UsagePace?
 
     enum CodingKeys: String, CodingKey {
-        case title, rolling, usedFraction = "used_fraction", resetsAtMs = "resets_at_ms"
+        case title, rolling, subtitle, pace, usedFraction = "used_fraction", resetsAtMs = "resets_at_ms"
+        case detailText = "detail_text", windowSeconds = "window_seconds"
+    }
+
+    var resetsAt: Date { Date(timeIntervalSince1970: Double(resetsAtMs) / 1_000) }
+}
+
+struct UsagePoint: Decodable, Sendable {
+    let atMs: Int64
+    let usedFraction: Double
+    enum CodingKeys: String, CodingKey { case atMs = "at_ms", usedFraction = "used_fraction" }
+}
+
+/// How a window tracks against an even pace, as Karv reckons it.
+struct UsagePace: Decodable, Sendable {
+    let state: String
+    let reserve: Double
+    let reserveSeconds: Double
+    let exhaustsAtMs: Int64?
+    enum CodingKeys: String, CodingKey {
+        case state, reserve, reserveSeconds = "reserve_seconds", exhaustsAtMs = "exhausts_at_ms"
     }
 }
 

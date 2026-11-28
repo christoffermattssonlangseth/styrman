@@ -576,3 +576,24 @@ struct SessionLineTests {
         #expect(SessionCard.plain("**NOT YET.** Two `issues`") == "NOT YET. Two issues")
     }
 }
+
+struct UsagePaceTests {
+    private func window(_ json: String) throws -> UsageWindow {
+        try JSONDecoder().decode(UsageWindow.self, from: Data(json.utf8))
+    }
+
+    /// Karv's pace lines: reserve, over with a run-out time, on pace, rolling.
+    @Test func paceReadsAsKarvWritesIt() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let under = try window(#"{"title":"5h","used_fraction":0.2,"resets_at_ms":1800003600000,"rolling":false,"pace":{"state":"under","reserve":0.11,"reserve_seconds":1920}}"#)
+        #expect(UsageText.pace(under, now: now).text == "11% reserve · 32m")
+        let over = try window(#"{"title":"Weekly","used_fraction":0.5,"resets_at_ms":1800400000000,"rolling":false,"pace":{"state":"over","reserve":-0.09,"reserve_seconds":-40000,"exhausts_at_ms":1800220000000}}"#)
+        #expect(UsageText.pace(over, now: now).text == "9% over · out in 2d 13h")
+        let rolling = try window(#"{"title":"5h","used_fraction":0.05,"resets_at_ms":1800001380000,"rolling":true}"#)
+        #expect(UsageText.pace(rolling, now: now).text == "Rolling · frees up in 23m")
+        // An older Karv: no pace, nothing said.
+        let old = try window(#"{"title":"5h","used_fraction":0.2,"resets_at_ms":1800003600000,"rolling":false}"#)
+        #expect(UsageText.pace(old, now: now).text.isEmpty)
+        #expect(UsageText.percent(0.925) == "93%")
+    }
+}

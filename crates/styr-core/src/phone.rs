@@ -141,13 +141,32 @@ pub struct FolderListing {
     pub git_branch: Option<String>,
 }
 
-/// Read-only quota information exported by KarvMac.
+/// Read-only quota information exported by KarvMac. Everything past `windows`
+/// came later: optional, so older Karvs and phones keep working.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UsageProvider {
     pub id: String,
     pub estimated: bool,
     pub observed_at_ms: i64,
     pub windows: Vec<UsageWindow>,
+    /// "Max 5x", "Pro".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_name: Option<String>,
+    /// Where Karv read it ("Claude Code CLI").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// "Live from Claude OAuth API".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_note: Option<String>,
+    /// Daily activity, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history: Vec<UsagePoint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UsagePoint {
+    pub at_ms: i64,
+    pub used_fraction: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -156,6 +175,27 @@ pub struct UsageWindow {
     pub used_fraction: f64,
     pub resets_at_ms: i64,
     pub rolling: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle: Option<String>,
+    /// "5/100 prompts in last 5h".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_seconds: Option<f64>,
+    /// Against an even pace, as Karv reckons it; none for rolling windows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pace: Option<UsagePace>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UsagePace {
+    /// "under", "on" or "over".
+    pub state: String,
+    /// Elapsed share minus used share: positive is reserve.
+    pub reserve: f64,
+    pub reserve_seconds: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exhausts_at_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
