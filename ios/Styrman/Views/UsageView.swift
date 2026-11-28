@@ -8,7 +8,7 @@ struct UsageView: View {
         NavigationStack {
             TimelineView(.periodic(from: .now, by: 30)) { context in
                 ScrollView {
-                    VStack(spacing: 14) {
+                    VStack(spacing: 10) {
                         if connection.state != .connected {
                             Text("Disconnected from Mac").foregroundStyle(.secondary)
                         }
@@ -75,12 +75,12 @@ struct HeadroomCard: View {
         let overall = providers.map(\.headroom).reduce(0, +) / Double(max(providers.count, 1))
         let next = providers.compactMap { p in p.windows.first.map { (p, $0.resetsAt) } }
             .filter { $0.1 > now }.min { $0.1 < $1.1 }
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("OVERALL HEADROOM").font(.caption.weight(.semibold)).tracking(1.2).foregroundStyle(.secondary)
                     Text(UsageText.percent(overall))
-                        .font(.system(size: 52, weight: .bold, design: .rounded)).monospacedDigit()
+                        .font(.system(size: 40, weight: .bold, design: .rounded)).monospacedDigit()
                 }
                 Spacer()
                 if let (p, at) = next {
@@ -89,9 +89,10 @@ struct HeadroomCard: View {
                         HStack(spacing: 6) {
                             Circle().fill(Theme.color(for: p.agent)).frame(width: 7, height: 7)
                             Text("\(p.shortName) · \(UsageText.compact(at.timeIntervalSince(now)))")
-                                .font(.footnote.monospaced())
+                                .font(.caption.monospaced()).lineLimit(1)
                         }
-                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .fixedSize()
+                        .padding(.horizontal, 8).padding(.vertical, 4)
                         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.12)))
                     }
                 }
@@ -100,18 +101,18 @@ struct HeadroomCard: View {
                 ForEach(providers) { p in
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Text(p.shortName).font(.footnote)
+                            Text(p.shortName).font(.caption)
                             Spacer(minLength: 2)
                             Text(UsageText.percent(p.headroom))
-                                .font(.footnote.weight(.semibold)).monospacedDigit()
+                                .font(.caption.weight(.semibold)).monospacedDigit()
                         }
                         Bar(fraction: p.headroom, color: Theme.color(for: p.agent))
                     }
                 }
             }
         }
-        .padding(18)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .padding(14)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 }
 
@@ -136,12 +137,12 @@ struct ProviderCard: View {
         let c = Theme.color(for: provider.agent)
         let observed = Date(timeIntervalSince1970: Double(provider.observedAtMs) / 1_000)
         let stale = now.timeIntervalSince(observed) > 180
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .center, spacing: 12) {
-                AgentAvatar(agent: provider.agent, size: 40)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 10) {
+                AgentAvatar(agent: provider.agent, size: 30)
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
-                        Text(provider.shortName).font(.title3.weight(.semibold)).lineLimit(1)
+                        Text(provider.shortName).font(.headline).lineLimit(1)
                         if let plan = provider.planName, !plan.isEmpty {
                             Text(plan.uppercased())
                                 .font(.caption2.weight(.bold).monospaced()).foregroundStyle(c)
@@ -159,27 +160,27 @@ struct ProviderCard: View {
                 Spacer(minLength: 4)
                 if let history = provider.history, history.count > 1 {
                     Sparkline(values: history.map(\.usedFraction), color: c)
-                        .frame(width: 64, height: 28)
+                        .frame(width: 48, height: 20)
                         .accessibilityHidden(true)
                 }
             }
-            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible())], spacing: 10) {
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible())], spacing: 8) {
                 ForEach(Array(provider.windows.enumerated()), id: \.offset) { _, w in
                     WindowTile(window: w, color: c, now: now)
                 }
             }
         }
-        .padding(16)
+        .padding(12)
         .background {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(Color(.secondarySystemGroupedBackground))
                 .overlay(alignment: .topLeading) {
                     // The agent's colour, faintly, from the corner.
                     RadialGradient(colors: [c.opacity(0.14), .clear], center: .topLeading, startRadius: 0, endRadius: 260)
-                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                 }
         }
-        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(c.opacity(0.18)))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(c.opacity(0.18)))
     }
 }
 
@@ -191,36 +192,43 @@ struct WindowTile: View {
 
     var body: some View {
         let left = max(0, 1 - window.usedFraction)
-        VStack(alignment: .leading, spacing: 8) {
-            Text(window.title).font(.footnote.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
+        VStack(alignment: .leading, spacing: 5) {
+            // The window and when it resets, on one line.
+            HStack(spacing: 4) {
+                Text(window.title).font(.caption.weight(.medium)).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 2)
+                if !window.rolling, window.resetsAt > now {
+                    Label(UsageText.compact(window.resetsAt.timeIntervalSince(now)), systemImage: "clock")
+                        .labelStyle(.titleAndIcon).font(.caption2.monospaced()).foregroundStyle(.tertiary)
+                        .lineLimit(1).fixedSize()
+                        .accessibilityLabel("Resets in \(UsageText.compact(window.resetsAt.timeIntervalSince(now)))")
+                }
+            }
             HStack(alignment: .firstTextBaseline, spacing: 3) {
                 Text(UsageText.percent(left))
-                    .font(.system(.title, design: .rounded).weight(.bold)).monospacedDigit()
+                    .font(.system(.title2, design: .rounded).weight(.bold)).monospacedDigit()
                     .foregroundStyle(left < 0.1 ? AnyShapeStyle(.orange) : AnyShapeStyle(.primary))
-                Text("left").font(.caption).foregroundStyle(.secondary)
+                Text("left").font(.caption2).foregroundStyle(.secondary)
             }
             Bar(fraction: left, color: color)
             let pace = UsageText.pace(window, now: now)
             if !pace.text.isEmpty {
-            Label {
-                Text(pace.text).lineLimit(1).minimumScaleFactor(0.8)
-            } icon: {
-                Image(systemName: pace.symbol)
-            }
-            .font(.caption.monospaced())
-            .foregroundStyle(pace.tone == .good ? AnyShapeStyle(Color.green)
-                             : pace.tone == .bad ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary))
+                Label {
+                    Text(pace.text).fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: pace.symbol)
+                }
+                .font(.caption2.monospaced())
+                .foregroundStyle(pace.tone == .good ? AnyShapeStyle(Color.green)
+                                 : pace.tone == .bad ? AnyShapeStyle(Color.red) : AnyShapeStyle(.secondary))
             }
             if let detail = window.detailText, window.rolling {
                 Text(detail).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
-            } else if window.resetsAt > now {
-                Label("Resets \(UsageText.compact(window.resetsAt.timeIntervalSince(now)))", systemImage: "clock")
-                    .font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
             }
         }
-        .padding(12)
+        .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .accessibilityElement(children: .combine)
     }
 }
