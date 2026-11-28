@@ -537,3 +537,29 @@ struct SessionRowTests {
         #expect(SessionCard.balanced("a **bold** word") == "a **bold** word")
     }
 }
+
+@MainActor
+struct SessionLineTests {
+    private func s(_ id: String, helping: String? = nil, updated: Int64 = 0) -> SessionSummary {
+        let h = helping.map { #","helper_of":"\#($0)""# } ?? ""
+        let json = #"{"id":"\#(id)","agent":"codex","native_id":"\#(id)","cwd":"/r","shared":true,"status":"waiting","created_ms":0,"updated_ms":\#(updated),"last_seq":0\#(h)}"#
+        return try! JSONDecoder().decode(SessionSummary.self, from: Data(json.utf8))
+    }
+
+    /// Past two, a session's older helpers fold into "N more".
+    @Test func olderHelpersFold() {
+        let items = [s("P"), s("h1", helping: "P", updated: 1), s("h2", helping: "P", updated: 3),
+                     s("h3", helping: "P", updated: 2), s("h4", helping: "P", updated: 0), s("Q")]
+        #expect(SessionLine.lines(items, open: []).map(\.id) == ["P", "h2", "h3", "more-P", "Q"])
+        #expect(SessionLine.lines(items, open: ["P"]).map(\.id) == ["P", "h2", "h3", "h1", "h4", "Q"])
+        // Three is no fold: "1 more" would take the same room.
+        #expect(SessionLine.lines(Array(items.prefix(4)), open: []).count == 4)
+        // A helper whose session isn't here stands alone.
+        let lone = SessionLine.lines([s("h1", helping: "X")], open: [])
+        #expect(lone == [.session(s("h1", helping: "X"), parent: nil)])
+    }
+
+    @Test func titlesArePlain() {
+        #expect(SessionCard.plain("**NOT YET.** Two `issues`") == "NOT YET. Two issues")
+    }
+}

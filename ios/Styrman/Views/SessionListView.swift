@@ -9,6 +9,8 @@ struct SessionListView: View {
     @State private var path: [String] = []
     /// Sections folded shut (Done starts so).
     @State private var folded: Set<String> = ["Done"]
+    /// Sessions whose older helpers are unfolded.
+    @State private var openHelpers: Set<String> = []
     @State private var ending: SessionSummary?
 
     private var needsYou: [SessionSummary] { connection.sessions.filter { $0.status.needsUser } }
@@ -171,29 +173,48 @@ struct SessionListView: View {
             .accessibilityValue(shut ? "Folded" : "Open")
             .plainRow(top: 16, bottom: 6)
             if !shut {
-                let rows = withHelpersUnder(items)
-                ForEach(Array(rows.enumerated()), id: \.element.id) { i, s in
-                    row(s, first: i == 0, last: i == rows.count - 1)
+                let lines = SessionLine.lines(items, open: openHelpers)
+                ForEach(Array(lines.enumerated()), id: \.element.id) { i, line in
+                    let first = i == 0, last = i == lines.count - 1
+                    switch line {
+                    case .session(let s, let parent): row(s, under: parent, first: first, last: last)
+                    case .more(let parent, let hidden): moreRow(parent, hidden, last: last)
+                    }
                 }
             }
         }
     }
 
-    /// A helper right under the session that started it, when both are listed here.
-    private func withHelpersUnder(_ items: [SessionSummary]) -> [SessionSummary] {
-        let ids = Set(items.map(\.id))
-        let tops = items.filter { s in s.helperOf.map { !ids.contains($0) } ?? true }
-        return tops.flatMap { t in [t] + items.filter { $0.helperOf == t.id } }
+    /// "6 more helpers": a session's older helpers, folded under its newest two.
+    private func moreRow(_ parent: String, _ hidden: Int, last: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Divider().padding(.leading, 62)
+            Button {
+                withAnimation(.snappy) { _ = openHelpers.insert(parent) }
+            } label: {
+                HStack(spacing: 6) {
+                    Text("\(hidden) more \(hidden == 1 ? "helper" : "helpers")")
+                    Image(systemName: "chevron.down").font(.caption2.weight(.bold))
+                }
+                .font(.footnote).foregroundStyle(.secondary)
+                .padding(.leading, 62).frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(RowPressStyle())
+        }
+        .rowBlock(first: false, last: last)
     }
 
     /// One line a session, the section's rows sharing one rounded block.
-    private func row(_ s: SessionSummary, first: Bool, last: Bool) -> some View {
+    private func row(_ s: SessionSummary, under parent: SessionSummary?, first: Bool, last: Bool) -> some View {
         let timeline = connection.timeline(for: s.id)
         let asker = s.helperOf.flatMap { connection.session($0) }
         return VStack(alignment: .leading, spacing: 0) {
-            if !first { Divider().padding(.leading, asker == nil ? 44 : 62) }
+            if !first { Divider().padding(.leading, parent == nil ? 44 : 62) }
             Button { path.append(s.id) } label: {
-                SessionCard(session: s, helping: asker != nil)
+                // The repo shows unless the parent right above already says it.
+                SessionCard(session: s, helping: parent != nil,
+                            showsRepo: parent?.repoName != s.repoName)
             }
             .buttonStyle(RowPressStyle())
             .accessibilityHint(asker.map { "Helping \($0.agent.displayName) in \($0.repoName)" } ?? "")
@@ -204,15 +225,7 @@ struct SessionListView: View {
                     .padding(.horizontal, 12).padding(.bottom, 10)
             }
         }
-        .listRowSeparator(.hidden)
-        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
-        .listRowBackground(
-            UnevenRoundedRectangle(topLeadingRadius: first ? 14 : 0, bottomLeadingRadius: last ? 14 : 0,
-                                   bottomTrailingRadius: last ? 14 : 0, topTrailingRadius: first ? 14 : 0,
-                                   style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-                .padding(.horizontal, 16)
-        )
+        .rowBlock(first: first, last: last)
         .swipeActions(edge: .trailing) {
             Button(s.status == .done ? "Remove" : "Stop sharing", role: .destructive) {
                 connection.stopSharing(s.id)
@@ -352,6 +365,52 @@ private struct SectionTitle: View {
     }
 }
 
+extension View {
+    /// A row of a section's shared rounded block.
+    func rowBlock(first: Bool, last: Bool) -> some View {
+        listRowSeparator(.hidden)
+            .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+            .listRowBackground(
+                UnevenRoundedRectangle(topLeadingRadius: first ? 14 : 0, bottomLeadingRadius: last ? 14 : 0,
+                                       bottomTrailingRadius: last ? 14 : 0, topTrailingRadius: first ? 14 : 0,
+                                       style: .continuous)
+                    .fill(Color(.secondarySystemGroupedBackground))
+                    .padding(.horizontal, 16)
+            )
+    }
+}
+
+/// A line of a section: a session (a helper under the session it helps, when
+/// that's listed here too), or the fold over a session's older helpers.
+enum SessionLine: Identifiable, Equatable {
+    case session(SessionSummary, parent: SessionSummary?)
+    case more(parent: String, hidden: Int)
+
+    var id: String {
+        switch self {
+        case .session(let s, _): s.id
+        case .more(let p, _): "more-\(p)"
+        }
+    }
+
+    /// Shown helpers a session keeps unfolded.
+    static let helpersShown = 2
+
+    static func == (a: SessionLine, b: SessionLine) -> Bool { a.id == b.id }
+
+    static func lines(_ items: [SessionSummary], open: Set<String>) -> [SessionLine] {
+        let ids = Set(items.map(\.id))
+        let tops = items.filter { s in s.helperOf.map { !ids.contains($0) } ?? true }
+        return tops.flatMap { t -> [SessionLine] in
+            let helpers = items.filter { $0.helperOf == t.id }.sorted { $0.updated > $1.updated }
+            let fold = !open.contains(t.id) && helpers.count > helpersShown + 1
+            let shown = fold ? Array(helpers.prefix(helpersShown)) : helpers
+            return [.session(t, parent: nil)] + shown.map { .session($0, parent: t) }
+                + (fold ? [.more(parent: t.id, hidden: helpers.count - shown.count)] : [])
+        }
+    }
+}
+
 /// A row greys a little under your finger.
 private struct RowPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
@@ -364,6 +423,7 @@ private struct RowPressStyle: ButtonStyle {
 struct SessionCard: View {
     let session: SessionSummary
     var helping = false
+    var showsRepo = true
 
     private var tint: Color { Theme.color(for: session.agent) }
 
@@ -384,7 +444,7 @@ struct SessionCard: View {
                 .font(.subheadline)
                 .lineLimit(1)
             Spacer(minLength: 6)
-            if label != session.repoName {
+            if showsRepo, label != session.repoName {
                 Text(session.repoName)
                     .font(.caption2).foregroundStyle(.tertiary)
                     .lineLimit(1).truncationMode(.middle)
@@ -408,11 +468,15 @@ struct SessionCard: View {
         Self.topic(session.title) ?? Self.topic(session.activity) ?? session.repoName
     }
 
-    /// What it's about, as shown.
-    private var name: AttributedString {
-        let raw = Self.balanced(label)
-        return (try? AttributedString(markdown: raw, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(raw)
+    /// What it's about, as shown: plain, so bold in one title doesn't stand out.
+    private var name: String { Self.plain(label) }
+
+    /// Markdown as its words: "**NOT YET.** `x`" → "NOT YET. x".
+    static func plain(_ s: String) -> String {
+        let raw = balanced(s)
+        guard let a = try? AttributedString(markdown: raw, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
+        else { return raw }
+        return String(a.characters)
     }
 
     @ViewBuilder private var trailing: some View {
