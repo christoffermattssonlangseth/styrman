@@ -526,6 +526,12 @@ struct SessionRowTests {
         #expect(SessionCard.ago(now.addingTimeInterval(-3 * 86_400), now: now) == "3d")
     }
 
+    @Test func aHelpersTitleIsItsQuestion() {
+        #expect(SessionCard.topic("Message from Claude (reCORD), sent through Styrman:\n\nIs §704 fair?\n\n(Reply as you normally would; your reply goes back to Claude.)") == "Is §704 fair?")
+        #expect(SessionCard.topic("Fix the\nparser") == "Fix the parser")
+        #expect(SessionCard.topic("  ") == nil)
+    }
+
     @Test func halfABoldPairIsDropped() {
         #expect(SessionCard.balanced("NOT YET.** Two issues") == "NOT YET. Two issues")
         #expect(SessionCard.balanced("a **bold** word") == "a **bold** word")

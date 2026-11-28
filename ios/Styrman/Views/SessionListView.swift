@@ -7,7 +7,8 @@ struct SessionListView: View {
     @State private var showNewSession = false
     @State private var showUsage = false
     @State private var path: [String] = []
-    @State private var showDone = false
+    /// Sections folded shut (Done starts so).
+    @State private var folded: Set<String> = ["Done"]
     @State private var ending: SessionSummary?
 
     private var needsYou: [SessionSummary] { connection.sessions.filter { $0.status.needsUser } }
@@ -81,29 +82,9 @@ struct SessionListView: View {
             ForEach(connection.warnings, id: \.self) { w in
                 Label(w, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange).plainRow()
             }
-            group("Needs you", needsYou)
+            group("Needs attention", needsYou)
             group("Working", working)
-            if !done.isEmpty {
-                Button {
-                    withAnimation(.snappy) { showDone.toggle() }
-                } label: {
-                    HStack {
-                        SectionTitle(title: "Done", count: done.count)
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
-                            .rotationEffect(.degrees(showDone ? 90 : 0))
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .plainRow(top: 14, bottom: 2)
-                if showDone {
-                    ForEach(done) { s in
-                        card(s, compact: true)
-                    }
-                }
-            }
+            group("Done", done)
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
@@ -171,8 +152,30 @@ struct SessionListView: View {
     @ViewBuilder
     private func group(_ title: String, _ items: [SessionSummary]) -> some View {
         if !items.isEmpty {
-            SectionTitle(title: title, count: items.count).plainRow(top: 14, bottom: 2)
-            ForEach(withHelpersUnder(items)) { s in card(s, compact: false) }
+            let shut = folded.contains(title)
+            Button {
+                withAnimation(.snappy) {
+                    if shut { folded.remove(title) } else { folded.insert(title) }
+                }
+            } label: {
+                HStack(spacing: 6) {
+                    SectionTitle(title: title, count: items.count)
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(shut ? -90 : 0))
+                    Spacer()
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(shut ? "Folded" : "Open")
+            .plainRow(top: 16, bottom: 6)
+            if !shut {
+                let rows = withHelpersUnder(items)
+                ForEach(Array(rows.enumerated()), id: \.element.id) { i, s in
+                    row(s, first: i == 0, last: i == rows.count - 1)
+                }
+            }
         }
     }
 
@@ -183,29 +186,33 @@ struct SessionListView: View {
         return tops.flatMap { t in [t] + items.filter { $0.helperOf == t.id } }
     }
 
-    private func card(_ s: SessionSummary, compact: Bool) -> some View {
+    /// One line a session, the section's rows sharing one rounded block.
+    private func row(_ s: SessionSummary, first: Bool, last: Bool) -> some View {
         let timeline = connection.timeline(for: s.id)
         let asker = s.helperOf.flatMap { connection.session($0) }
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                if asker != nil {
-                    Image(systemName: "arrow.turn.down.right")
-                        .font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
-                }
-                Button { path.append(s.id) } label: {
-                    SessionCard(session: s, compact: compact)
-                }
-                .buttonStyle(CardPressStyle())
-                .accessibilityHint(asker.map { "Helping \($0.agent.displayName) in \($0.repoName)" } ?? "")
+        return VStack(alignment: .leading, spacing: 0) {
+            if !first { Divider().padding(.leading, asker == nil ? 44 : 62) }
+            Button { path.append(s.id) } label: {
+                SessionCard(session: s, helping: asker != nil)
             }
+            .buttonStyle(RowPressStyle())
+            .accessibilityHint(asker.map { "Helping \($0.agent.displayName) in \($0.repoName)" } ?? "")
             if s.status == .needsApproval, timeline.isLive,
                let permission = timeline.openPermissions.last {
                 SessionQuickApproval(session: s.id, cwd: s.cwd, permission: permission)
                     .id(permission.request)
+                    .padding(.horizontal, 12).padding(.bottom, 10)
             }
         }
-        .padding(.leading, asker == nil ? 0 : 6)
-        .plainRow(top: 3, bottom: 3)
+        .listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+        .listRowBackground(
+            UnevenRoundedRectangle(topLeadingRadius: first ? 14 : 0, bottomLeadingRadius: last ? 14 : 0,
+                                   bottomTrailingRadius: last ? 14 : 0, topTrailingRadius: first ? 14 : 0,
+                                   style: .continuous)
+                .fill(Color(.secondarySystemGroupedBackground))
+                .padding(.horizontal, 16)
+        )
         .swipeActions(edge: .trailing) {
             Button(s.status == .done ? "Remove" : "Stop sharing", role: .destructive) {
                 connection.stopSharing(s.id)
@@ -345,84 +352,111 @@ private struct SectionTitle: View {
     }
 }
 
-/// Cards sink a little under your finger.
-private struct CardPressStyle: ButtonStyle {
+/// A row greys a little under your finger.
+private struct RowPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
-            .animation(.easeOut(duration: 0.15), value: configuration.isPressed)
+            .background(Color.primary.opacity(configuration.isPressed ? 0.06 : 0))
     }
 }
 
 /// A session as a card: who, where, what it's doing now, and whether it needs you.
 struct SessionCard: View {
     let session: SessionSummary
-    var compact = false
+    var helping = false
 
-    private var needs: Bool { session.status.needsUser }
     private var tint: Color { Theme.color(for: session.agent) }
 
     var body: some View {
-        // Two lines, as a chat list has them: the repo and when; then a status
-        // dot and what it's doing. Waiting on you shows in the dot and a thin edge.
-        HStack(alignment: .center, spacing: 11) {
-            WorkingAvatar(agent: session.agent, working: session.status == .working, size: compact ? 28 : 34)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    Text(session.repoName)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1).truncationMode(.middle)
-                    Text(session.agent.displayName)
-                        .font(.caption.weight(.medium)).foregroundStyle(tint)
-                        .lineLimit(1).fixedSize()
-                    Spacer(minLength: 4)
-                    Text(Self.ago(session.updated))
-                        .font(.caption2).monospacedDigit().foregroundStyle(.tertiary)
-                        .lineLimit(1).fixedSize()
-                }
-                if !compact {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        let asks = session.status == .needsApproval
-                        Image(systemName: asks ? "hand.raised.fill" : "circle.fill")
-                            .font(.system(size: asks ? 10 : 6))
-                            .foregroundStyle(dot)
-                            .symbolEffect(.pulse, options: .repeating, isActive: session.status == .working)
-                            .accessibilityLabel(Theme.label(for: session.status))
-                        Group {
-                            if let line = activity {
-                                Text(line)
-                                    .font(session.status == .needsApproval
-                                          ? .system(.footnote, design: .monospaced) : .footnote)
-                            } else {
-                                Text(Theme.label(for: session.status)).font(.footnote)
-                            }
-                        }
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .contentTransition(.opacity)
-                    }
-                }
+        // One line, as Happier has it: the agent's mark, what the session is
+        // about, and on the right where and how it stands.
+        HStack(spacing: 10) {
+            if helping {
+                Image(systemName: "arrow.turn.down.right")
+                    .font(.caption2.weight(.semibold)).foregroundStyle(.tertiary)
             }
+            Image(systemName: Theme.symbol(for: session.agent))
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(tint)
+                .frame(width: 22)
+                .accessibilityLabel(session.agent.displayName)
+            Text(name)
+                .font(.subheadline)
+                .lineLimit(1)
+            Spacer(minLength: 6)
+            if label != session.repoName {
+                Text(session.repoName)
+                    .font(.caption2).foregroundStyle(.tertiary)
+                    .lineLimit(1).truncationMode(.middle)
+                    .frame(maxWidth: 90, alignment: .trailing)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            trailing
         }
-        .padding(.horizontal, 12).padding(.vertical, compact ? 8 : 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(needs ? Theme.attention.opacity(0.45) : Color.primary.opacity(0.05), lineWidth: 1)
-        }
-        .opacity(compact ? 0.85 : 1)
-        .animation(.easeOut(duration: 0.25), value: session.activity)
+        .padding(.horizontal, 12)
+        .frame(minHeight: 46)
+        .contentShape(Rectangle())
         .animation(.easeOut(duration: 0.25), value: session.status)
         .accessibilityElement(children: .combine)
+        .accessibilityValue(Theme.label(for: session.status))
         .accessibilityAddTraits(.isButton)
+    }
+
+    /// What it's about: its title (first message), else what it last did (a
+    /// helper's title is only the ask's envelope), else its repo.
+    private var label: String {
+        Self.topic(session.title) ?? Self.topic(session.activity) ?? session.repoName
+    }
+
+    /// What it's about, as shown.
+    private var name: AttributedString {
+        let raw = Self.balanced(label)
+        return (try? AttributedString(markdown: raw, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(raw)
+    }
+
+    @ViewBuilder private var trailing: some View {
+        switch session.status {
+        case .working:
+            ProgressView().controlSize(.mini).frame(width: 30)
+        case .needsApproval:
+            HStack(spacing: 4) {
+                Image(systemName: "hand.raised.fill").font(.system(size: 10)).foregroundStyle(Theme.attention)
+                time
+            }
+        case .done, .unknown:
+            time
+        default:
+            HStack(spacing: 5) {
+                Circle().fill(dot).frame(width: 6, height: 6)
+                time
+            }
+        }
+    }
+
+    private var time: some View {
+        Text(Self.ago(session.updated))
+            .font(.caption2).monospacedDigit().foregroundStyle(.tertiary)
+            .lineLimit(1).fixedSize()
+            .frame(minWidth: 24, alignment: .trailing)
     }
 
     private var dot: Color {
         session.status == .working ? Theme.accent : Theme.color(for: session.status)
+    }
+
+    /// A title fit for one line. A helper's first message is the ask, wrapped:
+    /// "Message from Claude (reCORD), sent through Styrman:\n\n<the question>…";
+    /// its topic is the question.
+    static func topic(_ title: String?) -> String? {
+        guard var t = title?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty else { return nil }
+        if t.hasPrefix("Message from "), let r = t.range(of: "sent through Styrman:") {
+            t = String(t[r.upperBound...])
+            if let tail = t.range(of: "(Reply as you normally would") { t = String(t[..<tail.lowerBound]) }
+            t = t.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        t = t.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        return t.isEmpty ? nil : t
     }
 
     /// A line cut out of a reply can hold half of a bold pair ("NOT YET.**"):
@@ -443,30 +477,6 @@ struct SessionCard: View {
         }
     }
 
-    /// What it's doing right now (paths relative to its folder), else its first message.
-    private var activity: AttributedString? {
-        var raw: String
-        if var a = session.activity, !a.isEmpty, session.status != .done {
-            if let cwd = session.cwd, !cwd.isEmpty {
-                a = a.replacingOccurrences(of: cwd.hasSuffix("/") ? cwd : cwd + "/", with: "")
-            }
-            raw = a.replacingOccurrences(of: #"/Users/[^/\s`]+"#, with: "~", options: .regularExpression)
-            if session.status == .needsApproval {
-                // "Run `cargo test`" → "cargo test": the chip already says it's a request.
-                if let open = raw.firstIndex(of: "`"), let close = raw[raw.index(after: open)...].firstIndex(of: "`") {
-                    raw = String(raw[raw.index(after: open)..<close])
-                }
-                return AttributedString(raw)
-            }
-        } else if let t = session.title, !t.isEmpty {
-            raw = t
-        } else {
-            return nil
-        }
-        raw = Self.balanced(raw)
-        return (try? AttributedString(markdown: raw, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(raw)
-    }
 }
 
 /// The agent's avatar; while it works, a ring in its colour turns around it.
