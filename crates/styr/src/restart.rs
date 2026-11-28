@@ -27,16 +27,18 @@ enum Takes {
     Nothing,
     /// One value (`--model opus`).
     One,
+    /// One value if the next argument isn't an option (`--resume [id]`).
+    Maybe,
     /// Values until the next option (`--add-dir a b`).
     Many,
 }
 
 fn claude_flag(f: &str) -> Takes {
     match f {
+        // Claude's `--resume` picks from a list when no id follows.
+        "--resume" | "-r" => Takes::Maybe,
         "--model"
         | "--effort"
-        | "--resume"
-        | "-r"
         | "--session-id"
         | "--permission-mode"
         | "--settings"
@@ -121,6 +123,12 @@ fn options(args: &[OsString], takes: fn(&str) -> Takes) -> Vec<(String, Vec<OsSt
                 Takes::Nothing => {}
                 Takes::One => {
                     if i < args.len() {
+                        group.push(args[i].clone());
+                        i += 1;
+                    }
+                }
+                Takes::Maybe => {
+                    if i < args.len() && !args[i].to_string_lossy().starts_with('-') {
                         group.push(args[i].clone());
                         i += 1;
                     }
@@ -306,6 +314,21 @@ mod tests {
         assert_eq!(
             strs(&args(AgentKind::Claude, &old, &to(None, Some("low")))),
             ["--model=opus", "--resume", "ID", "--effort", "low"]
+        );
+        // `--resume` without an id (Claude then let you pick): the next option
+        // is kept, not taken as its value.
+        for flag in ["--resume", "-r"] {
+            let old = v(&[flag, "--model", "opus", "--verbose"]);
+            assert_eq!(
+                strs(&args(AgentKind::Claude, &old, &to(None, None))),
+                ["--model", "opus", "--verbose", "--resume", "ID"],
+                "{flag}"
+            );
+        }
+        let old = v(&["-r", "OLD", "--verbose"]);
+        assert_eq!(
+            strs(&args(AgentKind::Claude, &old, &to(None, None))),
+            ["--verbose", "--resume", "ID"]
         );
     }
 

@@ -232,6 +232,11 @@ impl StyrCatcher {
 /// Only keys count. The terminal also sends replies to the agent's own queries
 /// (colours, cursor position, keyboard mode), focus and mouse reports; those are
 /// skipped whole, or a colour reply like `]11;rgb:…` would look like typing.
+///
+/// Counting keys alone can't see every way a line empties (Esc Esc, Ctrl-W, a menu
+/// answered with `y`), so [`LineState::typing`] also asks the screen: an input box
+/// that visibly holds no text is not a half-typed line, and when the box can't be
+/// read the count expires a while after the last key.
 #[derive(Debug, Default, Clone)]
 pub struct LineState {
     /// Characters typed on the current line (backspace takes one away). Counting
@@ -240,11 +245,51 @@ pub struct LineState {
     chars: usize,
     esc: Option<Vec<u8>>,
     mouse_bytes: u8,
+    /// When the last key (not a terminal reply or report) came in.
+    last_key: Option<std::time::Instant>,
+    /// The count when a menu opened: keys typed into a menu (`y`, `1`) answer it,
+    /// and the line is as it was once the menu is gone.
+    before_menu: Option<usize>,
 }
+
+/// Keys just typed may not be drawn yet: until then the screen's word doesn't count.
+const SCREEN_LAG: Duration = Duration::from_millis(1500);
+/// When the input box can't be read, a count this long untouched is stale.
+const STALE_LINE: Duration = Duration::from_secs(30);
 
 impl LineState {
     pub fn dirty(&self) -> bool {
         self.chars > 0
+    }
+
+    /// Whether the user is halfway through a line, given what the input box shows
+    /// (`Some(true)`: text in it, `Some(false)`: visibly empty, `None`: unknown).
+    pub fn typing(&self, box_text: Option<bool>, now: std::time::Instant) -> bool {
+        let within = |d: Duration| {
+            self.last_key
+                .is_some_and(|t| now.saturating_duration_since(t) < d)
+        };
+        match box_text {
+            Some(true) => self.dirty(),
+            Some(false) => self.dirty() && within(SCREEN_LAG),
+            None => self.dirty() && within(STALE_LINE),
+        }
+    }
+
+    /// A menu opened (`true`) or closed on the agent's screen.
+    pub fn menu(&mut self, open: bool) {
+        match (open, self.before_menu) {
+            (true, None) => self.before_menu = Some(self.chars),
+            (false, Some(c)) => {
+                self.before_menu = None;
+                self.chars = c;
+            }
+            _ => {}
+        }
+    }
+
+    fn key(&mut self) {
+        self.last_key = Some(std::time::Instant::now());
     }
 
     pub fn feed(&mut self, bytes: &[u8]) {
@@ -278,14 +323,20 @@ impl LineState {
                         Key::Enter => self.chars = 0,
                         Key::Char(_) => self.chars += 1,
                         Key::Backspace => self.chars = self.chars.saturating_sub(1),
-                        // Arrows, focus, mouse, replies: not typing.
-                        Key::Neutral | Key::Other => {}
+                        // Focus, mouse, replies: not typing at all.
+                        Key::Neutral => continue,
+                        // Arrows and the like: a key, but no character.
+                        Key::Other => {}
                     }
+                    self.key();
                 }
                 continue;
             }
             match b {
-                0x1b => self.esc = Some(vec![b]),
+                0x1b => {
+                    self.esc = Some(vec![b]);
+                    continue;
+                }
                 // Enter submits; Ctrl-C / Ctrl-U clear the line.
                 b'\r' | b'\n' | 0x03 | 0x15 => self.chars = 0,
                 0x7f | 0x08 => self.chars = self.chars.saturating_sub(1),
@@ -294,6 +345,7 @@ impl LineState {
                 0x20..=0x7e | 0xc0..=0xff => self.chars += 1,
                 _ => {}
             }
+            self.key();
         }
     }
 }
@@ -322,6 +374,86 @@ fn winsize(fd: RawFd) -> Option<libc::winsize> {
 
 struct RawMode(libc::termios);
 
+/// The terminal's own attributes while it's in raw mode, for the signal handler.
+struct SavedTermios(std::cell::UnsafeCell<std::mem::MaybeUninit<libc::termios>>);
+// SAFETY: written only by `RawMode::enter` before `RAW_ACTIVE` is set, read only
+// while it is set.
+unsafe impl Sync for SavedTermios {}
+static SAVED_TERMIOS: SavedTermios =
+    SavedTermios(std::cell::UnsafeCell::new(std::mem::MaybeUninit::uninit()));
+static RAW_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// A terminating signal (SIGTERM, SIGHUP, SIGQUIT) that styr got, 0 for none.
+static SIGNALLED: AtomicI32 = AtomicI32::new(0);
+/// The signals that would kill styr with the terminal left in raw mode.
+const FATAL_SIGNALS: [libc::c_int; 3] = [libc::SIGTERM, libc::SIGHUP, libc::SIGQUIT];
+
+/// SIGTERM/SIGHUP/SIGQUIT: give the terminal back its attributes and pass the signal
+/// on to the agent; `run` then ends as the agent exits (or `watch_signals` ends
+/// styr if it doesn't). Only async-signal-safe calls in here.
+extern "C" fn on_fatal_signal(sig: libc::c_int) {
+    SIGNALLED.store(sig, Ordering::SeqCst);
+    // SAFETY: tcsetattr and kill are async-signal-safe; SAVED_TERMIOS is initialised
+    // whenever RAW_ACTIVE is set.
+    unsafe {
+        if RAW_ACTIVE.load(Ordering::SeqCst) {
+            libc::tcsetattr(0, libc::TCSANOW, (*SAVED_TERMIOS.0.get()).as_ptr());
+        }
+        let pid = CHILD.load(Ordering::SeqCst);
+        if pid > 0 {
+            libc::kill(pid, sig);
+        }
+    }
+}
+
+/// Install the handler (once per process).
+fn install_signal_handlers() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        for sig in FATAL_SIGNALS {
+            // SAFETY: installing a handler that only makes async-signal-safe calls.
+            unsafe {
+                let mut sa: libc::sigaction = std::mem::zeroed();
+                sa.sa_sigaction = on_fatal_signal as extern "C" fn(libc::c_int) as usize;
+                libc::sigemptyset(&mut sa.sa_mask);
+                sa.sa_flags = libc::SA_RESTART;
+                libc::sigaction(sig, &sa, std::ptr::null_mut());
+            }
+        }
+        // If the agent ignores the signal, don't hang on: give it a moment, then go.
+        std::thread::spawn(|| {
+            loop {
+                std::thread::sleep(Duration::from_millis(100));
+                let sig = SIGNALLED.load(Ordering::SeqCst);
+                if sig == 0 {
+                    continue;
+                }
+                std::thread::sleep(Duration::from_secs(3));
+                // SAFETY: restoring the saved attributes, then exiting.
+                unsafe {
+                    if RAW_ACTIVE.load(Ordering::SeqCst) {
+                        libc::tcsetattr(0, libc::TCSANOW, (*SAVED_TERMIOS.0.get()).as_ptr());
+                    }
+                    libc::_exit(128 + sig);
+                }
+            }
+        });
+    });
+}
+
+/// The signals the agent's process starts with: default handling, nothing blocked.
+/// Called in the forked child before exec.
+fn reset_child_signals() {
+    // SAFETY: async-signal-safe calls in the freshly forked child.
+    unsafe {
+        for sig in FATAL_SIGNALS {
+            libc::signal(sig, libc::SIG_DFL);
+        }
+        let mut none: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut none);
+        libc::sigprocmask(libc::SIG_SETMASK, &none, std::ptr::null_mut());
+    }
+}
+
 impl RawMode {
     fn enter() -> Result<Self> {
         // SAFETY: plain termios calls on stdin with structs we own.
@@ -329,6 +461,10 @@ impl RawMode {
             let mut orig: libc::termios = std::mem::zeroed();
             if libc::tcgetattr(0, &mut orig) != 0 {
                 bail!("tcgetattr failed");
+            }
+            if !RAW_ACTIVE.load(Ordering::SeqCst) {
+                (*SAVED_TERMIOS.0.get()).write(orig);
+                RAW_ACTIVE.store(true, Ordering::SeqCst);
             }
             let mut raw = orig;
             libc::cfmakeraw(&mut raw);
@@ -340,10 +476,45 @@ impl RawMode {
 
 impl Drop for RawMode {
     fn drop(&mut self) {
+        RAW_ACTIVE.store(false, Ordering::SeqCst);
         // SAFETY: restoring the attributes saved in `enter`.
         unsafe {
             libc::tcsetattr(0, libc::TCSANOW, &self.0);
         }
+    }
+}
+
+/// How often an open menu is told to the daemon again (a daemon that restarted
+/// knows nothing of it, and the phone couldn't answer it).
+const MENU_REANNOUNCE: Duration = Duration::from_secs(5);
+/// How often the agent's mode is told to the daemon again.
+const MODE_REANNOUNCE: Duration = Duration::from_secs(15);
+
+/// The daemon got the report (it may still have refused it: sending it again
+/// wouldn't help). Not when it couldn't be reached: then it's sent again.
+fn delivered(r: &Result<Response, IpcError>) -> bool {
+    matches!(r, Ok(_) | Err(IpcError::Remote(_)))
+}
+
+/// When to tell the daemon about the menu on screen: whenever it changes, again
+/// until a report gets through, and now and then while one is open.
+#[derive(Debug, Default)]
+struct Announcer {
+    /// What the daemon last heard, and when.
+    last: Option<(Option<TerminalPrompt>, std::time::Instant)>,
+}
+
+impl Announcer {
+    fn due(&self, now: &Option<TerminalPrompt>, at: std::time::Instant, every: Duration) -> bool {
+        match &self.last {
+            None => now.is_some(),
+            Some((last, _)) if last != now => true,
+            Some((last, sent)) => last.is_some() && at.saturating_duration_since(*sent) >= every,
+        }
+    }
+
+    fn sent(&mut self, now: Option<TerminalPrompt>, at: std::time::Instant) {
+        self.last = Some((now, at));
     }
 }
 
@@ -519,7 +690,7 @@ pub fn claude_preview(contents: &str) -> Option<String> {
     let tool_like = first
         .find('(')
         .is_some_and(|i| i < 40 && !first[..i].contains(' '))
-        || TOOL_VERBS.iter().any(|p| first.starts_with(p))
+        || tool_summary(first)
         || timed_step(first);
     // A line with a `⎿` right under it is a tool step (`⏺ Sleeping 5 seconds then
     // printing hi` / `⎿ $ sleep 5`), even while its `⏺` blinks off; reply text never
@@ -607,6 +778,9 @@ fn tool_summary(t: &str) -> bool {
     else {
         return false;
     };
+    if t.starts_with("Interrupted") {
+        return rest.is_empty() || rest.starts_with(" ·");
+    }
     let rest = rest.strip_prefix("for ").unwrap_or(rest);
     t.ends_with('…') || t.contains("ctrl+o") || rest.starts_with(|c: char| c.is_ascii_digit())
 }
@@ -826,6 +1000,45 @@ pub fn grow_preview(seen: &str, now: &str) -> String {
     now.to_owned()
 }
 
+/// How long a reply's preview may be missing (a frame drawn halfway) and still
+/// go on from a screen whose start has scrolled off.
+const PREVIEW_GAP: Duration = Duration::from_secs(5);
+
+/// The previews read off the screen, one after the other.
+#[derive(Debug, Default)]
+pub struct Previews {
+    last: Option<String>,
+    /// When there last was one.
+    seen_at: Option<std::time::Instant>,
+}
+
+impl Previews {
+    /// The preview to show for what the screen reads now. Past a screenful, what's
+    /// new is added to what was read rather than showing the tail. A screen whose
+    /// start scrolled off ("…" first) only goes on a reply that was being shown:
+    /// otherwise it's as likely the wrapped echo of your own long prompt.
+    pub fn next(&mut self, read: Option<String>, at: std::time::Instant) -> Option<String> {
+        let recent = self
+            .seen_at
+            .is_some_and(|t| at.saturating_duration_since(t) < PREVIEW_GAP);
+        let now = match read {
+            Some(n) if n.starts_with('…') && !recent => None,
+            Some(n) => Some(match &self.last {
+                Some(seen) => grow_preview(seen, &n),
+                None => n,
+            }),
+            None => None,
+        };
+        if now.is_some() {
+            self.seen_at = Some(at);
+            self.last = now.clone();
+        } else if !recent {
+            self.last = None;
+        }
+        now
+    }
+}
+
 /// The reply Codex is writing, from its screen: the last `•` block above its input
 /// line (`› …`), while the turn runs. Not a tool step (`• Ran cargo test`,
 /// `• Explored`) or the status line (`• Working (3s • esc to interrupt)`); nothing
@@ -910,11 +1123,48 @@ pub fn codex_preview(contents: &str) -> Option<String> {
     if !scrolled && tool_like {
         return None;
     }
+    if scrolled {
+        // With its `•` line gone, a tool's output (indented deeper than reply text,
+        // or a diff: `    12 +  let a = 1;`) can look like a reply. Lines deeper
+        // than reply text at the top are the end of something we can't see.
+        let block = &lines[start..end];
+        if block.iter().any(|l| diff_line(l)) {
+            return None;
+        }
+        let deep = |l: &str| !l.trim().is_empty() && l.len() - l.trim_start().len() > 2;
+        let skip = block
+            .iter()
+            .take_while(|l| deep(l) || l.trim().is_empty())
+            .count();
+        if skip > 0 {
+            let from = block.get(skip..).filter(|r| !r.is_empty())?;
+            return codex_body(from[0].trim(), &from[1..], true);
+        }
+    }
+    codex_body(first, &lines[start + 1..end], scrolled)
+}
+
+/// A Codex reply's first line and the lines after it, as text.
+fn codex_body(first: &str, rest: &[&str], scrolled: bool) -> Option<String> {
     let mut body = vec![first.to_owned()];
-    for l in &lines[start + 1..end] {
+    for l in rest {
         body.push(l.strip_prefix("  ").unwrap_or(l).trim_end().to_owned());
     }
     reflow(body, scrolled)
+}
+
+/// A line of a diff as Codex shows an edit: its line number, then `+`, `-` or
+/// blanks, then the code (`    12 +  let a = 1;`, `    11    fn main() {`).
+fn diff_line(l: &str) -> bool {
+    let t = l.trim_start();
+    if l.len() - t.len() < 2 {
+        return false;
+    }
+    let digits = t.chars().take_while(char::is_ascii_digit).count();
+    digits > 0
+        && (t[digits..].starts_with(" +")
+            || t[digits..].starts_with(" -")
+            || t[digits..].starts_with("   "))
 }
 
 /// Claude's mode, from its footer: "⏸ manual mode on", "⏵⏵ accept edits on",
@@ -1192,6 +1442,7 @@ pub fn run(
         bail!("forkpty failed: {}", std::io::Error::last_os_error());
     }
     if pid == 0 {
+        reset_child_signals();
         unsafe {
             libc::execv(argv_ptrs[0], argv_ptrs.as_ptr());
             libc::_exit(127);
@@ -1199,6 +1450,7 @@ pub fn run(
     }
 
     CHILD.store(pid, Ordering::Relaxed);
+    install_signal_handlers();
     let raw = RawMode::enter()?;
     // SAFETY: `master` is a fresh descriptor we own; dup it for the writer side.
     let master_read = unsafe { std::fs::File::from_raw_fd(master) };
@@ -1212,6 +1464,8 @@ pub fn run(
         0,
     )));
     let on_screen: Arc<Mutex<Option<TerminalPrompt>>> = Arc::new(Mutex::new(None));
+    // The menu the daemon last heard about (what a phone's answer is for).
+    let reported: Arc<Mutex<Option<TerminalPrompt>>> = Arc::new(Mutex::new(None));
     // Codex says when it waits for an approval (OSC 7501 state=blocked); used to
     // notice a menu we failed to read.
     let blocked = Arc::new(AtomicBool::new(false));
@@ -1314,17 +1568,19 @@ pub fn run(
     };
     // Permission menus on screen → daemon (agents without a permission hook).
     if let Some(detect) = detector {
-        let (screen, on_screen, done, blocked) = (
+        let (screen, on_screen, reported, done, blocked, line) = (
             screen.clone(),
             on_screen.clone(),
+            reported.clone(),
             done.clone(),
             blocked.clone(),
+            line.clone(),
         );
         let launch_id = launch_id.to_owned();
         std::thread::spawn(move || {
             let client =
                 Client::new(Paths::resolve().socket).with_timeout(Some(Duration::from_secs(2)));
-            let mut last: Option<TerminalPrompt> = None;
+            let mut announcer = Announcer::default();
             let mut blocked_since: Option<std::time::Instant> = None;
             let mut dumped = false;
             while !done.load(Ordering::Relaxed) {
@@ -1348,12 +1604,19 @@ pub fn run(
                     dumped = false;
                 }
                 *on_screen.lock().unwrap_or_else(|p| p.into_inner()) = now.clone();
-                if now != last {
-                    let _ = client.call(&Request::TerminalPrompt {
+                line.lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .menu(now.is_some());
+                let at = std::time::Instant::now();
+                if announcer.due(&now, at, MENU_REANNOUNCE) {
+                    let sent = client.call(&Request::TerminalPrompt {
                         launch_id: launch_id.clone(),
                         prompt: now.clone(),
                     });
-                    last = now;
+                    if delivered(&sent) {
+                        *reported.lock().unwrap_or_else(|p| p.into_inner()) = now.clone();
+                        announcer.sent(now, at);
+                    }
                 }
             }
         });
@@ -1401,6 +1664,7 @@ pub fn run(
         std::thread::spawn(move || {
             let client =
                 Client::new(Paths::resolve().socket).with_timeout(Some(Duration::from_secs(2)));
+            let mut previews = Previews::default();
             let mut last: Option<String> = None;
             let mut last_status: Option<WorkStatus> = None;
             while !done.load(Ordering::Relaxed) {
@@ -1412,11 +1676,7 @@ pub fn run(
                         read_status.and_then(|r| r(&s.screen().contents())),
                     )
                 };
-                // Past a screenful, add to what was read rather than show the tail.
-                let now = read_now.map(|n| match &last {
-                    Some(seen) => grow_preview(seen, &n),
-                    None => n,
-                });
+                let now = previews.next(read_now, std::time::Instant::now());
                 if now != last || status != last_status {
                     let _ = client.call(&Request::TerminalPreview {
                         launch_id: launch_id.clone(),
@@ -1437,6 +1697,7 @@ pub fn run(
             let client =
                 Client::new(Paths::resolve().socket).with_timeout(Some(Duration::from_secs(2)));
             let mut last: Option<&'static str> = None;
+            let mut sent_at = std::time::Instant::now();
             let mut seen_at = std::time::Instant::now();
             while !done.load(Ordering::Relaxed) {
                 std::thread::sleep(Duration::from_millis(300));
@@ -1457,13 +1718,15 @@ pub fn run(
                     continue;
                 };
                 seen_at = std::time::Instant::now();
-                if Some(now) != last {
+                // Now and then even if unchanged: a daemon that restarted has lost it.
+                if Some(now) != last || sent_at.elapsed() > MODE_REANNOUNCE {
                     let sent = client.call(&Request::TerminalMode {
                         launch_id: launch_id.clone(),
                         mode: Some(now.to_owned()),
                     });
-                    if sent.is_ok() {
+                    if delivered(&sent) {
                         last = Some(now);
+                        sent_at = std::time::Instant::now();
                     }
                 }
             }
@@ -1494,27 +1757,19 @@ pub fn run(
     }
     // Phone prompts → agent.
     {
-        let (w, line, done, on_screen) = (
-            master_write.clone(),
-            line.clone(),
-            done.clone(),
-            on_screen.clone(),
-        );
-        let launch_id = launch_id.to_owned();
         let agent = catch_styr.then_some(styr_core::ids::AgentKind::Codex);
-        let screen = screen.clone();
-        std::thread::spawn(move || {
-            inject_loop(
-                agent,
-                &launch_id,
-                &w,
-                &line,
-                &done,
-                &on_screen,
-                &screen,
-                mode_reader,
-            )
-        });
+        let ctx = Ctx {
+            w: master_write.clone(),
+            line: line.clone(),
+            done: done.clone(),
+            on_screen: on_screen.clone(),
+            reported: reported.clone(),
+            screen: screen.clone(),
+            detector,
+            codex: agent == Some(styr_core::ids::AgentKind::Codex),
+        };
+        let launch_id = launch_id.to_owned();
+        std::thread::spawn(move || inject_loop(agent, &launch_id, &ctx, mode_reader));
     }
 
     // Wait for the agent to exit.
@@ -1544,6 +1799,41 @@ pub fn codex_ready(screen: &str) -> bool {
                 || l.starts_with("› Ask Codex")
                 || l.contains("Ask Codex to do anything")
         })
+}
+
+/// Whether the agent's input box shows text: `Some(true)` if it does, `Some(false)`
+/// if it's visibly empty (a dim placeholder such as `Try "…"` or `Ask Codex to do
+/// anything` is no text), `None` if no input box is recognised. Claude's box is the
+/// `❯` line under a rule; Codex's (`codex`) the last `›` line that isn't a menu option.
+pub fn input_box_text(screen: &vt100::Screen, codex: bool) -> Option<bool> {
+    let cols = screen.size().1.get();
+    let rows: Vec<String> = screen.rows(0, cols).collect();
+    let rule = |l: &str| l.trim().chars().count() >= 20 && l.trim().chars().all(|c| c == '─');
+    let row = (1..rows.len())
+        .rev()
+        .find(|&r| rows[r].starts_with('❯') && rule(&rows[r - 1]))
+        .or_else(|| {
+            codex
+                .then(|| {
+                    rows.iter()
+                        .rposition(|l| l.starts_with('›') && numbered(l).is_none())
+                })
+                .flatten()
+        })?;
+    // Codex's usual placeholder, in case it isn't drawn dim.
+    let typed = rows[row].chars().skip(1).collect::<String>();
+    if codex && typed.trim() == "Ask Codex to do anything" {
+        return Some(false);
+    }
+    let row = u16::try_from(row).ok()?;
+    let text = (1..cols).filter_map(|c| screen.cell(row, c)).any(|c| {
+        !c.dim()
+            && !c
+                .contents()
+                .trim_matches(|ch: char| ch.is_whitespace() || ch == '\u{a0}')
+                .is_empty()
+    });
+    Some(text)
 }
 
 #[cfg(test)]
@@ -1604,20 +1894,198 @@ fn share_from_terminal(cmd: styr_core::adapter::StyrCommand, launch_id: &str, ag
     let _ = out.flush();
 }
 
-#[allow(clippy::too_many_arguments)]
+/// What the threads acting on the agent's terminal share.
+struct Ctx<W> {
+    /// The agent's terminal (keys go in here). Held while a phone prompt is typed,
+    /// so no key of yours lands in the middle of it.
+    w: Arc<Mutex<W>>,
+    line: Arc<Mutex<LineState>>,
+    done: Arc<AtomicBool>,
+    /// The menu on screen, as last read.
+    on_screen: Arc<Mutex<Option<TerminalPrompt>>>,
+    /// The menu the daemon last heard about.
+    reported: Arc<Mutex<Option<TerminalPrompt>>>,
+    screen: Arc<Mutex<vt100::Parser>>,
+    detector: Option<PromptDetector>,
+    codex: bool,
+}
+
+impl<W> Clone for Ctx<W> {
+    fn clone(&self) -> Self {
+        Self {
+            w: self.w.clone(),
+            line: self.line.clone(),
+            done: self.done.clone(),
+            on_screen: self.on_screen.clone(),
+            reported: self.reported.clone(),
+            screen: self.screen.clone(),
+            detector: self.detector,
+            codex: self.codex,
+        }
+    }
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// After this long without recognising Codex's input box (and with no menu open),
+/// a phone prompt is typed anyway: holding it forever is worse.
+const CODEX_READY_WAIT: Duration = Duration::from_secs(20);
+
+impl<W: Write> Ctx<W> {
+    fn done(&self) -> bool {
+        self.done.load(Ordering::Relaxed)
+    }
+
+    fn contents(&self) -> String {
+        lock(&self.screen).screen().contents()
+    }
+
+    fn menu(&self, contents: &str) -> Option<TerminalPrompt> {
+        self.detector.and_then(|d| d(contents))
+    }
+
+    fn write(w: &mut W, bytes: &[u8]) {
+        let _ = w.write_all(bytes);
+        let _ = w.flush();
+    }
+
+    /// Type a phone prompt once it's safe:
+    /// - never over a half-typed line (the user is typing);
+    /// - never into a menu or question ("trust this folder?"), and for Codex
+    ///   preferably only once its input box is recognised (see `CODEX_READY_WAIT`).
+    ///
+    /// The check and the typing happen with the keyboard held off, through to Enter.
+    fn type_prompt(&self, text: &str) {
+        let since = std::time::Instant::now();
+        let mut dumped = false;
+        loop {
+            if self.done() {
+                return;
+            }
+            {
+                let mut w = lock(&self.w);
+                let (contents, box_text) = {
+                    let s = lock(&self.screen);
+                    (
+                        s.screen().contents(),
+                        input_box_text(s.screen(), self.codex),
+                    )
+                };
+                let typing = lock(&self.line).typing(box_text, std::time::Instant::now());
+                let menu_open = self.menu(&contents).is_some();
+                let ready = !self.codex || codex_ready(&contents);
+                let waited = since.elapsed();
+                if !typing && !menu_open && (ready || waited > CODEX_READY_WAIT) {
+                    let (body, enter) = keystrokes(text);
+                    Self::write(&mut w, &body);
+                    std::thread::sleep(Duration::from_millis(150));
+                    // A menu that opened just now would take the Enter as its answer.
+                    if self.menu(&self.contents()).is_none() {
+                        Self::write(&mut w, &enter);
+                        return;
+                    }
+                    drop(w);
+                    self.enter_after_menu(&enter);
+                    return;
+                }
+                if self.codex && !dumped && waited > Duration::from_secs(5) && !typing {
+                    dumped = true;
+                    let s = lock(&self.screen);
+                    let (rows, cols) = s.screen().size();
+                    dump_unread_menu(&format!(
+                        "[waiting for Codex's input box; screen {rows}x{cols}]\n{}",
+                        s.screen().contents()
+                    ));
+                }
+            }
+            std::thread::sleep(Duration::from_millis(150));
+        }
+    }
+
+    /// A menu opened between a prompt's text and its Enter: press Enter once it has
+    /// gone, unless you've typed since (then the line is yours to send).
+    fn enter_after_menu(&self, enter: &[u8]) {
+        while !self.done() {
+            std::thread::sleep(Duration::from_millis(150));
+            let mut w = lock(&self.w);
+            if self.menu(&self.contents()).is_none() {
+                if !lock(&self.line).dirty() {
+                    Self::write(&mut w, enter);
+                }
+                return;
+            }
+        }
+    }
+
+    /// Answer the menu on screen with option `index`, if it's still the menu the
+    /// daemon was told about (the phone answered that one); the highlight must be on
+    /// the option before Enter confirms it.
+    fn select_option(&self, index: usize) -> bool {
+        let Some(reported) = lock(&self.reported).clone() else {
+            return false;
+        };
+        let same = |m: &TerminalPrompt| {
+            m.title == reported.title
+                && m.detail == reported.detail
+                && m.options == reported.options
+        };
+        let mut w = lock(&self.w);
+        let Some(now) = self.menu(&self.contents()).filter(|m| same(m)) else {
+            return false;
+        };
+        if index >= now.options.len() {
+            return false;
+        }
+        let mut keys = menu_keys(now.selected, index);
+        let enter = keys.pop().expect("menu_keys ends with Enter");
+        for key in keys {
+            Self::write(&mut w, &key);
+            std::thread::sleep(Duration::from_millis(60));
+        }
+        let until = std::time::Instant::now() + Duration::from_millis(1500);
+        loop {
+            match self.menu(&self.contents()) {
+                Some(m) if same(&m) && m.selected == index => {
+                    Self::write(&mut w, &enter);
+                    return true;
+                }
+                Some(m) if same(&m) && std::time::Instant::now() < until => {}
+                _ => return false,
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+/// Types phone prompts in the order they came, each once it's safe; meanwhile the
+/// daemon keeps being listened to (a menu that opens can still be answered).
+fn typer_loop<W: Write>(ctx: &Ctx<W>, prompts: std::sync::mpsc::Receiver<String>) {
+    use std::sync::mpsc::RecvTimeoutError;
+    while !ctx.done() {
+        match prompts.recv_timeout(Duration::from_millis(200)) {
+            Ok(text) => ctx.type_prompt(&text),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => return,
+        }
+    }
+}
+
 fn inject_loop(
     agent: Option<styr_core::ids::AgentKind>,
     launch_id: &str,
-    w: &Mutex<std::fs::File>,
-    line: &Mutex<LineState>,
-    done: &AtomicBool,
-    on_screen: &Mutex<Option<TerminalPrompt>>,
-    screen: &Mutex<vt100::Parser>,
+    ctx: &Ctx<std::fs::File>,
     mode_reader: Option<ModeReader>,
 ) {
+    let (w, done, on_screen, screen) = (&*ctx.w, &*ctx.done, &*ctx.on_screen, &*ctx.screen);
     let client = Client::new(Paths::resolve().socket).with_timeout(None);
     let cwd = std::env::current_dir().ok();
-    let codex = agent == Some(styr_core::ids::AgentKind::Codex);
+    let (prompts, queued) = std::sync::mpsc::channel::<String>();
+    {
+        let ctx = ctx.clone();
+        std::thread::spawn(move || typer_loop(&ctx, queued));
+    }
     while !done.load(Ordering::Relaxed) {
         match client.call(&Request::AttachTerminal {
             launch_id: launch_id.to_owned(),
@@ -1626,65 +2094,12 @@ fn inject_loop(
             level: styr_core::ipc::WRAPPER_LEVEL,
         }) {
             Ok(Response::TypePrompt { text }) => {
-                // Don't type over a half-written line; wait until it's sent or cleared.
-                let waiting_since = std::time::Instant::now();
-                let mut dumped = false;
-                // Wait until it's safe to type:
-                // - never over a half-typed line (the user is typing);
-                // - Codex: never into a menu or question ("trust this folder?"), and
-                //   preferably only once its input box is recognised. If no menu is
-                //   detected but the box still isn't recognised after 20 s (a screen
-                //   layout we don't know), type anyway: holding the message forever is
-                //   worse than typing into Codex's input.
-                loop {
-                    if done.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    let typing = line.lock().unwrap_or_else(|p| p.into_inner()).dirty();
-                    let contents = screen
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .screen()
-                        .contents();
-                    let menu_open = codex && detect_codex_prompt(&contents).is_some();
-                    let ready = !codex || codex_ready(&contents);
-                    let waited = waiting_since.elapsed();
-                    if !typing && !menu_open && (ready || waited > Duration::from_secs(20)) {
-                        break;
-                    }
-                    if codex && !dumped && waited > Duration::from_secs(5) && !typing {
-                        dumped = true;
-                        let s = screen.lock().unwrap_or_else(|p| p.into_inner());
-                        let (rows, cols) = s.screen().size();
-                        dump_unread_menu(&format!(
-                            "[waiting for Codex's input box; screen {rows}x{cols}]\n{}",
-                            s.screen().contents()
-                        ));
-                    }
-                    std::thread::sleep(Duration::from_millis(150));
-                }
-                let (body, enter) = keystrokes(&text);
-                let mut f = w.lock().unwrap_or_else(|p| p.into_inner());
-                let _ = f.write_all(&body);
-                let _ = f.flush();
-                drop(f);
-                std::thread::sleep(Duration::from_millis(150));
-                let _ = w
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .write_all(&enter);
+                // Typed when it's safe (see `Ctx::type_prompt`), in order; listening
+                // to the daemon goes on meanwhile.
+                let _ = prompts.send(text);
             }
             Ok(Response::SelectOption { index }) => {
-                // Only answer the menu that is actually on screen right now.
-                let current = on_screen.lock().unwrap_or_else(|p| p.into_inner()).clone();
-                if let Some(p) = current.filter(|p| index < p.options.len()) {
-                    let mut f = w.lock().unwrap_or_else(|p| p.into_inner());
-                    for key in menu_keys(p.selected, index) {
-                        let _ = f.write_all(&key);
-                        let _ = f.flush();
-                        std::thread::sleep(Duration::from_millis(60));
-                    }
-                }
+                ctx.select_option(index);
             }
             Ok(Response::WatchScreen) => {
                 SCREEN_UNTIL.store(now_ms() + 20_000, Ordering::Relaxed);
@@ -2487,6 +2902,337 @@ mod tests {
             seen += 1;
         }
         assert!(seen >= 4);
+    }
+}
+
+#[cfg(test)]
+mod wrapper_tests {
+    use super::*;
+    use std::time::Instant;
+
+    fn parser(text: &str) -> vt100::Parser {
+        let mut p = vt100::Parser::new(nz(20), nz(80), 0);
+        p.process(text.replace('\n', "\r\n").as_bytes());
+        p
+    }
+
+    fn redraw(p: &Mutex<vt100::Parser>, text: &str) {
+        lock(p).process(format!("\x1b[2J\x1b[H{}", text.replace('\n', "\r\n")).as_bytes());
+    }
+
+    const RULE: &str = "────────────────────────────────────────";
+
+    #[test]
+    fn the_input_box_says_whether_it_holds_text() {
+        // As Claude Code draws it: `❯`, a no-break space, the placeholder dimmed.
+        let claude = |input: &str| {
+            parser(&format!(
+                "⏺ Done.\n\n{RULE}\n\x1b[39m❯\u{a0}{input}\x1b[22m\n{RULE}\n  ? for shortcuts"
+            ))
+        };
+        let p = claude("\x1b[2mTry \"edit <filepath> to…\"");
+        assert_eq!(input_box_text(p.screen(), false), Some(false));
+        let p = claude("fix the parser");
+        assert_eq!(input_box_text(p.screen(), false), Some(true));
+        let p = claude("");
+        assert_eq!(input_box_text(p.screen(), false), Some(false));
+        // Codex: the last `›` line, placeholder dimmed.
+        let codex = |input: &str| {
+            parser(&format!(
+                "› an earlier prompt\n\n• Done.\n\n\x1b[1m›\x1b[22m {input}\x1b[22m\n\n  ? for shortcuts"
+            ))
+        };
+        let p = codex("\x1b[2mAsk Codex to do anything");
+        assert_eq!(input_box_text(p.screen(), true), Some(false));
+        let p = codex("half a thought");
+        assert_eq!(input_box_text(p.screen(), true), Some(true));
+        // The placeholder, even when it isn't drawn dim.
+        let p = codex("Ask Codex to do anything");
+        assert_eq!(input_box_text(p.screen(), true), Some(false));
+        // The real recording's input line.
+        let mut p = vt100::Parser::new(nz(40), nz(120), 0);
+        p.process(b"\x1b[36;1H\x1b[1m\xe2\x80\xba\x1b[36;3H\x1b[22m\x1b[2mAsk Codex to do anything\x1b[38;1H\x1b[22m");
+        assert_eq!(input_box_text(p.screen(), true), Some(false));
+        // No box: unknown.
+        let p = parser("just some output\n");
+        assert_eq!(input_box_text(p.screen(), true), None);
+        // A history line starting with `❯` isn't Claude's box without its rule.
+        let p = parser("❯ an old prompt\n\n⏺ Reply.\n");
+        assert_eq!(input_box_text(p.screen(), false), None);
+    }
+
+    #[test]
+    fn a_line_is_typing_only_while_it_can_be() {
+        let t0 = Instant::now();
+        let later = |s: u64| t0 + Duration::from_secs(s);
+        let l = LineState::default();
+        assert!(!l.typing(None, t0) && !l.typing(Some(false), t0));
+        // A Codex menu answered with `y`, Esc Esc, Ctrl-W: keys counted, line empty.
+        for keys in [b"y".as_slice(), b"1", b"abc\x1b\x1b", b"abc\x17"] {
+            let mut l = LineState::default();
+            l.feed(keys);
+            assert!(l.dirty(), "{keys:?}");
+            let at = l.last_key.unwrap();
+            // The screen shows an empty box: not typing once it has had time to draw.
+            assert!(l.typing(Some(false), at), "{keys:?} just typed");
+            assert!(
+                !l.typing(Some(false), at + Duration::from_secs(2)),
+                "{keys:?}"
+            );
+            // Can't read the box: the count goes stale.
+            assert!(l.typing(None, at + Duration::from_secs(10)), "{keys:?}");
+            assert!(!l.typing(None, at + Duration::from_secs(31)), "{keys:?}");
+        }
+        // Text in the box holds, however long ago it was typed.
+        let mut l = LineState::default();
+        l.feed(b"half a thou");
+        assert!(l.typing(Some(true), later(3600)));
+        // An arrow is a key, but no character.
+        let mut l = LineState::default();
+        l.feed(b"\x1b[A");
+        assert!(!l.dirty() && l.last_key.is_some());
+        assert!(!l.typing(Some(true), Instant::now()));
+        // Terminal replies aren't keys.
+        let mut l = LineState::default();
+        l.feed(b"\x1b[I\x1b]11;rgb:0000/0000/0000\x07\x1b[12;1R");
+        assert_eq!(l.last_key, None);
+    }
+
+    #[test]
+    fn keys_typed_into_a_menu_dont_count() {
+        let mut l = LineState::default();
+        l.feed(b"draft");
+        l.menu(true);
+        l.feed(b"y");
+        l.menu(true);
+        l.menu(false);
+        assert_eq!(l.chars, 5, "the half-typed line is back as it was");
+        let mut l = LineState::default();
+        l.menu(true);
+        l.feed(b"1");
+        l.menu(false);
+        assert!(!l.dirty(), "the menu's answer isn't a line");
+        l.menu(false);
+        assert!(!l.dirty());
+    }
+
+    fn menu(title: &str) -> TerminalPrompt {
+        TerminalPrompt {
+            title: title.into(),
+            detail: String::new(),
+            options: vec!["Yes".into(), "No".into()],
+            selected: 0,
+        }
+    }
+
+    #[test]
+    fn menus_are_announced_until_the_daemon_has_them() {
+        let t0 = Instant::now();
+        let every = Duration::from_secs(5);
+        let mut a = Announcer::default();
+        assert!(!a.due(&None, t0, every), "nothing to say yet");
+        let m = Some(menu("Run it?"));
+        assert!(a.due(&m, t0, every));
+        // The report failed (daemon restarting): still due.
+        assert!(a.due(&m, t0 + Duration::from_secs(1), every));
+        a.sent(m.clone(), t0);
+        assert!(!a.due(&m, t0 + Duration::from_secs(1), every));
+        assert!(a.due(&m, t0 + every, every), "again while it's open");
+        assert!(
+            a.due(&None, t0 + Duration::from_secs(1), every),
+            "it closed"
+        );
+        a.sent(None, t0);
+        assert!(!a.due(&None, t0 + Duration::from_secs(60), every));
+        assert!(delivered(&Ok(Response::Ok)));
+        assert!(delivered(&Err(IpcError::Remote("no".into()))));
+        assert!(!delivered(&Err(IpcError::NotRunning("/x".into()))));
+    }
+
+    #[test]
+    fn a_scrolled_preview_only_continues_a_reply() {
+        let t0 = Instant::now();
+        let mut p = Previews::default();
+        // The wrapped tail of your own long prompt, start scrolled off: no preview.
+        assert_eq!(p.next(Some("…about lighthouses.".into()), t0), None);
+        // A reply that was shown goes on past a screenful.
+        let mut p = Previews::default();
+        let head = "Lighthouses trace their origins to antiquity, when builders raised towers";
+        assert_eq!(p.next(Some(head.into()), t0).as_deref(), Some(head));
+        let tail = "…when builders raised towers to guide ships.";
+        let grown = p.next(Some(tail.into()), t0 + Duration::from_millis(300));
+        assert_eq!(
+            grown.as_deref(),
+            Some(
+                "Lighthouses trace their origins to antiquity, when builders raised towers to guide ships."
+            )
+        );
+        // A frame read as nothing in between doesn't break it.
+        assert_eq!(p.next(None, t0 + Duration::from_millis(600)), None);
+        assert!(
+            p.next(Some(tail.into()), t0 + Duration::from_secs(1))
+                .is_some()
+        );
+        // Long after the last one: a scrolled screen is no reply.
+        assert_eq!(p.next(None, t0 + Duration::from_secs(2)), None);
+        assert_eq!(p.next(Some(tail.into()), t0 + Duration::from_secs(9)), None);
+    }
+
+    #[test]
+    fn replies_that_start_like_a_tool_step_are_replies() {
+        let box_ = format!("{RULE}\n❯ \n{RULE}\n  ⏵⏵ auto mode on");
+        for first in [
+            "Updated the README with the new flags.",
+            "Read the error carefully: it's a missing feature flag.",
+            "Running the tests locally works; CI differs.",
+            "Interrupted runs leave a lock file behind.",
+        ] {
+            let s = format!("⏺ {first}\n\n{box_}");
+            assert_eq!(claude_preview(&s).as_deref(), Some(first));
+        }
+        for tool in [
+            "Read 3 files (ctrl+o to expand)",
+            "Updated 2 files",
+            "Running 1 shell command…",
+            "Interrupted · What should Claude do instead?",
+        ] {
+            let s = format!("⏺ {tool}\n\n{box_}");
+            assert_eq!(claude_preview(&s), None, "{tool}");
+        }
+    }
+
+    #[test]
+    fn codex_tool_output_scrolled_up_is_no_preview() {
+        let foot = "\n› Ask Codex to do anything\n\n  ← for agents · ? for shortcuts\n";
+        // A diff whose `• Edited` line scrolled off.
+        let diff =
+            format!("    11    fn main() {{\n    12 +  let a = 1;\n    13 -  let b = 2;\n{foot}");
+        assert_eq!(codex_preview(&diff), None);
+        // A command's output, deeper than reply text.
+        let out = format!("    test a ... ok\n    test b ... ok\n{foot}");
+        assert_eq!(codex_preview(&out), None);
+        // A reply scrolled off mid-list: its first whole line on.
+        let list = format!(
+            "    replicates in the second cohort.\n  - The other effect is smaller.\n  And that's it.\n{foot}"
+        );
+        assert_eq!(
+            codex_preview(&list).as_deref(),
+            Some("…- The other effect is smaller. And that's it.")
+        );
+        assert!(!diff_line("  12 apples were counted"));
+        assert!(diff_line("    7 -    x"));
+    }
+
+    const CODEX_MENU: &str = "  Would you like to run the following command?\n\n  $ touch menu.txt\n\n› 1. Yes, proceed (y)\n  2. No, and tell Codex what to do differently (esc)\n\n  Press enter to confirm or esc to cancel\n";
+    const CODEX_IDLE: &str = "• Done.\n\n› \x1b[2mAsk Codex to do anything\x1b[22m\n\n  ← for agents · ? for shortcuts\n";
+
+    fn ctx(screen: &str) -> Ctx<Vec<u8>> {
+        Ctx {
+            w: Arc::new(Mutex::new(Vec::new())),
+            line: Arc::default(),
+            done: Arc::default(),
+            on_screen: Arc::default(),
+            reported: Arc::default(),
+            screen: Arc::new(Mutex::new(parser(screen))),
+            detector: Some(detect_codex_prompt),
+            codex: true,
+        }
+    }
+
+    fn written(c: &Ctx<Vec<u8>>) -> Vec<u8> {
+        lock(&c.w).clone()
+    }
+
+    fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
+        let until = Instant::now() + Duration::from_secs(5);
+        while !ok() {
+            assert!(Instant::now() < until, "timed out waiting for {what}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn a_held_prompt_doesnt_stop_the_menu_being_answered() {
+        // A menu is open: the prompt waits in the typer, and the phone's answer to
+        // the menu still gets through (it used to wait behind the prompt for good).
+        let c = ctx(CODEX_MENU);
+        *lock(&c.reported) = detect_codex_prompt(&c.contents());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let typer = {
+            let c = c.clone();
+            std::thread::spawn(move || typer_loop(&c, rx))
+        };
+        tx.send("first".into()).unwrap();
+        tx.send("second".into()).unwrap();
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(written(&c), b"", "nothing typed into the menu");
+        assert!(c.select_option(0));
+        assert_eq!(written(&c), b"\r");
+        redraw(&c.screen, CODEX_IDLE);
+        wait_for("both prompts", || written(&c).ends_with(b"second\r"));
+        assert_eq!(written(&c), b"\rfirst\rsecond\r", "in order");
+        c.done.store(true, Ordering::Relaxed);
+        typer.join().unwrap();
+    }
+
+    #[test]
+    fn a_prompt_waits_for_your_line_and_takes_the_keyboard_through_enter() {
+        let c = ctx(CODEX_IDLE);
+        lock(&c.line).feed(b"draft");
+        // The box shows what you typed.
+        redraw(
+            &c.screen,
+            &CODEX_IDLE.replace("\x1b[2mAsk Codex to do anything", "draft"),
+        );
+        let typer = {
+            let c = c.clone();
+            std::thread::spawn(move || c.type_prompt("from the phone"))
+        };
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(written(&c), b"");
+        // Sent: the line is empty again.
+        lock(&c.line).feed(b"\r");
+        redraw(&c.screen, CODEX_IDLE);
+        // Your next key can't land between the prompt and its Enter: whenever the
+        // terminal is free with the prompt in it, the Enter is there too.
+        wait_for("the prompt", || !written(&c).is_empty());
+        lock(&c.w).extend_from_slice(b"x");
+        assert_eq!(written(&c), b"from the phone\rx");
+        typer.join().unwrap();
+    }
+
+    #[test]
+    fn a_menu_answer_needs_the_menu_the_phone_saw() {
+        // Never reported: refused.
+        let c = ctx(CODEX_MENU);
+        assert!(!c.select_option(0));
+        // Another menu on screen than the one reported: refused.
+        *lock(&c.reported) = Some(menu("Something else?"));
+        assert!(!c.select_option(0));
+        assert_eq!(written(&c), b"");
+        // The same menu: arrows to the option, Enter once it's highlighted.
+        *lock(&c.reported) = detect_codex_prompt(CODEX_MENU);
+        let mover = {
+            let screen = c.screen.clone();
+            std::thread::spawn(move || {
+                // The agent moves its highlight a moment after the arrow.
+                std::thread::sleep(Duration::from_millis(300));
+                let moved = CODEX_MENU
+                    .replace("› 1. Yes", "  1. Yes")
+                    .replace("  2. No", "› 2. No");
+                redraw(&screen, &moved);
+            })
+        };
+        assert!(c.select_option(1));
+        mover.join().unwrap();
+        assert_eq!(written(&c), b"\x1b[B\r");
+        // Out of range: refused.
+        assert!(!c.select_option(5));
+        // The highlight never gets there: no Enter.
+        let c = ctx(CODEX_MENU);
+        *lock(&c.reported) = detect_codex_prompt(CODEX_MENU);
+        assert!(!c.select_option(1));
+        assert_eq!(written(&c), b"\x1b[B");
     }
 }
 
