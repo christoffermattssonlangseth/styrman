@@ -246,8 +246,16 @@ final class SessionTimeline {
         pending.removeAll { $0.id == id && $0.unconfirmed }
     }
 
-    func dropPending(_ text: String) {
-        if let i = pending.firstIndex(where: { $0.text == text }) { pending.remove(at: i) }
+    /// The agent took a prompt. Spacing may come back changed, and a long paste
+    /// can come back rewrapped: a message from the phone with no match still
+    /// takes the oldest one the Mac handed over, so none is left hanging.
+    func dropPending(_ text: String, fromPhone: Bool = false) {
+        let words = text.split(whereSeparator: \.isWhitespace)
+        if let i = pending.firstIndex(where: { $0.text.split(whereSeparator: \.isWhitespace) == words }) {
+            pending.remove(at: i)
+        } else if fromPhone, let i = pending.firstIndex(where: \.delivered) ?? pending.firstIndex(where: \.queued) {
+            pending.remove(at: i)
+        }
     }
 
     @ObservationIgnored private var toolIndex: [String: Int] = [:]
@@ -371,10 +379,16 @@ final class SessionTimeline {
             append(.divider(id: key, text: "Session ended", at: e.at))
         case .sharingChanged(let shared):
             append(.divider(id: key, text: shared ? "Shared with this phone" : "Sharing stopped", at: e.at))
-        case .userMessage(let text, let fromPhone):
+        case .userMessage(var text, let fromPhone):
+            // Stored before styrd unwrapped Claude's long pastes.
+            if text.contains("<pasted_content id=") {
+                text = text.replacingOccurrences(of: #"<pasted_content id="\w+">\n?|\n?</pasted_content>"#, with: "",
+                                                 options: .regularExpression)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
             // Match by text too: if the Mac lost track (restart), the prompt we
             // typed comes back looking like terminal input.
-            dropPending(text)
+            dropPending(text, fromPhone: fromPhone)
             append(.user(id: key, text: text, fromPhone: fromPhone, at: e.at))
         case .assistantMessage(let id, let text, let delta):
             if let i = messageIndex[id], case .assistant(let iid, let old, let at) = items[i] {

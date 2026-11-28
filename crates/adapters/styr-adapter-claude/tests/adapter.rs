@@ -354,3 +354,20 @@ fn subagent_reports_are_not_shown_as_the_users_messages() {
         "Subagent reported back"
     );
 }
+
+#[test]
+fn a_long_paste_shows_as_what_was_pasted() {
+    let hooked = "\n\n<pasted_content id=\"2487\">\nNot nothing, but close.\n\n**1. Mined.** Yes.\n</pasted_content>";
+    assert_eq!(
+        unwrap_pastes(hooked),
+        "Not nothing, but close.\n\n**1. Mined.** Yes."
+    );
+    assert_eq!(
+        unwrap_pastes(
+            "see <pasted_content id=\"1\">\na\n</pasted_content> and <pasted_content id=\"2\">\nb\n</pasted_content>"
+        ),
+        "see a and b"
+    );
+    let plain = "write <pasted_content id=\"x\"> tags for me";
+    assert_eq!(unwrap_pastes(plain), plain);
+}

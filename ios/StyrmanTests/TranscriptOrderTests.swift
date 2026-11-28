@@ -64,6 +64,22 @@ private let tool = #"{"type":"tool_call","call":"c1","tool":{"name":"Bash","kind
         #expect(t.preview == nil)
     }
 
+    /// A long message from the phone comes back from Claude rewrapped as a paste:
+    /// the "Handed to agent" bubble still goes away.
+    @Test func aSentMessageClearsEvenIfItComesBackChanged() throws {
+        let t = SessionTimeline(sessionId: "S")
+        t.addPending("Not nothing.\n\nFour reasons.")
+        t.addPending("next")
+        t.markDelivered("Not nothing.\n\nFour reasons.")
+        t.apply([try event(1, ms: 1_000, #"{"type":"user_message","text":"\n\n<pasted_content id=\"7\">\nNot nothing.\n\nFour reasons.\n</pasted_content>","origin":{"from":"remote","device":"D"}}"#)])
+        #expect(t.pending.map(\.text) == ["next"])
+        guard case .user(_, let shown, _, _) = t.items.last else { Issue.record("no message"); return }
+        #expect(shown == "Not nothing.\n\nFour reasons.")
+        // Spacing changed: still the same message.
+        t.apply([try event(2, ms: 2_000, #"{"type":"user_message","text":" next\n","origin":{"from":"terminal"}}"#)])
+        #expect(t.pending.isEmpty)
+    }
+
     /// A screen still showing the reply before a step (and an older `styr` reading
     /// Claude's status line as text) previews only what's new.
     @Test func aPreviewShowsOnlyWhatsNew() throws {

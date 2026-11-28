@@ -529,7 +529,10 @@ impl Terminals {
     pub fn claim_typed(&self, session: &SessionId, text: &str) -> Option<DeviceId> {
         let mut g = self.lock();
         let q = g.typed.get_mut(session)?;
-        let i = q.iter().position(|p| p.text.trim() == text.trim())?;
+        // The agent may hand back the text with its spacing changed.
+        let i = q
+            .iter()
+            .position(|p| p.text.split_whitespace().eq(text.split_whitespace()))?;
         q.remove(i).map(|p| p.device)
     }
 

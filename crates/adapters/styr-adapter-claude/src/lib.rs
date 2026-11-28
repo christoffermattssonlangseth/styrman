@@ -109,6 +109,36 @@ fn close_open_requests(view: &SessionView, events: &mut Vec<EventKind>) {
 
 /// Prompts Claude Code submits on its own, such as the wake-up turn after an
 /// `asyncRewake` hook (`<task-notification>…Stop hook feedback…`).
+/// Claude Code hands a long paste to hooks wrapped as
+/// `<pasted_content id="7">…</pasted_content>`: show it as the text that was pasted.
+pub fn unwrap_pastes(prompt: &str) -> String {
+    const OPEN: &str = "<pasted_content id=\"";
+    const CLOSE: &str = "</pasted_content>";
+    let mut out = String::with_capacity(prompt.len());
+    let mut rest = prompt;
+    let mut found = false;
+    while let Some(start) = rest.find(OPEN) {
+        let after = &rest[start + OPEN.len()..];
+        let (Some(gt), Some(end)) = (after.find("\">"), after.find(CLOSE)) else {
+            break;
+        };
+        if gt > end || !after[..gt].chars().all(|c| c.is_ascii_alphanumeric()) {
+            break;
+        }
+        out.push_str(&rest[..start]);
+        let body = &after[gt + 2..end];
+        let body = body.strip_prefix('\n').unwrap_or(body);
+        out.push_str(body.strip_suffix('\n').unwrap_or(body));
+        rest = &after[end + CLOSE.len()..];
+        found = true;
+    }
+    if !found {
+        return prompt.to_owned();
+    }
+    out.push_str(rest);
+    out.trim().to_owned()
+}
+
 pub fn is_internal_prompt(prompt: &str) -> bool {
     let p = prompt.trim_start();
     p.starts_with("<task-notification>") || p.starts_with("<agent-message")
@@ -263,7 +293,7 @@ impl AgentAdapter for ClaudeAdapter {
                         turn: s(p, "prompt_id").map(TurnId),
                     });
                     ev.push(EventKind::UserMessage {
-                        text: prompt,
+                        text: unwrap_pastes(&prompt),
                         origin: Origin::Terminal,
                     });
                 }
