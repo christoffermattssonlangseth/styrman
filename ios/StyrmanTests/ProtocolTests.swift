@@ -551,7 +551,7 @@ struct SessionLineTests {
         let items = [s("P"), s("h1", helping: "P", updated: 1), s("h2", helping: "P", updated: 3),
                      s("h3", helping: "P", updated: 2), s("h4", helping: "P", updated: 0), s("Q")]
         #expect(SessionLine.lines(items, open: []).map(\.id) == ["P", "h2", "h3", "more-P", "Q"])
-        #expect(SessionLine.lines(items, open: ["P"]).map(\.id) == ["P", "h2", "h3", "h1", "h4", "Q"])
+        #expect(SessionLine.lines(items, open: ["P"]).map(\.id) == ["P", "h2", "h3", "h1", "h4", "less-P", "Q"])
         // Three is no fold: "1 more" would take the same room.
         #expect(SessionLine.lines(Array(items.prefix(4)), open: []).count == 4)
         // A helper whose session isn't here stands alone.

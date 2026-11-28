@@ -179,6 +179,7 @@ struct SessionListView: View {
                     switch line {
                     case .session(let s, let parent): row(s, under: parent, first: first, last: last)
                     case .more(let parent, let hidden): moreRow(parent, hidden, last: last)
+                    case .less(let parent): lessRow(parent, last: last)
                     }
                 }
             }
@@ -195,6 +196,26 @@ struct SessionListView: View {
                 HStack(spacing: 6) {
                     Text("\(hidden) more \(hidden == 1 ? "helper" : "helpers")")
                     Image(systemName: "chevron.down").font(.caption2.weight(.bold))
+                }
+                .font(.footnote).foregroundStyle(.secondary)
+                .padding(.leading, 62).frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(RowPressStyle())
+        }
+        .rowBlock(first: false, last: last)
+    }
+
+    /// Folds a session's older helpers away again.
+    private func lessRow(_ parent: String, last: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Divider().padding(.leading, 62)
+            Button {
+                withAnimation(.snappy) { _ = openHelpers.remove(parent) }
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Show fewer")
+                    Image(systemName: "chevron.up").font(.caption2.weight(.bold))
                 }
                 .font(.footnote).foregroundStyle(.secondary)
                 .padding(.leading, 62).frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
@@ -385,11 +406,14 @@ extension View {
 enum SessionLine: Identifiable, Equatable {
     case session(SessionSummary, parent: SessionSummary?)
     case more(parent: String, hidden: Int)
+    /// Under a session's unfolded helpers: fold them again.
+    case less(parent: String)
 
     var id: String {
         switch self {
         case .session(let s, _): s.id
         case .more(let p, _): "more-\(p)"
+        case .less(let p): "less-\(p)"
         }
     }
 
@@ -403,10 +427,12 @@ enum SessionLine: Identifiable, Equatable {
         let tops = items.filter { s in s.helperOf.map { !ids.contains($0) } ?? true }
         return tops.flatMap { t -> [SessionLine] in
             let helpers = items.filter { $0.helperOf == t.id }.sorted { $0.updated > $1.updated }
-            let fold = !open.contains(t.id) && helpers.count > helpersShown + 1
+            let many = helpers.count > helpersShown + 1
+            let fold = many && !open.contains(t.id)
             let shown = fold ? Array(helpers.prefix(helpersShown)) : helpers
             return [.session(t, parent: nil)] + shown.map { .session($0, parent: t) }
-                + (fold ? [.more(parent: t.id, hidden: helpers.count - shown.count)] : [])
+                + (fold ? [.more(parent: t.id, hidden: helpers.count - shown.count)]
+                        : many ? [.less(parent: t.id)] : [])
         }
     }
 }

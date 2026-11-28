@@ -347,13 +347,40 @@ impl Daemon {
             .unwrap_or_else(|p| p.into_inner())
             .get(&(f.id.clone(), agent))
             .cloned();
+        let peers = self.peers(Some(&f.id))?;
         if let Some(h) = helper
-            && let Some(s) = self.peers(Some(&f.id))?.into_iter().find(|s| s.id == h)
+            && let Some(s) = peers.iter().find(|s| s.id == h)
         {
+            return Ok(Peer::Running(s.clone()));
+        }
+        // Not remembered (styrd restarted since): its newest helper of this agent
+        // in this folder, from the history, rather than a new one every time.
+        if let Some(s) = newest_helper(&peers, agent, &cwd, |id| self.helper_of(id).as_ref() == Some(&f.id)) {
+            self.peer_state
+                .helpers
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert((f.id.clone(), agent), s.id.clone());
             return Ok(Peer::Running(s));
         }
         Ok(Peer::Start(agent, cwd))
     }
+}
+
+/// Of `peers`, the most recently active one of `agent` in `cwd` that `helps` says
+/// is helping the asker, and that a message can still reach (its terminal is open).
+fn newest_helper(
+    peers: &[SessionSummary],
+    agent: AgentKind,
+    cwd: &std::path::Path,
+    helps: impl Fn(&SessionId) -> bool,
+) -> Option<SessionSummary> {
+    peers
+        .iter()
+        .filter(|s| s.agent == agent && s.accepts_prompts && s.cwd.as_deref() == Some(cwd))
+        .filter(|s| helps(&s.id))
+        .max_by_key(|s| s.updated_ms)
+        .cloned()
 }
 
 // Short-lived, one at a time: boxing the summary would buy nothing.
@@ -419,6 +446,34 @@ async fn wait_for_reply(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn summary(id: &str, agent: AgentKind, cwd: &str, updated: i64, open: bool) -> SessionSummary {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "agent": agent, "native_id": id, "cwd": cwd, "title": null, "model": null,
+            "shared": true, "status": "waiting", "created_ms": 0, "updated_ms": updated,
+            "last_seq": 0, "accepts_prompts": open,
+        }))
+        .unwrap()
+    }
+
+    /// After a restart, a follow-up goes to the asker's newest open helper there,
+    /// not to a new one.
+    #[test]
+    fn a_follow_up_finds_the_helper_again() {
+        let peers = [
+            summary("old", AgentKind::Codex, "/r", 1, true),
+            summary("new", AgentKind::Codex, "/r", 5, true),
+            summary("closed", AgentKind::Codex, "/r", 9, false),
+            summary("elsewhere", AgentKind::Codex, "/x", 9, true),
+            summary("other", AgentKind::Claude, "/r", 9, true),
+            summary("not-mine", AgentKind::Codex, "/r", 8, true),
+        ];
+        let mine = |id: &SessionId| id.as_str() != "not-mine";
+        let got = newest_helper(&peers, AgentKind::Codex, std::path::Path::new("/r"), mine);
+        assert_eq!(got.map(|s| s.id.as_str().to_owned()).as_deref(), Some("new"));
+        let none = newest_helper(&peers, AgentKind::Claude, std::path::Path::new("/x"), mine);
+        assert!(none.is_none());
+    }
 
     #[test]
     fn messages_say_who_they_are_from() {
