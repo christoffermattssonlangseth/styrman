@@ -57,6 +57,8 @@ final class DaemonConnection {
     var lastError: String?
     /// Set when a notification was tapped: the list opens this session.
     var requestedSession: String?
+    /// Set from inside a session (say, a helper's chat): the list opens this one on top.
+    var pushedSession: String?
     /// The new-session picker's current folder listing.
     private(set) var folders: FolderListing?
     /// Uncommitted changes asked for, per session.

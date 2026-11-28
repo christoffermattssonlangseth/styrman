@@ -36,6 +36,11 @@ struct SessionListView: View {
                 .sheet(isPresented: $showNewSession) { NewSessionView() }
                 .refreshable { connection.retryNow() }
                 .onChange(of: connection.requestedSession, initial: true) { _, id in open(id) }
+                .onChange(of: connection.pushedSession) { _, id in
+                    guard let id else { return }
+                    if path.last != id { path.append(id) }
+                    connection.pushedSession = nil
+                }
                 .task { await AppDelegate.enablePush() }
                 // Fetch the active sessions' conversations ahead, so opening one is instant.
                 .onChange(of: activeIds, initial: true) { _, ids in connection.preload(ids) }

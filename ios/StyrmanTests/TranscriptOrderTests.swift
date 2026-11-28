@@ -77,7 +77,7 @@ private let tool = #"{"type":"tool_call","call":"c1","tool":{"name":"Bash","kind
         #expect(t.preview == long, "it came back: the shorter one never showed")
         t.showPreview(nil)
         #expect(t.preview == long)
-        try await Task.sleep(for: .milliseconds(1_200))
+        for _ in 0..<30 where t.preview != nil { try await Task.sleep(for: .milliseconds(100)) }
         #expect(t.preview == nil, "gone for real after a moment")
     }
 
@@ -93,7 +93,7 @@ private let tool = #"{"type":"tool_call","call":"c1","tool":{"name":"Bash","kind
         t.apply([try event(2, ms: 1_900, source: "transcript",
                            #"{"type":"assistant_message","message":"m1","text":"I'll read the notes first.","mode":"final"}"#)])
         #expect(t.preview == nil)
-        try await Task.sleep(for: .milliseconds(1_400))
+        for _ in 0..<30 where t.shownItems.count < 2 { try await Task.sleep(for: .milliseconds(100)) }
         let kinds = t.shownItems.map { item -> String in
             switch item { case .assistant: "assistant"; case .tool: "tool"; default: "other" }
         }
@@ -106,7 +106,9 @@ private let tool = #"{"type":"tool_call","call":"c1","tool":{"name":"Bash","kind
         t.isLive = true
         t.showPreview("Checking.")
         t.apply([try event(1, ms: 2_000, tool)])
-        try await Task.sleep(for: .milliseconds(1_400))
+        // The step is held back 1.3 s; on a busy test machine the release can run
+        // late, so wait for it rather than a fixed time.
+        for _ in 0..<30 where t.preview != nil { try await Task.sleep(for: .milliseconds(100)) }
         #expect(t.preview == nil)
     }
 

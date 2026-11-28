@@ -501,4 +501,17 @@ struct ExchangeTests {
         #expect(x == [PeerExchange(id: "3", askId: "1", agent: .codex, repo: "reCORD", question: "first?", answer: "one")])
         #expect(PeerNote.openAsks(items) == ["4"])
     }
+
+    /// An old reply, cut at 400 characters, is found whole in the helper's conversation.
+    @Test func aReplyCutShortIsFoundWhole() {
+        let whole = "The parser drops the last row when the file has no trailing newline. Fix in read_rows."
+        let cut = String(whole.prefix(40)) + "…"
+        let helper: [TimelineItem] = [
+            .assistant(id: "a", text: "Something else entirely, said earlier on.", at: .now),
+            .assistant(id: "b", text: whole, at: .now),
+        ]
+        #expect(PeerExchange.full(cut, in: helper) == whole)
+        #expect(PeerExchange.full(whole, in: helper) == nil, "not cut short")
+        #expect(PeerExchange.full("Nothing like it in there, not at all, no…", in: helper) == nil)
+    }
 }

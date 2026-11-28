@@ -2253,6 +2253,22 @@ struct PeerExchange: Identifiable, Equatable {
     let repo: String
     let question: String
     let answer: String
+
+    /// Replies stored before they came whole were cut at 400 characters, ending
+    /// in "…". The helper's own conversation still has the reply in full.
+    var cutShort: Bool { answer.hasSuffix("…") }
+
+    /// The whole reply, from the helper's conversation, for one that was cut short.
+    static func full(_ answer: String, in items: [TimelineItem]) -> String? {
+        guard answer.hasSuffix("…") else { return nil }
+        let head = String(answer.dropLast()).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard head.count >= 20 else { return nil }
+        for case let .assistant(_, text, _) in items.reversed() {
+            let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t.count > head.count, t.hasPrefix(head) { return t }
+        }
+        return nil
+    }
 }
 
 /// An ask and its reply as one card, where the reply came: the question in the
@@ -2310,7 +2326,7 @@ struct ExchangeCard: View {
         .buttonStyle(.plain)
         .accessibilityHint("Shows the whole conversation between the two agents")
         .sheet(isPresented: $open) {
-            ExchangeThread(asker: asker, agent: exchange.agent, repo: exchange.repo,
+            ExchangeThread(asker: asker, agent: exchange.agent, repo: exchange.repo, sessionId: sessionId,
                            exchanges: thread.filter { $0.agent == exchange.agent && $0.repo == exchange.repo })
         }
     }
@@ -2320,14 +2336,25 @@ struct ExchangeCard: View {
 /// messages on the right, the helper's on the left, in full and selectable.
 struct ExchangeThread: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(DaemonConnection.self) private var connection
     let asker: AgentKind
     let agent: AgentKind
     let repo: String
+    let sessionId: String
     let exchanges: [PeerExchange]
+
+    /// The helper's session: the one started for this session, else any of that
+    /// agent in that repo.
+    private var helper: SessionSummary? {
+        let same = connection.sessions.filter { $0.agent == agent && $0.repoName == repo && $0.id != sessionId }
+        return same.first { $0.helperOf == sessionId } ?? same.first
+    }
 
     var body: some View {
         let c = Theme.color(for: agent)
         let mine = Theme.color(for: asker)
+        let helper = helper
+        let helperItems = helper.map { connection.timeline(for: $0.id).items } ?? []
         NavigationStack {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -2342,9 +2369,18 @@ struct ExchangeThread: View {
                             }
                             HStack(alignment: .bottom, spacing: 8) {
                                 AgentAvatar(agent: agent, size: 26)
-                                ReplyText(raw: x.answer, selectable: true)
-                                    .padding(.horizontal, 14).padding(.vertical, 10)
-                                    .background(c.opacity(0.14), in: BubbleShape(mine: false))
+                                VStack(alignment: .leading, spacing: 6) {
+                                    let full = PeerExchange.full(x.answer, in: helperItems)
+                                    ReplyText(raw: full ?? x.answer, selectable: true)
+                                    if x.cutShort, full == nil {
+                                        Text(helper == nil
+                                             ? "Cut short: this reply came before replies were kept whole."
+                                             : "Cut short. Fetching the rest from \(agent.displayName)…")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                                .padding(.horizontal, 14).padding(.vertical, 10)
+                                .background(c.opacity(0.14), in: BubbleShape(mine: false))
                                 Spacer(minLength: 40)
                             }
                             .id(x.id)
@@ -2360,10 +2396,28 @@ struct ExchangeThread: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close")
                 }
+                if let helper {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            dismiss()
+                            // After the sheet has gone, or the push is lost under it.
+                            Task {
+                                try? await Task.sleep(for: .milliseconds(350))
+                                connection.pushedSession = helper.id
+                            }
+                        } label: {
+                            Label("Open \(agent.displayName)", systemImage: "arrow.up.right")
+                                .labelStyle(.titleAndIcon)
+                        }
+                    }
+                }
             }
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
+        // For replies cut short: the helper's conversation has them whole.
+        .onAppear { if let h = helper, exchanges.contains(where: \.cutShort) { connection.watch(h.id) } }
+        .onDisappear { if let h = helper, exchanges.contains(where: \.cutShort) { connection.unwatch(h.id) } }
     }
 }
 
