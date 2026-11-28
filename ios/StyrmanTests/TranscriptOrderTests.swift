@@ -71,7 +71,7 @@ private let tool = #"{"type":"tool_call","call":"c1","tool":{"name":"Bash","kind
         t.addPending("Not nothing.\n\nFour reasons.")
         t.addPending("next")
         t.markDelivered("Not nothing.\n\nFour reasons.")
-        t.apply([try event(1, ms: 1_000, #"{"type":"user_message","text":"\n\n<pasted_content id=\"7\">\nNot nothing.\n\nFour reasons.\n</pasted_content>","origin":{"from":"remote","device":"D"}}"#)])
+        t.apply([try event(1, ms: 1_000, #"{"type":"user_message","text":"\n\n<pasted_content id=\"7\">\nNot nothing.\n\nFour reasons.\n</pasted_content id=\"7\">","origin":{"from":"terminal"}}"#)])
         #expect(t.pending.map(\.text) == ["next"])
         guard case .user(_, let shown, _, _) = t.items.last else { Issue.record("no message"); return }
         #expect(shown == "Not nothing.\n\nFour reasons.")

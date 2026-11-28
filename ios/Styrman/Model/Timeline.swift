@@ -382,7 +382,7 @@ final class SessionTimeline {
         case .userMessage(var text, let fromPhone):
             // Stored before styrd unwrapped Claude's long pastes.
             if text.contains("<pasted_content id=") {
-                text = text.replacingOccurrences(of: #"<pasted_content id="\w+">\n?|\n?</pasted_content>"#, with: "",
+                text = text.replacingOccurrences(of: #"<pasted_content id="\w+">\n?|\n?</pasted_content[^>]*>"#, with: "",
                                                  options: .regularExpression)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
             }

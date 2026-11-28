@@ -110,10 +110,11 @@ fn close_open_requests(view: &SessionView, events: &mut Vec<EventKind>) {
 /// Prompts Claude Code submits on its own, such as the wake-up turn after an
 /// `asyncRewake` hook (`<task-notification>…Stop hook feedback…`).
 /// Claude Code hands a long paste to hooks wrapped as
-/// `<pasted_content id="7">…</pasted_content>`: show it as the text that was pasted.
+/// `<pasted_content id="7">…</pasted_content>` (the closer sometimes repeats the
+/// id): show it as the text that was pasted.
 pub fn unwrap_pastes(prompt: &str) -> String {
     const OPEN: &str = "<pasted_content id=\"";
-    const CLOSE: &str = "</pasted_content>";
+    const CLOSE: &str = "</pasted_content";
     let mut out = String::with_capacity(prompt.len());
     let mut rest = prompt;
     let mut found = false;
@@ -129,7 +130,8 @@ pub fn unwrap_pastes(prompt: &str) -> String {
         let body = &after[gt + 2..end];
         let body = body.strip_prefix('\n').unwrap_or(body);
         out.push_str(body.strip_suffix('\n').unwrap_or(body));
-        rest = &after[end + CLOSE.len()..];
+        let closer = &after[end + CLOSE.len()..];
+        rest = closer.find('>').map_or("", |i| &closer[i + 1..]);
         found = true;
     }
     if !found {

@@ -368,6 +368,12 @@ fn a_long_paste_shows_as_what_was_pasted() {
         ),
         "see a and b"
     );
+    assert_eq!(
+        unwrap_pastes(
+            "<pasted_content id=\"2487\">\nTask.\n\nDiscuss with agy\n</pasted_content id=\"2487\">"
+        ),
+        "Task.\n\nDiscuss with agy"
+    );
     let plain = "write <pasted_content id=\"x\"> tags for me";
     assert_eq!(unwrap_pastes(plain), plain);
 }
