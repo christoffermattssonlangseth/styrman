@@ -70,6 +70,8 @@ struct ScreenPermission {
     session: SessionId,
     prompt: TerminalPrompt,
     options: Vec<PermissionOption>,
+    /// The phone already answered it (one answer only, even if two arrive).
+    answered: bool,
 }
 
 #[derive(Default)]
@@ -88,8 +90,9 @@ struct Inner {
     queue: HashMap<SessionId, VecDeque<QueuedPrompt>>,
     /// Typed into the terminal, not yet reported back by the agent.
     typed: HashMap<SessionId, VecDeque<QueuedPrompt>>,
-    /// Menu selections not yet handed to the wrapper, per launch.
-    selects: HashMap<String, usize>,
+    /// Menu selections not yet handed to the wrapper, per launch, with the request
+    /// (on-screen menu) they answer: dropped if that menu is no longer on screen.
+    selects: HashMap<String, (RequestId, usize)>,
     /// Mode changes not yet handed to the wrapper, per launch.
     mode_sets: HashMap<String, String>,
     /// Tab titles not yet handed to the wrapper, per launch.
@@ -320,7 +323,13 @@ impl Terminals {
             let _ = tx.send(TerminalAction::Interrupt);
         } else if g.screens.remove(launch) {
             let _ = tx.send(TerminalAction::WatchScreen);
-        } else if let Some(i) = g.selects.remove(launch) {
+        } else if let Some(i) = g.selects.remove(launch).and_then(|(r, i)| {
+            // Only into the menu it answers: never a later one.
+            g.on_screen
+                .get(launch)
+                .is_some_and(|p| p.request == r)
+                .then_some(i)
+        }) {
             let _ = tx.send(TerminalAction::Select(i));
         } else if let Some(m) = g.mode_sets.remove(launch) {
             let _ = tx.send(TerminalAction::Mode(m));
@@ -367,19 +376,32 @@ impl Terminals {
         }
     }
 
-    fn select(&self, launch: &str, index: usize) {
+    fn select(&self, launch: &str, request: &RequestId, index: usize) {
         let mut g = self.lock();
         // Busy with it, not gone: it stays live until it attaches again.
         g.last_seen.insert(launch.to_owned(), Instant::now());
-        match g.attached.remove(launch) {
-            Some(tx) => {
-                if tx.send(TerminalAction::Select(index)).is_err() {
-                    g.selects.insert(launch.to_owned(), index);
-                }
-            }
-            None => {
-                g.selects.insert(launch.to_owned(), index);
-            }
+        let sent = g
+            .attached
+            .remove(launch)
+            .is_some_and(|tx| tx.send(TerminalAction::Select(index)).is_ok());
+        if !sent {
+            g.selects
+                .insert(launch.to_owned(), (request.clone(), index));
+        }
+    }
+
+    /// The menu `request` left the screen: drop its on-screen entry and any answer
+    /// to it still waiting for the wrapper.
+    fn menu_gone(&self, launch: &str, request: &RequestId) {
+        let mut g = self.lock();
+        if g.on_screen
+            .get(launch)
+            .is_some_and(|p| &p.request == request)
+        {
+            g.on_screen.remove(launch);
+        }
+        if g.selects.get(launch).is_some_and(|(r, _)| r == request) {
+            g.selects.remove(launch);
         }
     }
 
@@ -593,7 +615,7 @@ impl Daemon {
             }
             (Some(p), prev) => {
                 if let Some(prev) = prev {
-                    self.terminals.lock().on_screen.remove(launch);
+                    self.terminals.menu_gone(launch, &prev.request);
                     self.close_screen_permission(&prev);
                 }
                 // The most recently active shared session in this wrapper.
@@ -639,6 +661,7 @@ impl Daemon {
                         session: summary.id.clone(),
                         prompt: p.clone(),
                         options: options.clone(),
+                        answered: false,
                     },
                 );
                 tracing::info!(session = %summary.id, title = %p.title, "permission menu on screen");
@@ -656,7 +679,7 @@ impl Daemon {
                 )?;
             }
             (None, Some(prev)) => {
-                self.terminals.lock().on_screen.remove(launch);
+                self.terminals.menu_gone(launch, &prev.request);
                 self.close_screen_permission(&prev);
                 // Typing may be safe again.
                 self.pump_terminal(&prev.session);
@@ -694,20 +717,28 @@ impl Daemon {
         option: &str,
         device: DeviceId,
     ) -> Option<anyhow::Result<()>> {
-        let (launch, perm) = {
-            let g = self.terminals.lock();
+        // Resolved already (by the terminal, or the menu was replaced)?
+        let open = self.request_open(session, request);
+        let (launch, perm, index) = {
+            let mut g = self.terminals.lock();
             let (l, p) = g
                 .on_screen
-                .iter()
+                .iter_mut()
                 .find(|(_, p)| &p.request == request && &p.session == session)?;
-            (l.clone(), p.clone())
+            if p.answered || !open {
+                // A second answer (notification action and app): one keypress only.
+                return Some(Err(anyhow::anyhow!("that request was already answered")));
+            }
+            let Some(index) = p.options.iter().position(|o| o.id == option) else {
+                return Some(Err(anyhow::anyhow!(
+                    "'{option}' is not an option of that request"
+                )));
+            };
+            // Kept on screen (no typing into an open menu) but answered.
+            p.answered = true;
+            (l.clone(), p.clone(), index)
         };
-        let Some(index) = perm.options.iter().position(|o| o.id == option) else {
-            return Some(Err(anyhow::anyhow!(
-                "'{option}' is not an option of that request"
-            )));
-        };
-        self.terminals.select(&launch, index);
+        self.terminals.select(&launch, request, index);
         tracing::info!(%session, %request, index, "selecting a menu option for the phone");
         let Ok(Some(s)) = self.summary(session) else {
             return Some(Ok(()));
@@ -786,10 +817,50 @@ mod tests {
         assert_eq!(t.take_queued(&s), Some(p("x")));
     }
 
+    fn on_screen(t: &Terminals, launch: &str, request: &RequestId) {
+        t.lock().on_screen.insert(
+            launch.to_owned(),
+            ScreenPermission {
+                request: request.clone(),
+                session: SessionId::from("S"),
+                prompt: TerminalPrompt {
+                    title: "Run?".into(),
+                    detail: String::new(),
+                    options: vec!["Yes".into(), "No".into()],
+                    selected: 0,
+                },
+                options: vec![],
+                answered: false,
+            },
+        );
+    }
+
+    #[test]
+    fn a_waiting_selection_never_lands_in_another_menu() {
+        let t = Terminals::default();
+        let first = RequestId::generate();
+        on_screen(&t, "L", &first);
+        t.select("L", &first, 0);
+        // The menu goes away before the wrapper comes back: the answer goes with it.
+        t.menu_gone("L", &first);
+        assert!(t.lock().selects.is_empty());
+
+        // Replaced by another menu while the answer waits: not selected in the new one.
+        on_screen(&t, "L", &first);
+        t.select("L", &first, 0);
+        let second = RequestId::generate();
+        on_screen(&t, "L", &second);
+        let mut rx = t.attach("L");
+        assert!(rx.try_recv().is_err(), "nothing sent");
+        assert!(t.lock().selects.is_empty());
+    }
+
     #[test]
     fn a_selection_waits_for_the_wrapper() {
         let t = Terminals::default();
-        t.select("L", 2);
+        let r = RequestId::generate();
+        on_screen(&t, "L", &r);
+        t.select("L", &r, 2);
         let mut rx = t.attach("L");
         assert_eq!(rx.try_recv().unwrap(), TerminalAction::Select(2));
 
@@ -809,6 +880,31 @@ mod tests {
             t.lock().mode_sets.is_empty(),
             "a mode change after quitting is dropped"
         );
+    }
+
+    #[test]
+    fn a_menu_is_answered_once() {
+        let d = Daemon::open(crate::store::Store::open_in_memory().unwrap(), vec![]).unwrap();
+        let native = NativeSessionRef::new(styr_core::ids::AgentKind::Codex, "cx");
+        let sid = d.set_sharing(&native, true).unwrap();
+        d.terminals.link(&sid, "L");
+        let menu = TerminalPrompt {
+            title: "Run?".into(),
+            detail: "$ touch x".into(),
+            options: vec!["Yes".into(), "No".into()],
+            selected: 0,
+        };
+        d.terminal_prompt("L", Some(menu)).unwrap();
+        let request = d.terminals.lock().on_screen["L"].request.clone();
+        let first = d.resolve_screen_permission(&sid, &request, "opt-0", "phone".into());
+        assert!(matches!(first, Some(Ok(()))), "{first:?}");
+        let second = d.resolve_screen_permission(&sid, &request, "opt-1", "watch".into());
+        assert!(matches!(second, Some(Err(_))), "{second:?}");
+        // Only the first answer waits for the wrapper.
+        let mut rx = d.terminals.attach("L");
+        assert_eq!(rx.try_recv().unwrap(), TerminalAction::Select(0));
+        let mut rx = d.terminals.attach("L");
+        assert!(rx.try_recv().is_err(), "no second keypress");
     }
 
     #[test]

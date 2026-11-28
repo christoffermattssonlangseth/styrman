@@ -225,7 +225,13 @@ enum ToolOutput: Codable, Hashable, Sendable {
 
 enum OptionKind: String, Codable, Sendable {
     case allowOnce = "allow_once", allowAlways = "allow_always", rejectOnce = "reject_once", rejectAlways = "reject_always"
+    /// A kind a newer Mac knows and this app doesn't: still shown, as its label says.
+    case other
     var isAllow: Bool { self == .allowOnce || self == .allowAlways }
+
+    init(from decoder: Decoder) throws {
+        self = OptionKind(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .other
+    }
 }
 
 struct PermissionOption: Codable, Hashable, Sendable, Identifiable {

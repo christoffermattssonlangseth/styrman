@@ -278,7 +278,7 @@ struct DiffPreview: View {
                 }
             }
         }
-        .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+        .background(Theme.bubble, in: RoundedRectangle(cornerRadius: 8))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .textSelection(.enabled)
     }

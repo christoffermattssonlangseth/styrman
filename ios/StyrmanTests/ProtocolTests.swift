@@ -575,6 +575,38 @@ struct SessionLineTests {
     @Test func titlesArePlain() {
         #expect(SessionCard.plain("**NOT YET.** Two `issues`") == "NOT YET. Two issues")
     }
+
+    /// A helper's helper, and two sessions that asked each other, still show.
+    @Test func noSessionVanishes() {
+        let chain = [s("A"), s("B", helping: "A"), s("C", helping: "B")]
+        #expect(Set(SessionLine.lines(chain, open: []).map(\.id)) == ["A", "B", "C"])
+        let cycle = [s("A", helping: "B"), s("B", helping: "A"), s("Q")]
+        let ids = SessionLine.lines(cycle, open: []).map(\.id)
+        #expect(Set(ids) == ["A", "B", "Q"])
+        #expect(ids.count == 3, "each once")
+    }
+}
+
+struct FixesTests {
+    /// An option kind from a newer Mac doesn't hide the whole approval.
+    @Test func anUnknownOptionKindStillDecodes() throws {
+        let o = try JSONDecoder().decode(PermissionOption.self,
+                                         from: Data(#"{"id":"x","kind":"allow_session","label":"Yes, this session"}"#.utf8))
+        #expect(o.kind == .other)
+        #expect(!o.kind.isAllow)
+    }
+
+    /// Attachments never share a name: they're saved side by side on the Mac.
+    @Test func attachmentNamesAreUnique() {
+        var list: [Styrman.Attachment] = []
+        for _ in 0..<3 { list.append(Styrman.Attachment(name: Composer.unique("photo.jpg", in: list), data: Data(), isImage: true)) }
+        #expect(list.map(\.name) == ["photo.jpg", "photo-2.jpg", "photo-3.jpg"])
+        list.remove(at: 0)
+        #expect(Composer.unique("photo.jpg", in: list) == "photo.jpg")
+        let a = [Styrman.Attachment(name: "Shot.png", data: Data(), isImage: true)]
+        #expect(Composer.unique("Shot.png", in: a) == "Shot-2.png")
+        #expect(Composer.unique("notes", in: [Styrman.Attachment(name: "notes", data: Data(), isImage: false)]) == "notes-2")
+    }
 }
 
 struct UsagePaceTests {

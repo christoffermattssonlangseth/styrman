@@ -80,6 +80,8 @@ final class DaemonConnection {
 
     @ObservationIgnored private var timelines: [String: SessionTimeline] = [:]
     @ObservationIgnored private var watched: Set<String> = []
+    /// Connected anew: subscribe again when the session list arrives.
+    @ObservationIgnored private var resubscribe = false
     @ObservationIgnored private var task: URLSessionWebSocketTask?
     @ObservationIgnored private var loop: Task<Void, Never>?
     @ObservationIgnored private var retryDelay: Task<Void, Never>?
@@ -280,19 +282,30 @@ final class DaemonConnection {
             self.host = host
             self.warnings = warnings
             state = .connected
-            for id in watched.union(preloaded) { subscribe(id) }
+            // Re-subscribe once the list (sent right after hello) says what's still
+            // shared: a subscribe to one that's gone is an "unknown session" error.
+            resubscribe = true
             registerPush()
             sendNotificationSettings()
             for (kind, token) in activityTokens { send(.registerActivityToken(kind: kind, token: token ?? nil)) }
         case .sessions(let list):
             sessions = list.sorted { $0.updatedMs > $1.updatedMs }
             sessionsLoaded = true
+            let ids = Set(list.map(\.id))
+            watched.formIntersection(ids)
+            preloaded.formIntersection(ids)
+            if resubscribe {
+                resubscribe = false
+                for id in watched.union(preloaded) { subscribe(id) }
+            }
         case .sessionUpdated(let s):
             sessions.removeAll { $0.id == s.id }
             sessions.append(s)
             sessions.sort { $0.updatedMs > $1.updatedMs }
         case .sessionRemoved(let id):
             sessions.removeAll { $0.id == id }
+            watched.remove(id)
+            preloaded.remove(id)
         case .events(let sid, let events):
             timelines[sid]?.apply(events)
         case .subscribed(let sid, _):
@@ -326,7 +339,8 @@ final class DaemonConnection {
             send(.listSessions)
         case .error(let message):
             lastError = message
-            committing.removeAll()
+            // Only a commit's own failure stops its spinner.
+            if !message.hasPrefix("unknown session") { committing.removeAll() }
         case .unknown:
             break
         }

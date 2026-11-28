@@ -32,7 +32,7 @@ struct UsageView: View {
                     }
                     .padding(16)
                 }
-                .background(Color(.systemGroupedBackground))
+                .background(Theme.canvas)
                 .refreshable { connection.refreshUsage() }
             }
             .navigationTitle("Usage")
@@ -112,7 +112,7 @@ struct HeadroomCard: View {
             }
         }
         .padding(14)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 }
 
@@ -173,7 +173,7 @@ struct ProviderCard: View {
         .padding(12)
         .background {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
+                .fill(Theme.surface)
                 .overlay(alignment: .topLeading) {
                     // The agent's colour, faintly, from the corner.
                     RadialGradient(colors: [c.opacity(0.14), .clear], center: .topLeading, startRadius: 0, endRadius: 260)

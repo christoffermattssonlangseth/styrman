@@ -157,6 +157,14 @@ impl Daemon {
         let target = match self.peer_for(to, from.as_ref())? {
             Peer::Running(s) => s,
             Peer::Start(agent, cwd) => {
+                // Helpers starting helpers: the same depth limit as asking.
+                if let Some(f) = &from
+                    && chain_depth(&f.id, |id| self.helper_of(id)) >= MAX_DEPTH
+                {
+                    bail!(
+                        "too many agents are already working for each other; answer what you were asked first"
+                    );
+                }
                 // None of that agent in the asker's folder: start one there, with
                 // the message as its first prompt.
                 self.count_send(&key, true)?;
@@ -385,6 +393,22 @@ fn newest_helper(
         .cloned()
 }
 
+/// How many steps up `next` goes from `start` (A helps nobody: 0; B helps A: 1),
+/// stopping at a loop.
+fn chain_depth(start: &SessionId, next: impl Fn(&SessionId) -> Option<SessionId>) -> usize {
+    let mut seen = std::collections::HashSet::from([start.clone()]);
+    let mut at = start.clone();
+    let mut depth = 0;
+    while let Some(up) = next(&at) {
+        if !seen.insert(up.clone()) {
+            break;
+        }
+        depth += 1;
+        at = up;
+    }
+    depth
+}
+
 // Short-lived, one at a time: boxing the summary would buy nothing.
 #[allow(clippy::large_enum_variant)]
 enum Peer {
@@ -478,6 +502,51 @@ mod tests {
         );
         let none = newest_helper(&peers, AgentKind::Claude, std::path::Path::new("/x"), mine);
         assert!(none.is_none());
+    }
+
+    #[test]
+    fn chain_depth_walks_up_and_stops_at_loops() {
+        let up: HashMap<SessionId, SessionId> = [("C", "B"), ("B", "A"), ("X", "Y"), ("Y", "X")]
+            .into_iter()
+            .map(|(a, b)| (SessionId::from(a), SessionId::from(b)))
+            .collect();
+        let next = |id: &SessionId| up.get(id).cloned();
+        assert_eq!(chain_depth(&SessionId::from("A"), next), 0);
+        assert_eq!(chain_depth(&SessionId::from("B"), next), 1);
+        assert_eq!(chain_depth(&SessionId::from("C"), next), 2);
+        assert_eq!(chain_depth(&SessionId::from("X"), next), 1, "a loop ends");
+    }
+
+    /// A helper of a helper can't start yet another helper.
+    #[tokio::test]
+    async fn a_deep_helper_cannot_start_another() {
+        let d = Daemon::open(crate::store::Store::open_in_memory().unwrap(), vec![]).unwrap();
+        let mut ids = Vec::new();
+        for n in ["a", "b", "c"] {
+            let native = styr_core::ids::NativeSessionRef::new(AgentKind::Codex, n);
+            d.ingest(
+                &SessionUpdate {
+                    cwd: Some("/r".into()),
+                    ..SessionUpdate::for_native(native.clone())
+                },
+                EventSource::Daemon,
+                vec![],
+            )
+            .unwrap();
+            ids.push(d.set_sharing(&native, true).unwrap());
+        }
+        {
+            let mut h = d.peer_state.helpers.lock().unwrap();
+            h.insert((ids[0].clone(), AgentKind::Codex), ids[1].clone());
+            h.insert((ids[1].clone(), AgentKind::Codex), ids[2].clone());
+        }
+        d.terminals.link(&ids[2], "LC");
+        let e = d
+            .ask(Some("LC"), "claude", "help", None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("too many agents"), "{e}");
     }
 
     #[test]

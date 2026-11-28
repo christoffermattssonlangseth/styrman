@@ -594,6 +594,8 @@ impl Daemon {
         let existed = {
             let mut g = self.lock();
             g.trackers.remove(id);
+            g.said.remove(id);
+            g.store.delete_meta(&format!("name.{id}"))?;
             g.store.delete_session(id)?
         };
         self.prompts.clear(id);
@@ -940,6 +942,14 @@ impl Daemon {
         let _ = self.bus.send(BusMsg::SessionChanged(session.clone()));
         tracing::info!(%session, "renamed");
         Ok(())
+    }
+
+    /// `rename`, from the phone: shared sessions only.
+    pub fn rename_shared(&self, session: &SessionId, name: &str) -> Result<()> {
+        self.summary(session)?
+            .filter(|s| s.shared)
+            .context("unknown session")?;
+        self.rename(session, name)
     }
 
     /// From the phone: quit the agent in its terminal (and close the tab if the phone
@@ -1573,10 +1583,23 @@ impl Daemon {
             Request::RenameSession { session, name } => {
                 self.rename(&session, &name).map(|()| Response::Ok)
             }
-            Request::EndSessions { ids } => ids
-                .iter()
-                .try_for_each(|id| self.end_session(id))
-                .map(|()| Response::Ok),
+            Request::EndSessions { ids } => {
+                // Every one of them, even if one fails; then say which failed.
+                let failed: Vec<String> = ids
+                    .iter()
+                    .filter_map(|id| self.end_session(id).err().map(|e| format!("{id}: {e:#}")))
+                    .collect();
+                if failed.is_empty() {
+                    Ok(Response::Ok)
+                } else {
+                    Err(anyhow::anyhow!(
+                        "couldn't end {} of {} sessions:\n{}",
+                        failed.len(),
+                        ids.len(),
+                        failed.join("\n")
+                    ))
+                }
+            }
             Request::ListDevices => self.devices().map(|devices| Response::Devices { devices }),
             Request::RevokeDevice { id } => {
                 let revoked = self.lock().store.revoke_device(&id);
@@ -1600,5 +1623,86 @@ impl Daemon {
         result.unwrap_or_else(|e| Response::Error {
             message: format!("{e:#}"),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn daemon() -> Arc<Daemon> {
+        Daemon::open(Store::open_in_memory().unwrap(), vec![]).unwrap()
+    }
+
+    fn session(d: &Daemon, native: &str, shared: bool) -> SessionId {
+        let native = NativeSessionRef::new(AgentKind::Claude, native);
+        d.ingest(
+            &SessionUpdate::for_native(native.clone()),
+            EventSource::Daemon,
+            vec![],
+        )
+        .unwrap();
+        d.set_sharing(&native, shared).unwrap()
+    }
+
+    #[test]
+    fn the_phone_renames_shared_sessions_only() {
+        let d = daemon();
+        let hidden = session(&d, "hidden", false);
+        assert!(d.rename_shared(&hidden, "x").is_err());
+        assert_eq!(d.name_of(&hidden), None);
+        // The Mac may name any session.
+        d.rename(&hidden, "mine").unwrap();
+        assert_eq!(d.name_of(&hidden).as_deref(), Some("mine"));
+        let shared = session(&d, "shared", true);
+        d.rename_shared(&shared, "phone").unwrap();
+        assert_eq!(d.name_of(&shared).as_deref(), Some("phone"));
+    }
+
+    #[test]
+    fn forgetting_a_session_drops_its_name_and_replies() {
+        let d = daemon();
+        let s = session(&d, "s", true);
+        d.rename(&s, "named").unwrap();
+        d.ingest(
+            &SessionUpdate::for_native(NativeSessionRef::new(AgentKind::Claude, "s")),
+            EventSource::Hook,
+            vec![EventKind::AssistantMessage {
+                message: "m1".into(),
+                text: "hello".into(),
+                mode: styr_core::event::TextMode::Final,
+            }],
+        )
+        .unwrap();
+        assert!(d.lock().said.contains_key(&s));
+        assert!(d.forget_session(&s).unwrap());
+        assert!(!d.lock().said.contains_key(&s));
+        assert_eq!(d.lock().store.meta(&format!("name.{s}")).unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn ending_several_sessions_tries_them_all() {
+        let d = daemon();
+        let done = session(&d, "done", true);
+        d.ingest(
+            &SessionUpdate::for_native(NativeSessionRef::new(AgentKind::Claude, "done")),
+            EventSource::Hook,
+            vec![EventKind::SessionEnded { reason: None }],
+        )
+        .unwrap();
+        let r = d
+            .handle(Request::EndSessions {
+                ids: vec![SessionId::from("nope"), done.clone()],
+            })
+            .await;
+        let Response::Error { message } = r else {
+            panic!("{r:?}")
+        };
+        assert!(message.contains("nope"), "{message}");
+        assert!(!message.contains(done.as_str()), "{message}");
+        assert!(
+            !d.summary(&done).unwrap().unwrap().shared,
+            "the second one still ended"
+        );
     }
 }

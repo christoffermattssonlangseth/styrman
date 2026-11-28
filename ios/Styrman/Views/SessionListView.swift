@@ -318,13 +318,14 @@ private struct SessionQuickApproval: View {
     }
 
     private func answer(_ option: PermissionOption) {
-        guard let credentials = connection.credentials, connection.state == .connected else { return }
-        answering = true
-        Task {
-            do {
-                try await QuickAnswer.answer(credentials, session: session, request: permission.request, option: option.id)
-            } catch {
-                connection.lastError = error.localizedDescription
+        guard connection.state == .connected else { return }
+        // Over the open connection, whichever way it reaches the Mac (Tailscale or
+        // the local network); the card goes when the Mac reports the answer.
+        answering = connection.resolvePermission(session: session, request: permission.request, option: option.id,
+                                                 failed: { answering = false })
+        if answering {
+            Task {
+                try? await Task.sleep(for: .seconds(10))
                 answering = false
             }
         }
@@ -344,11 +345,7 @@ private extension View {
 private struct HomeBackground: View {
     var body: some View {
         ZStack(alignment: .top) {
-            Color(.systemGroupedBackground)
-            RadialGradient(colors: [Theme.accent.opacity(0.10), .clear], center: .topLeading, startRadius: 0, endRadius: 420)
-                .frame(height: 420)
-            RadialGradient(colors: [Color.blue.opacity(0.06), .clear], center: .topTrailing, startRadius: 0, endRadius: 360)
-                .frame(height: 360)
+            Theme.canvas
         }
         .ignoresSafeArea()
     }
@@ -386,8 +383,8 @@ private struct SectionTitle: View {
     let count: Int
     var body: some View {
         HStack(spacing: 6) {
-            Text(title.uppercased()).font(.caption.weight(.bold)).tracking(1.2).foregroundStyle(.secondary)
-            Text("\(count)").font(.caption.weight(.bold)).monospacedDigit().foregroundStyle(.tertiary)
+            Text(title).font(.footnote.weight(.semibold)).foregroundStyle(Theme.textSecondary)
+            Text("\(count)").font(.footnote).monospacedDigit().foregroundStyle(.tertiary)
         }
     }
 }
@@ -401,7 +398,7 @@ extension View {
                 UnevenRoundedRectangle(topLeadingRadius: first ? 14 : 0, bottomLeadingRadius: last ? 14 : 0,
                                        bottomTrailingRadius: last ? 14 : 0, topTrailingRadius: first ? 14 : 0,
                                        style: .continuous)
-                    .fill(Color(.secondarySystemGroupedBackground))
+                    .fill(Theme.surface)
                     .padding(.horizontal, 16)
             )
     }
@@ -430,16 +427,26 @@ enum SessionLine: Identifiable, Equatable {
 
     static func lines(_ items: [SessionSummary], open: Set<String>) -> [SessionLine] {
         let ids = Set(items.map(\.id))
-        let tops = items.filter { s in s.helperOf.map { !ids.contains($0) } ?? true }
-        return tops.flatMap { t -> [SessionLine] in
-            let helpers = items.filter { $0.helperOf == t.id }.sorted { $0.updated > $1.updated }
+        var drawn = Set<String>()
+        var out: [SessionLine] = []
+        func add(_ t: SessionSummary) {
+            drawn.insert(t.id)
+            let helpers = items.filter { $0.helperOf == t.id && !drawn.contains($0.id) }
+                .sorted { $0.updated > $1.updated }
             let many = helpers.count > helpersShown + 1
             let fold = many && !open.contains(t.id)
             let shown = fold ? Array(helpers.prefix(helpersShown)) : helpers
-            return [.session(t, parent: nil)] + shown.map { .session($0, parent: t) }
+            // Folded helpers count as drawn: they're behind "N more".
+            drawn.formUnion(helpers.map(\.id))
+            out += [.session(t, parent: nil)] + shown.map { .session($0, parent: t) }
                 + (fold ? [.more(parent: t.id, hidden: helpers.count - shown.count)]
                         : many ? [.less(parent: t.id)] : [])
         }
+        for t in items where t.helperOf.map({ !ids.contains($0) }) ?? true { add(t) }
+        // A helper's helper (A asks B, B asks C) or two that asked each other: no
+        // top to hang under, so each stands on its own rather than vanishing.
+        for t in items where !drawn.contains(t.id) { add(t) }
+        return out
     }
 }
 
@@ -474,6 +481,7 @@ struct SessionCard: View {
                 .accessibilityLabel(session.agent.displayName)
             Text(name)
                 .font(.subheadline)
+                .foregroundStyle(Theme.textPrimary)
                 .lineLimit(1)
             Spacer(minLength: 6)
             if showsRepo, label != session.repoName {
@@ -638,7 +646,7 @@ private struct UnpairedCard: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .background(Theme.surface, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 }
 

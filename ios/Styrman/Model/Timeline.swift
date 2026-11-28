@@ -56,7 +56,7 @@ struct PermissionItem: Hashable, Sendable {
         case .daemon: "by Styrman"
         }
         switch outcome {
-        case .selected(_, let kind): return (kind.isAllow ? "Allowed " : "Denied ") + who
+        case .selected(_, let kind): return (kind.isAllow ? "Allowed " : kind == .other ? "Answered " : "Denied ") + who
         case .timedOut: return "Not answered from the phone in time"
         case .cancelled: return "Answered " + who
         }

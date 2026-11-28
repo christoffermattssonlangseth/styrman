@@ -61,8 +61,7 @@ struct SessionDetailView: View {
         .navigationTitle(summary.map { $0.name ?? $0.repoName } ?? "Session")
         .renameSession($renaming)
         .navigationBarTitleDisplayMode(.inline)
-        // The bar takes the agent's colour, so it's always clear who you're talking to.
-        .toolbarBackground(Theme.color(for: agent).opacity(0.07), for: .navigationBar)
+        .toolbarBackground(Theme.canvas, for: .navigationBar)
         .sheet(isPresented: $showTerminal) { TerminalSheet(sessionId: sessionId, agent: agent) }
         .sheet(isPresented: $showModel) { ModelSheet(sessionId: sessionId, agent: agent) }
         .sheet(isPresented: $showChanges) { ChangesSheet(sessionId: sessionId, agent: agent, cwd: summary?.cwd) }
@@ -276,23 +275,23 @@ struct SessionDetailView: View {
     private func toolbarItems(_ summary: SessionSummary) -> some ToolbarContent {
             ToolbarItem(placement: .principal) {
                 HStack(spacing: 8) {
-                    AgentAvatar(agent: summary.agent, size: 28)
-                    VStack(alignment: .leading, spacing: 0) {
+                    VStack(alignment: .center, spacing: 0) {
                         Text(summary.name ?? summary.repoName).font(.headline).lineLimit(1)
                         HStack(spacing: 4) {
+                            Image(systemName: "circle.fill").font(.system(size: 6))
+                                .foregroundStyle(summary.status == .working ? Theme.accent
+                                      : summary.status.needsUser ? Theme.attention
+                                      : summary.status == .done ? Color.secondary : Theme.live)
+                                .symbolEffect(.pulse, options: .repeating, isActive: summary.status == .working)
                             if summary.name != nil {
                                 Text(summary.repoName).foregroundStyle(.secondary).lineLimit(1)
                                 Text("·").foregroundStyle(.tertiary)
                             }
-                            Text(summary.agent.displayName).foregroundStyle(Theme.color(for: summary.agent))
+                            Text(summary.agent.displayName).foregroundStyle(Theme.textSecondary)
                             Text("·").foregroundStyle(.tertiary)
                             Text(Theme.label(for: summary.status))
                                 .foregroundStyle(summary.status.needsUser ? AnyShapeStyle(Theme.attention) : AnyShapeStyle(.secondary))
                                 .contentTransition(.opacity)
-                            if summary.status == .working {
-                                Image(systemName: "circle.fill").font(.system(size: 5)).foregroundStyle(Theme.accent)
-                                    .symbolEffect(.pulse, options: .repeating)
-                            }
                             if let mode = summary.mode.flatMap(PermissionMode.init), mode != .manual {
                                 Text("·").foregroundStyle(.tertiary)
                                 Text(mode.short)
@@ -391,6 +390,8 @@ struct SessionDetailView: View {
                 HelperLinks(summary: summary)
                 if let p = openPermission(timeline) {
                     PermissionCard(item: p, title: displayTitle(p.tool, cwd: summary.cwd), sessionId: sessionId, cwd: summary.cwd, pinned: true)
+                        // A new request is a new card: "sending" mustn't carry over.
+                        .id(p.request)
                         .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 4)
                         .frame(maxWidth: .infinity)
                         .background(.bar)
@@ -485,17 +486,18 @@ struct TimelineRow: View {
             let parts = AttachedFiles.split(raw)
             let text = parts?.text ?? raw
             HStack {
-                Spacer(minLength: 40)
+                Spacer(minLength: 56)
                 VStack(alignment: .trailing, spacing: 4) {
                     if let files = parts?.files, !files.isEmpty { AttachedFilesRow(files: files) }
                     if !text.isEmpty {
                     Text(text).textSelection(.enabled)
-                        .padding(.horizontal, 14).padding(.vertical, 10)
-                        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .shadow(color: .black.opacity(0.05), radius: 4, y: 1)
+                        .foregroundStyle(Theme.textPrimary)
+                        .padding(.horizontal, 16).padding(.vertical, 11)
+                        .background(Theme.bubble, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
                     }
                     if fromPhone {
-                        Label("From this phone", systemImage: "iphone").font(.caption2).foregroundStyle(.secondary)
+                        Image(systemName: "iphone").font(.caption2).foregroundStyle(.tertiary)
+                            .accessibilityLabel("From this phone")
                     }
                 }
             }
@@ -607,14 +609,18 @@ struct SelectableText: UIViewRepresentable {
 
     /// Markdown's inline styles (bold, italic, code, links) as UIKit attributes.
     static func render(_ text: AttributedString) -> NSAttributedString {
-        let body = UIFont.preferredFont(forTextStyle: .body)
+        let sans = UIFont.preferredFont(forTextStyle: .body)
+        // Replies read as prose: a serif at the body size (it scales with Dynamic Type).
+        let body = sans.fontDescriptor.withDesign(.serif).map { UIFont(descriptor: $0, size: 0) } ?? sans
+        let para = NSMutableParagraphStyle()
+        para.lineSpacing = 3
         let out = NSMutableAttributedString()
         for run in text.runs {
             let piece = String(text[run.range].characters)
             var font = body
             let intent = run.inlinePresentationIntent ?? []
             if intent.contains(.code) {
-                font = UIFont.monospacedSystemFont(ofSize: body.pointSize * 0.92, weight: .regular)
+                font = UIFont.monospacedSystemFont(ofSize: body.pointSize * 0.9, weight: .regular)
             } else {
                 var traits: UIFontDescriptor.SymbolicTraits = []
                 if intent.contains(.stronglyEmphasized) { traits.insert(.traitBold) }
@@ -623,8 +629,9 @@ struct SelectableText: UIViewRepresentable {
                     font = UIFont(descriptor: d, size: 0)
                 }
             }
-            var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor.label]
-            if intent.contains(.code) { attrs[.backgroundColor] = UIColor.secondarySystemFill }
+            var attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: UIColor(Theme.textPrimary),
+                                                         .paragraphStyle: para]
+            if intent.contains(.code) { attrs[.backgroundColor] = UIColor(Theme.codeFill) }
             if let link = run.link { attrs[.link] = link }
             out.append(NSAttributedString(string: piece, attributes: attrs))
         }
@@ -686,7 +693,7 @@ struct ToolCallRow: View {
             }
             .padding(.horizontal, 10).padding(.vertical, bare ? 7 : 6)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(bare ? AnyShapeStyle(Color.clear) : AnyShapeStyle(Color(.secondarySystemGroupedBackground)),
+            .background(bare ? AnyShapeStyle(Color.clear) : AnyShapeStyle(Theme.surface),
                         in: RoundedRectangle(cornerRadius: 8))
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
@@ -716,6 +723,14 @@ struct PermissionCard: View {
     var pinned = false
     @State private var sent: String?
     @State private var showAll = false
+    @State private var fullHeight: CGFloat = 0
+    @State private var shownHeight: CGFloat = 0
+
+    private func titleText(limit: Int?) -> some View {
+        Text(title)
+            .font(item.tool.kind == .execute ? .system(.footnote, design: .monospaced) : .callout.weight(.medium))
+            .lineLimit(limit)
+    }
 
     private var canAnswer: Bool {
         connection.state == .connected && connection.timeline(for: sessionId).isLive
@@ -730,9 +745,12 @@ struct PermissionCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: pinned ? 10 : 12) {
             HStack {
-                Label(item.isOpen ? "Permission needed" : "Permission", systemImage: "hand.raised.fill")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(item.isOpen ? Theme.attention : .secondary)
+                HStack(spacing: 6) {
+                    Image(systemName: "hand.raised.fill").font(.caption).foregroundStyle(Theme.attention)
+                    Text(item.isOpen ? "Allow this?" : "Permission")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(item.isOpen ? Theme.textPrimary : Theme.textSecondary)
+                }
                 Spacer()
                 if pinned {
                     Text("or answer in the terminal").font(.caption2).foregroundStyle(.tertiary)
@@ -743,20 +761,29 @@ struct PermissionCard: View {
             if let diffs = connection.timeline(for: sessionId).diffs(for: item) {
                 DiffPreview(diffs: diffs, cwd: cwd, maxLines: pinned ? 8 : 24)
             } else {
+            let limit = item.tool.kind == .execute ? (pinned ? 3 : 6) : 4
             Group {
                 if item.tool.kind == .execute {
-                    Text(title)
-                        .font(.system(.footnote, design: .monospaced))
-                        .lineLimit(showAll ? nil : pinned ? 3 : 6)
+                    titleText(limit: showAll ? nil : limit)
                         .padding(10)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+                        .background(Theme.bubble, in: RoundedRectangle(cornerRadius: 10))
                 } else {
-                    Text(title).font(.callout.weight(.medium)).lineLimit(showAll ? nil : 4)
+                    titleText(limit: showAll ? nil : limit)
                 }
             }
             .textSelection(.enabled)
-            if !showAll, title.count > (pinned ? 120 : 240) || title.split(separator: "\n").count > (pinned ? 3 : 6) {
+            // Measured, not guessed from its length: at a large text size a short
+            // command can wrap past the limit, and you must see what you approve.
+            .background(alignment: .topLeading) {
+                titleText(limit: nil)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(item.tool.kind == .execute ? 10 : 0)
+                    .hidden()
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { fullHeight = $0 }
+            }
+            .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { shownHeight = $0 }
+            if !showAll, fullHeight > shownHeight + 1 {
                 Button("Show all") { showAll = true }.font(.caption).buttonStyle(.borderless)
             }
             }
@@ -777,8 +804,16 @@ struct PermissionCard: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 14).fill(item.isOpen ? Theme.attention.opacity(0.08) : Color.clear))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(item.isOpen ? Theme.attention.opacity(0.6) : Color.secondary.opacity(0.3)))
+        .background(item.isOpen ? Theme.surface : Color.clear, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Theme.hairline))
+        // An amber edge while it waits for you.
+        .overlay(alignment: .leading) {
+            if item.isOpen {
+                UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 16, style: .continuous)
+                    .fill(Theme.attention).frame(width: 3)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .sensoryFeedback(.success, trigger: item.isOpen) { wasOpen, isOpen in wasOpen && !isOpen && sent != nil }
         .sensoryFeedback(.impact(weight: .medium), trigger: sent) { _, new in new != nil }
     }
@@ -786,7 +821,7 @@ struct PermissionCard: View {
     /// One option as a full-width row of the same shape as the others.
     private func option(_ opt: PermissionOption) -> some View {
         let (head, code) = OptionLabel.split(opt.label)
-        let deny = !opt.kind.isAllow
+        let deny = opt.kind == .rejectOnce || opt.kind == .rejectAlways
         let primary = opt.kind == .allowOnce
         // Allow once is the answer most of the time: a solid button. Always-allow is quieter,
         // and Deny is red but outlined so it doesn't compete.
@@ -798,7 +833,9 @@ struct PermissionCard: View {
                 // 10 s, unlock the buttons so you can try again.
                 Task {
                     try? await Task.sleep(for: .seconds(10))
-                    if item.isOpen, sent == opt.id { sent = nil }
+                    // `item` is a copy from when the card was drawn: ask the timeline.
+                    let open = connection.timeline(for: sessionId).openPermissions.contains { $0.request == item.request }
+                    if open, sent == opt.id { sent = nil }
                 }
             }
         } label: {
@@ -807,7 +844,7 @@ struct PermissionCard: View {
                     if sent == opt.id {
                         ProgressView().controlSize(.small)
                     } else {
-                        Image(systemName: deny ? "xmark" : opt.kind == .allowAlways ? "checkmark.seal" : "checkmark")
+                        Image(systemName: deny ? "xmark" : opt.kind == .allowAlways ? "checkmark.seal" : opt.kind == .other ? "circle" : "checkmark")
                             .font(.callout.weight(.semibold))
                     }
                 }
@@ -827,10 +864,10 @@ struct PermissionCard: View {
             .multilineTextAlignment(.leading)
             .padding(.horizontal, 12).padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .foregroundStyle(primary ? Theme.onSolid : deny ? Color.red : Color.primary)
-            .background(primary ? AnyShapeStyle(Theme.solid) : AnyShapeStyle(deny ? Color.clear : Color(.secondarySystemFill)),
-                        in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(deny ? Color.red.opacity(0.55) : .clear))
+            .foregroundStyle(primary ? Theme.onSolid : deny ? Theme.textSecondary : Theme.textPrimary)
+            .background(primary ? AnyShapeStyle(Theme.solid) : AnyShapeStyle(deny ? Color.clear : Theme.bubble),
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(deny ? Theme.hairline : .clear))
             .contentShape(RoundedRectangle(cornerRadius: 12))
         }
         .buttonStyle(.plain)
@@ -1117,63 +1154,85 @@ struct Composer: View {
                     .padding(.vertical, 2)
                 }
             }
-            HStack(alignment: .bottom, spacing: 8) {
-                Menu {
-                    // A PhotosPicker inside a Menu often never opens (the menu closes
-                    // first): open it from outside instead.
-                    Button { pickingPhotos = true } label: { Label("Photos", systemImage: "photo.on.rectangle") }
-                    Button { pickingFiles = true } label: { Label("Files", systemImage: "folder") }
-                } label: {
-                    Image(systemName: "paperclip.circle")
-                        .font(.system(size: 34))
-                }
-                .tint(.secondary)
-                .disabled(status == .done || sending)
-                .accessibilityLabel("Attach images or files")
-                TextField("Message \(agent)", text: $text, axis: .vertical)
-                    .lineLimit(1...6)
+            // One rounded card, like Claude Code's prompt box: the text on top, the
+            // controls in a row beneath it.
+            VStack(alignment: .leading, spacing: 4) {
+                TextField("Reply to \(agent)…", text: $text, axis: .vertical)
+                    .lineLimit(1...8)
                     .focused($focused)
-                    .padding(.horizontal, 14).padding(.vertical, 10)
-                    .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 20))
+                    .foregroundStyle(Theme.textPrimary)
+                    .padding(.horizontal, 14).padding(.top, 12)
                     .disabled(status == .done)
-                Button {
-                    if !dictation.isListening {
-                        beforeDictation = text.isEmpty || text.hasSuffix(" ") ? text : text + " "
-                        focused = false
+                HStack(spacing: 6) {
+                    Menu {
+                        // A PhotosPicker inside a Menu often never opens (the menu closes
+                        // first): open it from outside instead.
+                        Button { pickingPhotos = true } label: { Label("Photos", systemImage: "photo.on.rectangle") }
+                        Button { pickingFiles = true } label: { Label("Files", systemImage: "folder") }
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 17, weight: .medium))
+                            .frame(width: 34, height: 34)
+                            .contentShape(Rectangle())
                     }
-                    Task { await dictation.toggle() }
-                } label: {
-                    Image(systemName: dictation.isListening ? "stop.circle.fill" : "mic.circle")
-                        .font(.system(size: 34))
-                        .symbolEffect(.pulse, isActive: dictation.isListening)
-                }
-                .tint(dictation.isListening ? Theme.accent : .secondary)
-                .disabled(status == .done)
-                .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Dictate")
-                if showsStop {
-                    // Nothing typed while it works: stop its turn instead (Esc on the Mac).
-                    Button { connection.interrupt(sessionId) } label: {
-                        Image(systemName: "stop.circle.fill").font(.system(size: 34))
-                    }
-                    .tint(.primary)
-                    .accessibilityLabel("Stop \(agent)")
-                    .sensoryFeedback(.impact(weight: .medium), trigger: status)
-                } else {
-                    Button(action: send) {
-                        if sending {
-                            ProgressView().frame(width: 34, height: 34)
-                        } else {
-                            Image(systemName: "arrow.up.circle.fill").font(.system(size: 34))
+                    .tint(Theme.textSecondary)
+                    .disabled(status == .done || sending)
+                    .accessibilityLabel("Attach images or files")
+                    Spacer()
+                    Button {
+                        if !dictation.isListening {
+                            beforeDictation = text.isEmpty || text.hasSuffix(" ") ? text : text + " "
+                            focused = false
                         }
+                        Task { await dictation.toggle() }
+                    } label: {
+                        Image(systemName: dictation.isListening ? "stop.circle.fill" : "mic")
+                            .font(.system(size: 17, weight: .medium))
+                            .symbolEffect(.pulse, isActive: dictation.isListening)
+                            .frame(width: 34, height: 34)
+                            .contentShape(Rectangle())
                     }
-                    .tint(Theme.accent)
-                    .disabled(!canSend)
-                    .accessibilityLabel("Send")
+                    .tint(dictation.isListening ? Theme.accent : Theme.textSecondary)
+                    .disabled(status == .done)
+                    .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Dictate")
+                    if showsStop {
+                        // Nothing typed while it works: stop its turn instead (Esc on the Mac).
+                        Button { connection.interrupt(sessionId) } label: {
+                            Image(systemName: "stop.fill")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(Theme.onSolid)
+                                .frame(width: 32, height: 32)
+                                .background(Theme.solid, in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Stop \(agent)")
+                        .sensoryFeedback(.impact(weight: .medium), trigger: status)
+                    } else {
+                        Button(action: send) {
+                            Group {
+                                if sending {
+                                    ProgressView().tint(.white)
+                                } else {
+                                    Image(systemName: "arrow.up").font(.system(size: 15, weight: .bold))
+                                }
+                            }
+                            .foregroundStyle(.white)
+                            .frame(width: 32, height: 32)
+                            .background(canSend || sending ? Theme.accent : Theme.accent.opacity(0.35), in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!canSend)
+                        .accessibilityLabel("Send")
+                    }
                 }
+                .padding(.horizontal, 6).padding(.bottom, 6)
             }
+            .background(Theme.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(Theme.hairline))
+            .shadow(color: .black.opacity(0.04), radius: 8, y: 2)
         }
-        .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 6)
-        .background(.bar)
+        .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 6)
+        .background(Theme.canvas)
         .onChange(of: dictation.transcript) { _, t in
             if dictation.isListening || !t.isEmpty { text = beforeDictation + t }
         }
@@ -1194,7 +1253,7 @@ struct Composer: View {
                 for item in items {
                     guard let data = try? await item.loadTransferable(type: Data.self),
                           let jpeg = Self.photoJPEG(data) else { failed += 1; continue }
-                    attachments.append(Attachment(name: "photo-\(attachments.count + 1).jpg", data: jpeg, isImage: true))
+                    attachments.append(Attachment(name: Self.unique("photo.jpg", in: attachments), data: jpeg, isImage: true))
                 }
                 if failed > 0 {
                     connection.lastError = failed == 1 ? "Couldn't load that photo (is it still downloading from iCloud?)."
@@ -1209,13 +1268,28 @@ struct Composer: View {
                 defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                 guard let data = try? Data(contentsOf: url) else { continue }
                 let image = ["png", "jpg", "jpeg", "gif", "webp", "heic"].contains(url.pathExtension.lowercased())
-                attachments.append(Attachment(name: url.lastPathComponent, data: data, isImage: image))
+                attachments.append(Attachment(name: Self.unique(url.lastPathComponent, in: attachments), data: data, isImage: image))
             }
         }
     }
 }
 
 extension Composer {
+    /// A name no other attachment has (they're saved side by side on the Mac):
+    /// "photo.jpg", "photo-2.jpg", …
+    static func unique(_ name: String, in attachments: [Attachment]) -> String {
+        let taken = Set(attachments.map(\.name))
+        guard taken.contains(name) || name == "photo.jpg" else { return name }
+        let ext = (name as NSString).pathExtension
+        let base = (name as NSString).deletingPathExtension
+        var n = name == "photo.jpg" && !taken.contains(name) ? 1 : 2
+        while true {
+            let candidate = n == 1 ? name : "\(base)-\(n)" + (ext.isEmpty ? "" : ".\(ext)")
+            if !taken.contains(candidate) { return candidate }
+            n += 1
+        }
+    }
+
     /// A photo as JPEG (HEIC isn't readable by every agent), at most 2048 px on its
     /// longest side: plenty for an agent, and quick to send.
     static func photoJPEG(_ data: Data) -> Data? {
@@ -1259,7 +1333,7 @@ private struct AttachmentChip: View {
                 .accessibilityLabel("Remove \(attachment.name)")
         }
         .padding(.leading, 4).padding(.trailing, 8).padding(.vertical, 4)
-        .background(Color(.secondarySystemGroupedBackground), in: Capsule())
+        .background(Theme.surface, in: Capsule())
     }
 }
 
@@ -1294,7 +1368,7 @@ struct AttachedFilesRow: View {
     let files: [String]
     var body: some View {
         HStack(spacing: 6) {
-            ForEach(files, id: \.self) { f in
+            ForEach(Array(files.enumerated()), id: \.offset) { _, f in
                 let image = ["png", "jpg", "jpeg", "gif", "webp", "heic"].contains((f as NSString).pathExtension.lowercased())
                 Label(f, systemImage: image ? "photo" : "doc")
                     .font(.caption)
@@ -1319,15 +1393,18 @@ struct PendingPromptRow: View {
 
     var body: some View {
         HStack {
-            Spacer(minLength: 40)
+            Spacer(minLength: 56)
             VStack(alignment: .trailing, spacing: 4) {
                 if let files = AttachedFiles.split(prompt.text)?.files, !files.isEmpty { AttachedFilesRow(files: files) }
                 let shown = AttachedFiles.split(prompt.text)?.text ?? prompt.text
                 if !shown.isEmpty {
                     Text(shown)
                         .textSelection(.enabled)
-                        .padding(.horizontal, 14).padding(.vertical, 10)
-                        .background(Theme.accent.opacity(0.15), in: RoundedRectangle(cornerRadius: 16))
+                        .foregroundStyle(Theme.textPrimary.opacity(0.75))
+                        .padding(.horizontal, 16).padding(.vertical, 11)
+                        .background(Theme.bubble.opacity(0.6), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .strokeBorder(Theme.hairline, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
                 }
                 Text(label).font(.caption2).foregroundStyle(.secondary)
                 if prompt.unconfirmed {
@@ -1452,11 +1529,11 @@ struct StepsRow: View {
                         Image(systemName: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
                     }
                 }
-                Image(systemName: "chevron.right").font(.caption2.weight(.semibold))
+                Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary)
                 Spacer(minLength: 0)
             }
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
+            .font(.footnote)
+            .foregroundStyle(Theme.textSecondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
@@ -1648,9 +1725,7 @@ struct SessionBackground: View {
     let agent: AgentKind
     var body: some View {
         ZStack(alignment: .top) {
-            Color(.systemGroupedBackground)
-            LinearGradient(colors: [Theme.color(for: agent).opacity(0.08), .clear], startPoint: .top, endPoint: .bottom)
-                .frame(height: 280)
+            Theme.canvas
         }
         .ignoresSafeArea()
     }
@@ -1683,9 +1758,10 @@ struct LivePreviewRow: View {
                 ReplyText(raw: String(text.prefix(reduceMotion ? text.count : revealed)))
             } else {
                 Text(Self.reveal(full, upTo: reduceMotion ? count : revealed))
+                    .font(ReplyText.prose).lineSpacing(3)
             }
         }
-        .foregroundStyle(.primary.opacity(0.85))
+        .foregroundStyle(Theme.textPrimary.opacity(0.85))
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentTransition(.identity)
         .accessibilityLabel("\(agent.displayName) is writing: \(String(full.characters))")
@@ -1785,7 +1861,13 @@ struct WorkingRow: View {
                                             thinkingFor: thinkingSince.map { ctx.date.timeIntervalSince($0) }) {
                     Text(time).foregroundStyle(.secondary)
                 } else {
-                    Shimmer(text: status?.label ?? "Working…", color: tint)
+                    HStack(spacing: 0) {
+                        Shimmer(text: status?.label ?? "Working…", color: tint)
+                        if let secs = status?.elapsedSecs {
+                            Text(" · \(WorkStatus.duration(secs + max(0, Int(ctx.date.timeIntervalSince(since)))))")
+                                .foregroundStyle(Theme.textSecondary).monospacedDigit()
+                        }
+                    }
                 }
             }
         }
@@ -1806,24 +1888,22 @@ struct WorkingRow: View {
     }
 }
 
-/// Four dots taking turns, the Claude app's working mark.
+/// A star that grows and shrinks, like a coding agent's terminal spinner.
 struct WorkingDots: View {
     let color: Color
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Out and back: · ✢ ✳ ✶ ✻ ✽ ✻ ✶ ✳ ✢
+    static let frames = ["·", "✢", "✳", "✶", "✻", "✽", "✻", "✶", "✳", "✢"]
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.18)) { ctx in
-            let lit = reduceMotion ? -1 : Int(ctx.date.timeIntervalSinceReferenceDate / 0.18) % 4
-            let spots: [CGPoint] = [.init(x: 0, y: -4), .init(x: 4, y: 0), .init(x: 0, y: 4), .init(x: -4, y: 0)]
-            ZStack {
-                ForEach(0..<4, id: \.self) { i in
-                    Circle().fill(color.opacity(i == lit ? 1 : 0.4))
-                        .frame(width: 3.5, height: 3.5)
-                        .offset(x: spots[i].x, y: spots[i].y)
-                }
-            }
-            .frame(width: 12, height: 12)
+        TimelineView(.periodic(from: .now, by: 0.12)) { ctx in
+            let i = reduceMotion ? 4 : Int(ctx.date.timeIntervalSinceReferenceDate / 0.12) % Self.frames.count
+            Text(Self.frames[i])
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(color)
+                .frame(width: 16, height: 16)
         }
+        .accessibilityHidden(true)
     }
 }
 

@@ -23,7 +23,7 @@ use std::time::Duration;
 use styr_core::event::Event;
 use styr_core::ids::SessionId;
 use styr_core::phone::{ClientMsg, PHONE_PROTOCOL, PairRequest, ServerMsg};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 
 const PAGE: u32 = 500;
 /// The most history one message carries: the phone's WebSocket drops a message
@@ -704,6 +704,9 @@ async fn ws(State(st): State<AppState>, headers: HeaderMap, upgrade: WebSocketUp
             "too many failed logins; try again in a minute",
         );
     }
+    // Listen for revocations before checking the token: a revoke during the
+    // handshake must still close the connection.
+    let revoked = st.daemon.revoked.subscribe();
     let Some(device) = bearer(&headers).and_then(|t| st.daemon.authenticate(t)) else {
         st.daemon.auth_throttle.failed();
         return error(StatusCode::UNAUTHORIZED, "missing or invalid device token");
@@ -712,7 +715,10 @@ async fn ws(State(st): State<AppState>, headers: HeaderMap, upgrade: WebSocketUp
         .max_message_size(1 << 20)
         .on_upgrade(move |socket| async move {
             tracing::info!(%device, "phone connected");
-            if let Err(e) = Connection::new(st, device.clone()).run(socket).await {
+            if let Err(e) = Connection::new(st, device.clone())
+                .run(socket, revoked)
+                .await
+            {
                 tracing::debug!(%device, "phone connection ended: {e:#}");
             }
             tracing::info!(%device, "phone disconnected");
@@ -727,6 +733,10 @@ struct Connection {
     subs: HashMap<SessionId, u64>,
     /// Sessions the client has been told about (so removals are only sent for those).
     known: HashSet<SessionId>,
+    /// Slow jobs (git, usage, models) run off the loop and send their replies here,
+    /// so events and heartbeats keep flowing meanwhile.
+    jobs: mpsc::UnboundedSender<Vec<ServerMsg>>,
+    done: Option<mpsc::UnboundedReceiver<Vec<ServerMsg>>>,
 }
 
 type Tx = futures_util::stream::SplitSink<WebSocket, Message>;
@@ -739,19 +749,40 @@ async fn send(tx: &mut Tx, msg: &ServerMsg) -> anyhow::Result<()> {
 
 impl Connection {
     fn new(st: AppState, device: String) -> Self {
+        let (jobs, done) = mpsc::unbounded_channel();
         Self {
             daemon: st.daemon,
             stop: st.stop,
             device,
             subs: HashMap::new(),
             known: HashSet::new(),
+            jobs,
+            done: Some(done),
         }
     }
 
-    async fn run(mut self, socket: WebSocket) -> anyhow::Result<()> {
+    /// Run `job` on a blocking thread; its messages go out when it's done.
+    fn spawn_job(&self, job: impl FnOnce() -> Vec<ServerMsg> + Send + 'static) {
+        let jobs = self.jobs.clone();
+        tokio::spawn(async move {
+            let msgs = tokio::task::spawn_blocking(job).await.unwrap_or_else(|e| {
+                vec![ServerMsg::Error {
+                    message: format!("internal error: {e}"),
+                }]
+            });
+            // The connection may be gone by now: fine.
+            let _ = jobs.send(msgs);
+        });
+    }
+
+    async fn run(
+        mut self,
+        socket: WebSocket,
+        mut revoked: broadcast::Receiver<String>,
+    ) -> anyhow::Result<()> {
         // Subscribe before reading any state so nothing falls between snapshot and stream.
         let mut bus = self.daemon.subscribe();
-        let mut revoked = self.daemon.revoked.subscribe();
+        let mut done = self.done.take().expect("run once");
         self.daemon.device_connected(&self.device, true);
         struct Live(Arc<Daemon>, String);
         impl Drop for Live {
@@ -839,6 +870,11 @@ impl Connection {
                     }
                     Err(broadcast::error::RecvError::Closed) => return Ok(()),
                 },
+                Some(msgs) = done.recv() => {
+                    for m in msgs {
+                        send(&mut tx, &m).await?;
+                    }
+                }
                 _ = beat.tick() => {
                     if last_heard.elapsed() > HEARTBEAT * 3 {
                         tracing::info!(device = %self.device, "phone silent for {}s; closing", last_heard.elapsed().as_secs());
@@ -927,10 +963,12 @@ impl Connection {
                 Ok(())
             }
             ClientMsg::GetUsage => {
-                let providers = tokio::task::spawn_blocking(crate::usage::read)
-                    .await
-                    .unwrap_or_default();
-                send(tx, &ServerMsg::Usage { providers }).await
+                self.spawn_job(|| {
+                    vec![ServerMsg::Usage {
+                        providers: crate::usage::read(),
+                    }]
+                });
+                Ok(())
             }
 
             ClientMsg::Subscribe { session, since_seq } => {
@@ -1110,32 +1148,15 @@ impl Connection {
                     )
                     .await;
                 };
-                let read = tokio::task::spawn_blocking(move || crate::changes::read(&cwd)).await;
-                match read {
-                    Ok(Ok(c)) => {
-                        send(
-                            tx,
-                            &ServerMsg::Changes {
-                                session,
-                                branch: c.branch,
-                                diff: c.diff,
-                                truncated: c.truncated,
-                                ahead: c.ahead,
-                            },
-                        )
-                        .await
-                    }
-                    Ok(Err(e)) => {
-                        send(
-                            tx,
-                            &ServerMsg::Error {
-                                message: format!("{e:#}"),
-                            },
-                        )
-                        .await
-                    }
-                    Err(e) => Err(e.into()),
-                }
+                self.spawn_job(move || {
+                    vec![match crate::changes::read(&cwd) {
+                        Ok(c) => changes_msg(session, c),
+                        Err(e) => ServerMsg::Error {
+                            message: format!("{e:#}"),
+                        },
+                    }]
+                });
+                Ok(())
             }
             ClientMsg::GetModels { session } => {
                 let Some(agent) = self
@@ -1146,9 +1167,13 @@ impl Connection {
                 else {
                     return Ok(());
                 };
-                let models =
-                    tokio::task::spawn_blocking(move || crate::models::choices(agent)).await?;
-                send(tx, &ServerMsg::Models { session, models }).await
+                self.spawn_job(move || {
+                    vec![ServerMsg::Models {
+                        session,
+                        models: crate::models::choices(agent),
+                    }]
+                });
+                Ok(())
             }
             ClientMsg::Commit {
                 session,
@@ -1170,42 +1195,22 @@ impl Connection {
                     .await;
                 }
                 tracing::info!(%session, push, "commit from the phone");
-                let done = tokio::task::spawn_blocking(move || {
-                    let r = crate::changes::commit(&cwd, &message, push);
-                    (r, crate::changes::read(&cwd))
-                })
-                .await?;
-                match done.0 {
-                    Ok(c) => {
-                        send(
-                            tx,
-                            &ServerMsg::Committed {
-                                session: session.clone(),
-                                commit: c.commit,
-                                pushed: c.pushed,
-                            },
-                        )
-                        .await?
+                self.spawn_job(move || {
+                    let mut out = vec![match crate::changes::commit(&cwd, &message, push) {
+                        Ok(c) => ServerMsg::Committed {
+                            session: session.clone(),
+                            commit: c.commit,
+                            pushed: c.pushed,
+                        },
+                        Err(e) => fail(format!("{e:#}")),
+                    }];
+                    // What's left (or the error's state) either way.
+                    if let Ok(c) = crate::changes::read(&cwd) {
+                        out.push(changes_msg(session, c));
                     }
-                    Err(e) => send(tx, &fail(format!("{e:#}"))).await?,
-                }
-                // What's left (or the error's state) either way.
-                match done.1 {
-                    Ok(c) => {
-                        send(
-                            tx,
-                            &ServerMsg::Changes {
-                                session,
-                                branch: c.branch,
-                                diff: c.diff,
-                                truncated: c.truncated,
-                                ahead: c.ahead,
-                            },
-                        )
-                        .await
-                    }
-                    Err(_) => Ok(()),
-                }
+                    out
+                });
+                Ok(())
             }
             ClientMsg::WatchScreen { session } => match self.daemon.watch_screen(&session) {
                 Ok(()) => Ok(()),
@@ -1237,7 +1242,7 @@ impl Connection {
             ClientMsg::Command {
                 session,
                 command: styr_core::Command::Rename { name },
-            } => match self.daemon.rename(&session, &name) {
+            } => match self.daemon.rename_shared(&session, &name) {
                 Ok(()) => Ok(()),
                 Err(e) => {
                     send(
@@ -1304,6 +1309,16 @@ impl Connection {
                 .await
             }
         }
+    }
+}
+
+fn changes_msg(session: SessionId, c: crate::changes::Changes) -> ServerMsg {
+    ServerMsg::Changes {
+        session,
+        branch: c.branch,
+        diff: c.diff,
+        truncated: c.truncated,
+        ahead: c.ahead,
     }
 }
 

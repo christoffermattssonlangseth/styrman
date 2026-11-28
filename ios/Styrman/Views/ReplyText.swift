@@ -16,13 +16,18 @@ struct ReplyText: View {
                 case .text(let t) where selectable:
                     InlineSelectableText(text: Self.inline(t))
                 case .text(let t):
-                    Text(Self.inline(t)).frame(maxWidth: .infinity, alignment: .leading)
+                    Text(Self.inline(t)).font(Self.prose).lineSpacing(3)
+                        .foregroundStyle(Theme.textPrimary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 case .table(let header, let rows):
                     TableBlock(header: header, rows: rows)
                 }
             }
         }
     }
+
+    /// Replies read as prose, in a serif.
+    static let prose = Font.system(.body, design: .serif)
 
     static func inline(_ s: String) -> AttributedString {
         (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))

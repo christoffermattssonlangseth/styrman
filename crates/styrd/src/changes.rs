@@ -5,6 +5,7 @@
 
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
+use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -44,23 +45,48 @@ fn git_for(dir: &Path, args: &[&str], limit: Duration) -> Result<String> {
         .stderr(Stdio::piped())
         .spawn()
         .context("couldn't run git")?;
+    // Drain both pipes while waiting: a full pipe (~64 KB) would block git and
+    // look like a timeout.
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut p) = pipe {
+                let _ = p.read_to_end(&mut buf);
+            }
+            buf
+        })
+    };
+    let stdout = drain(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let stderr = drain(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
     // A huge repository must not hold up the phone forever.
     let started = Instant::now();
-    loop {
-        if child.try_wait()?.is_some() {
-            break;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
         }
         if started.elapsed() > limit {
             let _ = child.kill();
+            let _ = child.wait();
             bail!("git took too long");
         }
         std::thread::sleep(Duration::from_millis(20));
+    };
+    let stdout = stdout.join().unwrap_or_default();
+    let stderr = stderr.join().unwrap_or_default();
+    if !status.success() {
+        bail!("{}", String::from_utf8_lossy(&stderr).trim());
     }
-    let out = child.wait_with_output()?;
-    if !out.status.success() {
-        bail!("{}", String::from_utf8_lossy(&out.stderr).trim());
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    Ok(String::from_utf8_lossy(&stdout).into_owned())
 }
 
 /// The uncommitted changes in `dir` (a git working tree).
@@ -292,6 +318,22 @@ mod tests {
         assert_eq!(read(d).unwrap().ahead, Some(1));
         assert!(commit(d, "", true).unwrap().pushed);
         assert_eq!(read(d).unwrap().ahead, Some(0));
+    }
+
+    #[test]
+    fn a_large_diff_is_not_a_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        run(d, &["init", "-q", "-b", "main"]);
+        let line = "x".repeat(99);
+        let body: String = (0..2000).map(|i| format!("{i} {line}\n")).collect();
+        std::fs::write(d.join("big.txt"), &body).unwrap();
+        run(d, &["add", "big.txt"]);
+        run(d, &["commit", "-q", "-m", "first"]);
+        std::fs::write(d.join("big.txt"), body.replace('x', "y")).unwrap();
+        // ~400 KB of diff: well past a pipe buffer.
+        let out = git_for(d, &["diff", "--no-color", "HEAD"], Duration::from_secs(10)).unwrap();
+        assert!(out.len() > 200 * 1024, "{}", out.len());
     }
 
     #[test]

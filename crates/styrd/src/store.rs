@@ -319,6 +319,12 @@ impl Store {
         Ok(())
     }
 
+    pub fn delete_meta(&mut self, key: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM meta WHERE key = ?1", [key])?;
+        Ok(())
+    }
+
     /// Delete a session and (by cascade) its history. Returns whether it existed.
     pub fn delete_session(&mut self, id: &SessionId) -> Result<bool> {
         Ok(self
@@ -391,6 +397,9 @@ impl Store {
         Ok(event)
     }
 
+    /// Up to `limit` events after `since_seq`. A row that no longer decodes (written
+    /// by a newer or broken build) is skipped and logged, never an error: one bad
+    /// row must not break every backfill.
     pub fn events_since(
         &self,
         session: &SessionId,
@@ -400,24 +409,42 @@ impl Store {
         let mut st = self.conn.prepare(
             "SELECT seq, at_ms, source, body FROM events WHERE session_id = ?1 AND seq > ?2 ORDER BY seq LIMIT ?3",
         )?;
-        let rows = st.query_map(params![session.as_str(), since_seq as i64, limit], |r| {
-            Ok((
-                r.get::<_, i64>(0)?,
-                r.get::<_, i64>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, String>(3)?,
-            ))
-        })?;
         let mut out = Vec::new();
-        for row in rows {
-            let (seq, at_ms, source, body) = row?;
-            out.push(Event {
-                session: session.clone(),
-                seq: seq as u64,
-                at_ms,
-                source: serde_json::from_value(serde_json::Value::String(source))?,
-                kind: serde_json::from_str(&body)?,
-            });
+        let mut after = since_seq;
+        loop {
+            let want = limit - out.len() as u32;
+            let rows = st.query_map(params![session.as_str(), after as i64, want], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })?;
+            let mut fetched = 0;
+            for row in rows {
+                let (seq, at_ms, source, body) = row?;
+                fetched += 1;
+                after = seq as u64;
+                let decoded = serde_json::from_value(serde_json::Value::String(source))
+                    .and_then(|source| Ok((source, serde_json::from_str(&body)?)));
+                match decoded {
+                    Ok((source, kind)) => out.push(Event {
+                        session: session.clone(),
+                        seq: seq as u64,
+                        at_ms,
+                        source,
+                        kind,
+                    }),
+                    Err(e) => {
+                        tracing::warn!(%session, seq, "skipping an event that doesn't decode: {e}")
+                    }
+                }
+            }
+            // Short of `limit` only because rows were skipped: read on.
+            if fetched < want || out.len() as u32 >= limit {
+                break;
+            }
         }
         Ok(out)
     }
@@ -437,12 +464,21 @@ impl Store {
     }
 
     /// All event kinds of a session, oldest first (for rebuilding status on start).
+    /// Rows that don't decode are skipped and logged.
     pub fn event_kinds(&self, session: &SessionId) -> Result<Vec<EventKind>> {
         let mut st = self
             .conn
             .prepare("SELECT body FROM events WHERE session_id = ?1 ORDER BY seq")?;
         let rows = st.query_map([session.as_str()], |r| r.get::<_, String>(0))?;
-        rows.map(|b| Ok(serde_json::from_str(&b?)?)).collect()
+        let mut out = Vec::new();
+        for body in rows {
+            match serde_json::from_str(&body?) {
+                Ok(kind) => out.push(kind),
+                // One bad row must not keep the daemon from starting.
+                Err(e) => tracing::warn!(%session, "skipping an event that doesn't decode: {e}"),
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -598,6 +634,33 @@ mod tests {
             )
             .unwrap();
         assert_ne!(a.id, c.id);
+    }
+
+    #[test]
+    fn an_undecodable_row_is_skipped() {
+        let mut s = Store::open_in_memory().unwrap();
+        let (rec, _) = s.upsert_session(&upd("x"), 1).unwrap();
+        for i in 0..4 {
+            s.append(
+                &rec.id,
+                EventSource::Hook,
+                EventKind::SessionEnded { reason: None },
+                10 + i,
+            )
+            .unwrap();
+        }
+        s.conn
+            .execute(
+                "UPDATE events SET body = '{\"type\":\"from_the_future\"}' WHERE seq = 2",
+                [],
+            )
+            .unwrap();
+        assert_eq!(s.event_kinds(&rec.id).unwrap().len(), 3);
+        // A page that lost a row to skipping still fills up from later rows.
+        let evs = s.events_since(&rec.id, 0, 2).unwrap();
+        assert_eq!(evs.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![1, 3]);
+        let evs = s.events_since(&rec.id, 3, 10).unwrap();
+        assert_eq!(evs.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![4]);
     }
 
     #[test]
