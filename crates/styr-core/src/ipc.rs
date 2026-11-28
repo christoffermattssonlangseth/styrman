@@ -21,7 +21,10 @@ pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 /// The terminal actions a wrapper understands, sent with every `AttachTerminal`.
 /// 1: stop a turn (`Response::Interrupt`) and show the screen (`Response::WatchScreen`).
 /// 2: restart with another model or effort (`Response::Restart`).
-pub const WRAPPER_LEVEL: u32 = 2;
+/// 3: title its terminal tab (`Response::SetTitle`).
+pub const WRAPPER_LEVEL: u32 = 3;
+/// Below this a wrapper lacks Stop or Terminal: the phone says to restart it.
+pub const WRAPPER_LEVEL_FULL: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -116,6 +119,11 @@ pub enum Request {
     /// Delete sessions and their history.
     ForgetSessions {
         ids: Vec<SessionId>,
+    },
+    /// Name a session, as the phone's Rename does (empty: its own title again).
+    RenameSession {
+        session: SessionId,
+        name: String,
     },
     /// Quit these sessions' agents, as the phone's End does.
     EndSessions {
@@ -251,6 +259,10 @@ pub enum Response {
     },
     /// Quit the agent; close the tab if the phone opened it (see `Command::EndSession`).
     EndSession,
+    /// Title the terminal's tab (see `Command::Rename`); empty: let the agent title it.
+    SetTitle {
+        title: String,
+    },
     /// Stop the agent's current turn (Esc in its terminal; see `Command::Interrupt`).
     Interrupt,
     /// Send the screen for the next 20 s (a phone is watching).
@@ -347,6 +359,9 @@ pub struct SessionSummary {
     /// that session's helper.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub helper_of: Option<SessionId>,
+    /// The name the user gave it (`Command::Rename`), shown in place of its title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// The reasoning effort chosen from the phone, if any (else the agent's default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,

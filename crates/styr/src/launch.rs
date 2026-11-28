@@ -249,6 +249,38 @@ fn rand_u64() -> u64 {
     u64::from_ne_bytes(b) ^ std::process::id() as u64
 }
 
+/// The cmux CLI, in a cmux terminal.
+fn cmux_cli() -> String {
+    std::env::var("CMUX_BUNDLED_CLI_PATH")
+        .ok()
+        .filter(|p| std::path::Path::new(p).exists())
+        .unwrap_or_else(|| "/Applications/cmux.app/Contents/Resources/bin/cmux".into())
+}
+
+/// Name this terminal's cmux tab (empty: its own title again). Outside cmux, nothing.
+pub fn title_tab(title: &str) {
+    // By surface: in a terminal, CMUX_TAB_ID names the workspace, not this tab.
+    let Some(surface) = std::env::var("CMUX_SURFACE_ID")
+        .ok()
+        .filter(|s| !s.is_empty())
+    else {
+        return;
+    };
+    let mut cmd = std::process::Command::new(cmux_cli());
+    cmd.args(["tab-action", "--tab", &surface]);
+    if title.is_empty() {
+        cmd.args(["--action", "clear-name"]);
+    } else {
+        cmd.args(["--action", "rename", "--title", title]);
+    }
+    let _ = cmd
+        .env("CMUX_QUIET", "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+}
+
 /// After the phone ended the session: close the cmux tab if the phone opened it
 /// (it was only ever for this agent), else say what happened in the terminal.
 fn ended_from_phone(phone_tab: bool) {
@@ -256,10 +288,7 @@ fn ended_from_phone(phone_tab: bool) {
         .ok()
         .filter(|s| !s.is_empty());
     if phone_tab && let Some(surface) = surface {
-        let cmux = std::env::var("CMUX_BUNDLED_CLI_PATH")
-            .ok()
-            .filter(|p| std::path::Path::new(p).exists())
-            .unwrap_or_else(|| "/Applications/cmux.app/Contents/Resources/bin/cmux".into());
+        let cmux = cmux_cli();
         // Closing the tab ends this process too: start it and go.
         let started = std::process::Command::new(cmux)
             .args(["close-surface", "--surface", &surface])

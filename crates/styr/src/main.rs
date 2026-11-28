@@ -75,6 +75,13 @@ enum Cmd {
         #[arg(long)]
         off: bool,
     },
+    /// Name a session (on every phone, and its cmux tab); no name: its own title again
+    Rename {
+        /// Session id (the ID column of `styr status`).
+        id: String,
+        /// The name; leave out to clear it.
+        name: Vec<String>,
+    },
     /// End sessions: quit their agents, as the phone's End does (history is kept)
     End {
         /// Session ids (the ID column of `styr status`).
@@ -312,6 +319,22 @@ fn main() -> Result<()> {
             if !setup::doctor(live)? {
                 std::process::exit(1);
             }
+        }
+        Cmd::Rename { id, name } => {
+            let session = resolve_session(&id)?;
+            let name = name.join(" ");
+            call(Request::RenameSession {
+                session,
+                name: name.clone(),
+            })?;
+            println!(
+                "{}",
+                if name.is_empty() {
+                    "name cleared".to_owned()
+                } else {
+                    format!("named \"{name}\"")
+                }
+            );
         }
         Cmd::End { ids } => {
             let mut targets = Vec::new();

@@ -311,6 +311,15 @@ class DaemonConnection(context: Context) {
         send(ClientMsg.endSession(session))
     }
 
+    /** Name a session (blank: its own name again); its cmux tab on the Mac takes it too. */
+    fun rename(session: String, name: String) {
+        if (state != State.Connected) return
+        val clean = name.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
+        val i = sessions.indexOfFirst { it.id == session }
+        if (i >= 0) sessions[i] = sessions[i].copy(name = clean.ifEmpty { null })
+        send(ClientMsg.rename(session, clean))
+    }
+
     /** Switch the permission mode. The Mac presses Shift+Tab until the footer shows it; if
      *  the session's mode hasn't followed after a few seconds, say so. */
     fun setMode(session: String, mode: PermissionMode) {

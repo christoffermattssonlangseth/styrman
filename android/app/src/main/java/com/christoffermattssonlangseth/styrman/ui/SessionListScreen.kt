@@ -125,7 +125,7 @@ private fun SwipeRow(connection: DaemonConnection, s: SessionSummary, onOpen: (S
             AgentAvatar(s.agent)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(s.repoName, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(s.name ?: s.repoName, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 val subtitle = listOfNotNull(s.agent.displayName, s.title?.takeIf { it.isNotBlank() }).joinToString(" · ")
                 Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)

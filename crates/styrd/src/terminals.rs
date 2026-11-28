@@ -36,6 +36,8 @@ pub enum TerminalAction {
     Mode(String),
     /// Quit the agent.
     End,
+    /// Title the terminal's tab.
+    Title(String),
     /// Stop the current turn (Esc).
     Interrupt,
     /// Send the screen for a while (a phone is watching).
@@ -90,6 +92,8 @@ struct Inner {
     selects: HashMap<String, usize>,
     /// Mode changes not yet handed to the wrapper, per launch.
     mode_sets: HashMap<String, String>,
+    /// Tab titles not yet handed to the wrapper, per launch.
+    titles: HashMap<String, String>,
     /// Launches asked to quit, not yet told.
     ends: std::collections::HashSet<String>,
     /// Launches asked to stop their turn, not yet told.
@@ -308,6 +312,8 @@ impl Terminals {
         // A pending menu selection goes out first, then a mode change.
         if g.ends.remove(launch) {
             let _ = tx.send(TerminalAction::End);
+        } else if let Some(t) = g.titles.remove(launch) {
+            let _ = tx.send(TerminalAction::Title(t));
         } else if let Some(r) = g.restarts.remove(launch) {
             let _ = tx.send(TerminalAction::Restart(r));
         } else if g.interrupts.remove(launch) {
@@ -390,6 +396,18 @@ impl Terminals {
             None => {
                 g.mode_sets.insert(launch.to_owned(), mode.to_owned());
             }
+        }
+    }
+
+    /// Ask the wrapper to title its tab.
+    pub fn set_title(&self, launch: &str, title: &str) {
+        let mut g = self.lock();
+        let sent = g
+            .attached
+            .remove(launch)
+            .map(|tx| tx.send(TerminalAction::Title(title.to_owned())));
+        if !matches!(sent, Some(Ok(()))) {
+            g.titles.insert(launch.to_owned(), title.to_owned());
         }
     }
 
@@ -715,6 +733,25 @@ impl Daemon {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A name given while the wrapper is busy waits for its next attach.
+    #[test]
+    fn a_title_waits_for_the_wrapper() {
+        let t = Terminals::default();
+        t.set_title("L", "Mouse figures");
+        let mut rx = t.attach("L");
+        assert_eq!(
+            rx.try_recv().ok(),
+            Some(TerminalAction::Title("Mouse figures".into()))
+        );
+        // Attached and waiting: it goes straight out.
+        let mut rx = t.attach("L");
+        t.set_title("L", "");
+        assert_eq!(
+            rx.try_recv().ok(),
+            Some(TerminalAction::Title(String::new()))
+        );
+    }
 
     fn p(t: &str) -> QueuedPrompt {
         QueuedPrompt {

@@ -84,6 +84,8 @@ data class SessionSummary(
     val outdated: Boolean = false,
     /** The session this one was started to help (`styr ask`), if any. */
     val helperOf: String? = null,
+    /** The name you gave it (Rename), shown in place of its repo. */
+    val name: String? = null,
 ) {
     /** Quit the agent from the phone: needs the wrapper. */
     val canEnd get() = inTerminalWrapper && status != SessionStatus.Done
@@ -116,6 +118,7 @@ data class SessionSummary(
             mode = o.str("mode"),
             outdated = o.bool("outdated") ?: false,
             helperOf = o.str("helper_of"),
+            name = o.str("name")?.takeIf { it.isNotBlank() },
         )
     }
 }
@@ -420,6 +423,7 @@ object ClientMsg {
     fun stopSharing(session: String) = command(session, "set_sharing") { put("shared", false) }
     fun interrupt(session: String) = command(session, "interrupt")
     fun endSession(session: String) = command(session, "end_session")
+    fun rename(session: String, name: String) = command(session, "rename") { put("name", name) }
     fun setMode(session: String, mode: String) = command(session, "set_mode") { put("mode", mode) }
     fun getChanges(session: String) = buildJsonObject { put("type", "get_changes"); put("session", session) }
     fun watchScreen(session: String) = buildJsonObject { put("type", "watch_screen"); put("session", session) }

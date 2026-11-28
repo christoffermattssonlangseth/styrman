@@ -12,6 +12,7 @@ struct SessionListView: View {
     /// Sessions whose older helpers are unfolded.
     @State private var openHelpers: Set<String> = []
     @State private var ending: SessionSummary?
+    @State private var renaming: SessionSummary?
 
     private var needsYou: [SessionSummary] { connection.sessions.filter { $0.status.needsUser } }
     private var working: [SessionSummary] { connection.sessions.filter { $0.status == .working || $0.status == .error } }
@@ -31,6 +32,7 @@ struct SessionListView: View {
                 } message: {
                     Text(connection.lastError ?? "")
                 }
+                .renameSession($renaming)
                 .navigationTitle("Styrman")
                 .toolbar { toolbar }
                 .navigationDestination(for: String.self) { id in SessionDetailView(sessionId: id) }
@@ -255,7 +257,11 @@ struct SessionListView: View {
                 Button("End") { ending = s }.tint(.orange)
             }
         }
+        .swipeActions(edge: .leading) {
+            Button("Rename") { renaming = s }.tint(.blue)
+        }
         .contextMenu {
+            Button { renaming = s } label: { Label("Rename…", systemImage: "pencil") }
             if s.canEnd {
                 Button(role: .destructive) { ending = s } label: {
                     Label("End session", systemImage: "stop.circle")
@@ -491,7 +497,7 @@ struct SessionCard: View {
     /// What it's about: its title (first message), else what it last did (a
     /// helper's title is only the ask's envelope), else its repo.
     private var label: String {
-        Self.topic(session.title) ?? Self.topic(session.activity) ?? session.repoName
+        session.name ?? Self.topic(session.title) ?? Self.topic(session.activity) ?? session.repoName
     }
 
     /// What it's about, as shown: plain, so bold in one title doesn't stand out.
@@ -802,5 +808,34 @@ enum EndSessionText {
     static func message(_ s: SessionSummary?) -> String {
         let agent = s?.agent.displayName ?? "The agent"
         return "\(agent) quits on your Mac, as if you pressed Ctrl+C in its terminal. If it was started from this phone, its cmux tab closes too."
+    }
+}
+/// "Rename…": an alert with the session's name to edit. Empty gives it its own
+/// title back. The name shows on every phone and on its cmux tab.
+struct RenameSession: ViewModifier {
+    @Environment(DaemonConnection.self) private var connection
+    @Binding var session: SessionSummary?
+    @State private var text = ""
+
+    func body(content: Content) -> some View {
+        content.alert("Rename session", isPresented: Binding(get: { session != nil }, set: { if !$0 { session = nil } }),
+                      presenting: session) { s in
+            TextField(SessionCard.topic(s.title) ?? s.repoName, text: $text)
+                .textInputAutocapitalization(.sentences)
+            Button("Save") { connection.rename(s.id, to: text) }
+            if s.name != nil {
+                Button("Clear name", role: .destructive) { connection.rename(s.id, to: "") }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("Shown here and on its tab on the Mac.")
+        }
+        .onChange(of: session?.id) { _, _ in text = session?.name ?? "" }
+    }
+}
+
+extension View {
+    func renameSession(_ session: Binding<SessionSummary?>) -> some View {
+        modifier(RenameSession(session: session))
     }
 }

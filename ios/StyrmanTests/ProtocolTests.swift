@@ -94,6 +94,19 @@ private func event(_ seq: UInt64, _ kind: String) -> String {
         #expect(obj["since_seq"] as? Int == 4)
     }
 
+    /// Rust: ClientMsg::Command { session, command: Command::Rename { name } }
+    @Test func renameEncodesAsRustReadsIt() throws {
+        let data = try JSONEncoder().encode(ClientMsg.rename(session: "S", name: "Mouse figures"))
+        let obj = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        #expect(obj["type"] as? String == "command")
+        let cmd = obj["command"] as! [String: Any]
+        #expect(cmd["type"] as? String == "rename")
+        #expect(cmd["name"] as? String == "Mouse figures")
+        let json = #"{"id":"S","agent":"codex","native_id":"n","shared":true,"status":"waiting","created_ms":0,"updated_ms":0,"last_seq":0,"name":"Mouse figures"}"#
+        let s = try JSONDecoder().decode(SessionSummary.self, from: Data(json.utf8))
+        #expect(s.name == "Mouse figures")
+    }
+
     @Test func notificationSettingsEncodeAsRustReadsThem() throws {
         // Rust: ClientMsg::SetNotifications { on, finished }
         let data = try JSONEncoder().encode(ClientMsg.setNotifications(on: true, finished: false))

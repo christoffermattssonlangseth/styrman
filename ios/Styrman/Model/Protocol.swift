@@ -114,6 +114,8 @@ struct SessionSummary: Codable, Identifiable, Hashable, Sendable {
     var effort: String? = nil
     /// The session that started this one to ask it something: this is its helper.
     var helperOf: String? = nil
+    /// The name you gave it (Rename), shown in place of its title.
+    var name: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, agent, cwd, title, model, shared, status
@@ -121,6 +123,7 @@ struct SessionSummary: Codable, Identifiable, Hashable, Sendable {
         case inTerminalWrapper = "in_terminal_wrapper", acceptsPrompts = "accepts_prompts"
         case activity, mode, outdated, effort
         case helperOf = "helper_of"
+        case name
     }
 
     init(from decoder: Decoder) throws {
@@ -144,6 +147,7 @@ struct SessionSummary: Codable, Identifiable, Hashable, Sendable {
         outdated = (try? c.decodeIfPresent(Bool.self, forKey: .outdated)) ?? false
         effort = (try? c.decodeIfPresent(String.self, forKey: .effort)) ?? nil
         helperOf = (try? c.decodeIfPresent(String.self, forKey: .helperOf)) ?? nil
+        name = ((try? c.decodeIfPresent(String.self, forKey: .name)) ?? nil).flatMap { $0.isEmpty ? nil : $0 }
     }
 
     /// Can be ended from the phone: running in `styr <agent>` (or already over).
@@ -497,6 +501,7 @@ enum ClientMsg: Encodable, Sendable {
     case registerActivityToken(kind: String, token: String?)
     case setMode(session: String, mode: String)
     case endSession(session: String)
+    case rename(session: String, name: String)
     case interrupt(session: String)
     case watchScreen(session: String)
     case getChanges(session: String)
@@ -543,6 +548,11 @@ enum ClientMsg: Encodable, Sendable {
             try c.encode("command", forKey: .type); try c.encode(s, forKey: .session)
             var cmd = c.nestedContainer(keyedBy: K.self, forKey: .command)
             try cmd.encode("end_session", forKey: .type)
+        case .rename(let s, let name):
+            try c.encode("command", forKey: .type); try c.encode(s, forKey: .session)
+            var cmd = c.nestedContainer(keyedBy: K.self, forKey: .command)
+            try cmd.encode("rename", forKey: .type)
+            try cmd.encode(name, forKey: .name)
         case .getModels(let s):
             try c.encode("get_models", forKey: .type); try c.encode(s, forKey: .session)
         case .setModel(let s, let model, let effort):

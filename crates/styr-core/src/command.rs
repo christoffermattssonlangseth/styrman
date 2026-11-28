@@ -28,6 +28,11 @@ pub enum Command {
     /// Quit the agent (as Ctrl+C would in its terminal) and close the cmux tab if
     /// the phone opened it. Only for sessions running in `styr <agent>`.
     EndSession,
+    /// Name the session (empty: back to its own title). Shown on every phone, and
+    /// as its cmux tab's title when it runs in `styr <agent>` there.
+    Rename {
+        name: String,
+    },
     /// Restart the agent in its terminal with another model and/or effort, resuming
     /// the same conversation (choices from `ClientMsg::GetModels`). Only while idle,
     /// in `styr <agent>`.

@@ -1699,6 +1699,7 @@ fn inject_loop(
                 END_REQUESTED.store(true, Ordering::Relaxed);
                 end_agent(w, done);
             }
+            Ok(Response::SetTitle { title }) => crate::launch::title_tab(&title),
             Ok(Response::Restart {
                 resume,
                 model,
@@ -1966,7 +1967,10 @@ mod tests {
         assert_eq!(claude_preview(&screen), None);
         // A long reply scrolled off keeps its preview.
         let screen = format!("  the middle of a long reply that\n  goes on here.\n\n{box_}");
-        assert_eq!(claude_preview(&screen).as_deref(), Some("…the middle of a long reply that goes on here."));
+        assert_eq!(
+            claude_preview(&screen).as_deref(),
+            Some("…the middle of a long reply that goes on here.")
+        );
     }
 
     #[test]

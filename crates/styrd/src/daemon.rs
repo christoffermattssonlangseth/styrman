@@ -520,6 +520,7 @@ impl Daemon {
             activity,
             mode: None,
             helper_of: None,
+            name: None,
             effort: None,
             outdated: false,
         }
@@ -541,11 +542,12 @@ impl Daemon {
             s.effort = effort;
         }
         s.helper_of = self.helper_of(&s.id);
+        s.name = self.name_of(&s.id);
         s.outdated = s.in_terminal_wrapper
             && self
                 .terminals
                 .launch_of(&s.id)
-                .is_some_and(|l| self.terminals.level_of(&l) < styr_core::ipc::WRAPPER_LEVEL);
+                .is_some_and(|l| self.terminals.level_of(&l) < styr_core::ipc::WRAPPER_LEVEL_FULL);
         // Claude can also take prompts through its background Stop hook.
         s.accepts_prompts = s.in_terminal_wrapper || s.agent == AgentKind::Claude;
         s
@@ -903,6 +905,40 @@ impl Daemon {
             .context("To change its mode from here, start it with `styr claude`.")?;
         self.terminals.set_mode(&launch, mode);
         tracing::info!(%session, mode, "mode change from the phone");
+        Ok(())
+    }
+
+    /// The name the user gave a session, if any.
+    pub fn name_of(&self, session: &SessionId) -> Option<String> {
+        self.lock()
+            .store
+            .meta(&format!("name.{session}"))
+            .ok()
+            .flatten()
+            .filter(|n| !n.is_empty())
+    }
+
+    /// Name a session (empty: its own title again). Phones show the name; its cmux
+    /// tab takes it too when it runs in a `styr` new enough to title tabs.
+    pub fn rename(&self, session: &SessionId, name: &str) -> Result<()> {
+        let name: String = name.split_whitespace().collect::<Vec<_>>().join(" ");
+        anyhow::ensure!(
+            name.chars().count() <= 80,
+            "a name can be 80 characters at most"
+        );
+        self.summary(session)?.context("unknown session")?;
+        self.lock()
+            .store
+            .set_meta(&format!("name.{session}"), &name)?;
+        if let Some(launch) = self
+            .terminals
+            .launch_of(session)
+            .filter(|l| self.terminals.is_live(session) && self.terminals.level_of(l) >= 3)
+        {
+            self.terminals.set_title(&launch, &name);
+        }
+        let _ = self.bus.send(BusMsg::SessionChanged(session.clone()));
+        tracing::info!(%session, "renamed");
         Ok(())
     }
 
@@ -1461,6 +1497,9 @@ impl Daemon {
                         Ok(Response::SetMode { mode })
                     }
                     Some(crate::terminals::TerminalAction::End) => Ok(Response::EndSession),
+                    Some(crate::terminals::TerminalAction::Title(title)) => {
+                        Ok(Response::SetTitle { title })
+                    }
                     Some(crate::terminals::TerminalAction::Interrupt) => Ok(Response::Interrupt),
                     Some(crate::terminals::TerminalAction::Restart(r)) => Ok(Response::Restart {
                         resume: r.resume,
@@ -1531,6 +1570,9 @@ impl Daemon {
                 .iter()
                 .try_for_each(|id| self.forget_session(id).map(|_| ()))
                 .map(|()| Response::Ok),
+            Request::RenameSession { session, name } => {
+                self.rename(&session, &name).map(|()| Response::Ok)
+            }
             Request::EndSessions { ids } => ids
                 .iter()
                 .try_for_each(|id| self.end_session(id))

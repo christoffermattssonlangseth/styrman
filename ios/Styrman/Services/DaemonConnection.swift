@@ -475,6 +475,16 @@ final class DaemonConnection {
         send(.endSession(session: session))
     }
 
+    /// Name a session (empty: its own title again); its cmux tab takes it too.
+    func rename(_ session: String, to name: String) {
+        guard state == .connected else { return }
+        let name = name.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        if let i = sessions.firstIndex(where: { $0.id == session }) {
+            sessions[i].name = name.isEmpty ? nil : name
+        }
+        send(.rename(session: session, name: name))
+    }
+
     func stopSharing(_ session: String) {
         guard state == .connected else { return }
         sessions.removeAll { $0.id == session }

@@ -43,6 +43,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Close
@@ -162,6 +163,7 @@ fun SessionScreen(connection: DaemonConnection, speaker: Speaker, sessionId: Str
     }
     var menu by remember { mutableStateOf(false) }
     var confirmEnd by remember { mutableStateOf(false) }
+    var renaming by remember { mutableStateOf(false) }
     var pickMode by remember { mutableStateOf(false) }
     var showChanges by remember { mutableStateOf(false) }
     var showTerminal by remember { mutableStateOf(false) }
@@ -180,7 +182,7 @@ fun SessionScreen(connection: DaemonConnection, speaker: Speaker, sessionId: Str
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (summary != null) { AgentAvatar(summary.agent, 26.dp); Spacer(Modifier.width(8.dp)) }
                         Column {
-                            Text(summary?.repoName ?: "Session", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(summary?.let { it.name ?: it.repoName } ?: "Session", maxLines = 1, overflow = TextOverflow.Ellipsis)
                             // Manual is the usual mode; only the others are worth the room.
                             summary?.permissionMode?.takeIf { it != PermissionMode.Manual }?.let { m ->
                                 Text(
@@ -213,6 +215,7 @@ fun SessionScreen(connection: DaemonConnection, speaker: Speaker, sessionId: Str
                                 onChanges = { showChanges = true },
                                 onTerminal = { showTerminal = true },
                                 onEnd = { confirmEnd = true },
+                                onRename = { renaming = true },
                                 onStopSharing = { connection.stopSharing(sessionId); onBack() },
                             )
                         }
@@ -275,6 +278,9 @@ fun SessionScreen(connection: DaemonConnection, speaker: Speaker, sessionId: Str
                 Notice("Nothing yet. Prompts, tool calls and replies show up here as they happen.")
             }
         }
+    }
+    if (renaming && summary != null) RenameDialog(summary, onDismiss = { renaming = false }) {
+        connection.rename(sessionId, it); renaming = false
     }
     if (confirmEnd) AlertDialog(
         onDismissRequest = { confirmEnd = false },
@@ -588,6 +594,7 @@ private fun SessionMenu(
     onTerminal: () -> Unit,
     onEnd: () -> Unit,
     onStopSharing: () -> Unit,
+    onRename: () -> Unit,
 ) {
     fun pick(action: () -> Unit) = { onDismiss(); action() }
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
@@ -599,6 +606,9 @@ private fun SessionMenu(
                 onClick = pick(onMode),
             )
         }
+        DropdownMenuItem(
+            text = { Text("Rename…") }, leadingIcon = { Icon(Icons.Filled.Edit, null) }, onClick = pick(onRename),
+        )
         if (s.cwd != null) DropdownMenuItem(
             text = { Text("Changes") }, leadingIcon = { Icon(Icons.Filled.Difference, null) }, onClick = pick(onChanges),
         )
@@ -632,6 +642,25 @@ private fun SessionMenu(
             onClick = pick(onStopSharing),
         )
     }
+}
+
+/** "Rename…": the session's name, shown here and on its cmux tab. Blank: its own name again. */
+@Composable
+private fun RenameDialog(s: SessionSummary, onDismiss: () -> Unit, save: (String) -> Unit) {
+    var text by remember { mutableStateOf(s.name ?: "") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rename session") },
+        text = {
+            androidx.compose.material3.OutlinedTextField(
+                value = text, onValueChange = { text = it }, singleLine = true,
+                placeholder = { Text(s.repoName) },
+                supportingText = { Text("Shown here and on its tab on the Mac.") },
+            )
+        },
+        confirmButton = { TextButton(onClick = { save(text) }) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 /** Claude's permission modes, as Shift+Tab cycles them in its terminal. */

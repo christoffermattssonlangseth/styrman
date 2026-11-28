@@ -355,7 +355,9 @@ impl Daemon {
         }
         // Not remembered (styrd restarted since): its newest helper of this agent
         // in this folder, from the history, rather than a new one every time.
-        if let Some(s) = newest_helper(&peers, agent, &cwd, |id| self.helper_of(id).as_ref() == Some(&f.id)) {
+        if let Some(s) = newest_helper(&peers, agent, &cwd, |id| {
+            self.helper_of(id).as_ref() == Some(&f.id)
+        }) {
             self.peer_state
                 .helpers
                 .lock()
@@ -470,7 +472,10 @@ mod tests {
         ];
         let mine = |id: &SessionId| id.as_str() != "not-mine";
         let got = newest_helper(&peers, AgentKind::Codex, std::path::Path::new("/r"), mine);
-        assert_eq!(got.map(|s| s.id.as_str().to_owned()).as_deref(), Some("new"));
+        assert_eq!(
+            got.map(|s| s.id.as_str().to_owned()).as_deref(),
+            Some("new")
+        );
         let none = newest_helper(&peers, AgentKind::Claude, std::path::Path::new("/x"), mine);
         assert!(none.is_none());
     }

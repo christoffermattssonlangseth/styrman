@@ -13,6 +13,7 @@ struct SessionDetailView: View {
     @State private var showTerminal = false
     @State private var showChanges = false
     @State private var showModel = false
+    @State private var renaming: SessionSummary?
     /// Scrolled to (near) the end: new text is followed. Scrolled up to read, the
     /// conversation stays where you are while the reply is written.
     @State private var atBottom = true
@@ -57,7 +58,8 @@ struct SessionDetailView: View {
         let summary = connection.session(sessionId)
         let agent = summary?.agent ?? .unknown
         conversation(timeline, summary: summary, agent: agent)
-        .navigationTitle(summary?.repoName ?? "Session")
+        .navigationTitle(summary.map { $0.name ?? $0.repoName } ?? "Session")
+        .renameSession($renaming)
         .navigationBarTitleDisplayMode(.inline)
         // The bar takes the agent's colour, so it's always clear who you're talking to.
         .toolbarBackground(Theme.color(for: agent).opacity(0.07), for: .navigationBar)
@@ -276,8 +278,12 @@ struct SessionDetailView: View {
                 HStack(spacing: 8) {
                     AgentAvatar(agent: summary.agent, size: 28)
                     VStack(alignment: .leading, spacing: 0) {
-                        Text(summary.repoName).font(.headline).lineLimit(1)
+                        Text(summary.name ?? summary.repoName).font(.headline).lineLimit(1)
                         HStack(spacing: 4) {
+                            if summary.name != nil {
+                                Text(summary.repoName).foregroundStyle(.secondary).lineLimit(1)
+                                Text("·").foregroundStyle(.tertiary)
+                            }
                             Text(summary.agent.displayName).foregroundStyle(Theme.color(for: summary.agent))
                             Text("·").foregroundStyle(.tertiary)
                             Text(Theme.label(for: summary.status))
@@ -325,6 +331,7 @@ struct SessionDetailView: View {
                             Label("Model: \(ModelText.current(summary, in: connection.models[sessionId] ?? []))", systemImage: "cpu")
                         }
                     }
+                    Button { renaming = summary } label: { Label("Rename…", systemImage: "pencil") }
                     Toggle(isOn: Binding(get: { speaker.autoRead }, set: { on in
                         speaker.autoRead = on
                         if !on { speaker.stop() }
