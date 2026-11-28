@@ -75,6 +75,12 @@ enum Cmd {
         #[arg(long)]
         off: bool,
     },
+    /// End sessions: quit their agents, as the phone's End does (history is kept)
+    End {
+        /// Session ids (the ID column of `styr status`).
+        #[arg(required = true)]
+        ids: Vec<String>,
+    },
     /// Delete sessions and their history (from this Mac and every phone).
     Forget {
         /// Session ids (the ID column of `styr status --all`).
@@ -306,6 +312,15 @@ fn main() -> Result<()> {
             if !setup::doctor(live)? {
                 std::process::exit(1);
             }
+        }
+        Cmd::End { ids } => {
+            let mut targets = Vec::new();
+            for id in &ids {
+                targets.push(resolve_session(id)?);
+            }
+            let n = targets.len();
+            call(Request::EndSessions { ids: targets })?;
+            println!("ended {n} session{}", if n == 1 { "" } else { "s" });
         }
         Cmd::Forget { ids, ended } => {
             let mut targets = Vec::new();

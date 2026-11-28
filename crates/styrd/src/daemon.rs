@@ -1531,6 +1531,10 @@ impl Daemon {
                 .iter()
                 .try_for_each(|id| self.forget_session(id).map(|_| ()))
                 .map(|()| Response::Ok),
+            Request::EndSessions { ids } => ids
+                .iter()
+                .try_for_each(|id| self.end_session(id))
+                .map(|()| Response::Ok),
             Request::ListDevices => self.devices().map(|devices| Response::Devices { devices }),
             Request::RevokeDevice { id } => {
                 let revoked = self.lock().store.revoke_device(&id);

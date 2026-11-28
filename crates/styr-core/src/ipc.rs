@@ -117,6 +117,10 @@ pub enum Request {
     ForgetSessions {
         ids: Vec<SessionId>,
     },
+    /// Quit these sessions' agents, as the phone's End does.
+    EndSessions {
+        ids: Vec<SessionId>,
+    },
     /// Queue a prompt for a shared session, as if sent from a phone (CLI, tests).
     SendPrompt {
         session: SessionId,
