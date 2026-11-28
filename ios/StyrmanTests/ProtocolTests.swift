@@ -553,9 +553,9 @@ struct SessionRowTests {
 
 @MainActor
 struct SessionLineTests {
-    private func s(_ id: String, helping: String? = nil, updated: Int64 = 0) -> SessionSummary {
+    private func s(_ id: String, helping: String? = nil, updated: Int64 = 0, status: String = "waiting") -> SessionSummary {
         let h = helping.map { #","helper_of":"\#($0)""# } ?? ""
-        let json = #"{"id":"\#(id)","agent":"codex","native_id":"\#(id)","cwd":"/r","shared":true,"status":"waiting","created_ms":0,"updated_ms":\#(updated),"last_seq":0\#(h)}"#
+        let json = #"{"id":"\#(id)","agent":"codex","native_id":"\#(id)","cwd":"/r","shared":true,"status":"\#(status)","created_ms":0,"updated_ms":\#(updated),"last_seq":0\#(h)}"#
         return try! JSONDecoder().decode(SessionSummary.self, from: Data(json.utf8))
     }
 
@@ -574,6 +574,17 @@ struct SessionLineTests {
 
     @Test func titlesArePlain() {
         #expect(SessionCard.plain("**NOT YET.** Two `issues`") == "NOT YET. Two issues")
+    }
+
+    /// A helper that answered goes with the agent that asked it, not "Needs attention";
+    /// one asking for an approval still needs you.
+    @Test func aRestingHelperGoesWithItsAgent() {
+        let parent = s("P", status: "working")
+        let all = [parent, s("h", helping: "P"), s("a", helping: "P", status: "needs_approval"), s("o", helping: "gone")]
+        #expect(SessionSection.of(all[1], in: all) == .working)
+        #expect(SessionSection.of(all[2], in: all) == .needsYou)
+        #expect(SessionSection.of(all[3], in: all) == .done)
+        #expect(SessionSection.of(s("me"), in: all) == .needsYou, "your own waiting session")
     }
 
     /// A helper's helper, and two sessions that asked each other, still show.

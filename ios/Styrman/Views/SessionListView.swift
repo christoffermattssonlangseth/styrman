@@ -14,9 +14,9 @@ struct SessionListView: View {
     @State private var ending: SessionSummary?
     @State private var renaming: SessionSummary?
 
-    private var needsYou: [SessionSummary] { connection.sessions.filter { $0.status.needsUser } }
-    private var working: [SessionSummary] { connection.sessions.filter { $0.status == .working || $0.status == .error } }
-    private var done: [SessionSummary] { connection.sessions.filter { $0.status == .done || $0.status == .unknown } }
+    private var needsYou: [SessionSummary] { connection.sessions.filter { SessionSection.of($0, in: connection.sessions) == .needsYou } }
+    private var working: [SessionSummary] { connection.sessions.filter { SessionSection.of($0, in: connection.sessions) == .working } }
+    private var done: [SessionSummary] { connection.sessions.filter { SessionSection.of($0, in: connection.sessions) == .done } }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -450,6 +450,30 @@ enum SessionLine: Identifiable, Equatable {
     }
 }
 
+/// Where a session is listed. A helper that has answered waits for the agent that
+/// asked it, not for you: it goes with that agent (under it), or with Done if it's
+/// gone. An approval a helper needs is still yours.
+enum SessionSection: Equatable {
+    case needsYou, working, done
+
+    static func of(_ s: SessionSummary, in all: [SessionSummary], depth: Int = 0) -> SessionSection {
+        if s.isResting {
+            guard depth < 4, let parent = all.first(where: { $0.id == s.helperOf }) else { return .done }
+            return of(parent, in: all, depth: depth + 1)
+        }
+        switch s.status {
+        case .needsApproval, .waiting: return .needsYou
+        case .working, .error: return .working
+        case .done, .unknown: return .done
+        }
+    }
+}
+
+extension SessionSummary {
+    /// A helper that answered and waits for its agent, not for you.
+    var isResting: Bool { helperOf != nil && status == .waiting }
+}
+
 /// A row greys a little under your finger.
 private struct RowPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
@@ -531,9 +555,13 @@ struct SessionCard: View {
         case .done, .unknown:
             time
         default:
-            HStack(spacing: 5) {
-                Circle().fill(dot).frame(width: 6, height: 6)
+            if session.isResting {
                 time
+            } else {
+                HStack(spacing: 5) {
+                    Circle().fill(dot).frame(width: 6, height: 6)
+                    time
+                }
             }
         }
     }

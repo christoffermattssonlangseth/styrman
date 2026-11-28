@@ -59,7 +59,8 @@ final class LiveActivities {
 
     static func state(of sessions: [SessionSummary]) -> LiveState {
         let live = sessions
-            .filter { $0.shared && $0.status != .done && $0.status != .unknown }
+            // A helper that answered waits for its agent, not you (as the Mac counts).
+            .filter { $0.shared && $0.status != .done && $0.status != .unknown && !$0.isResting }
             .sorted { a, b in
                 a.status.needsUser != b.status.needsUser ? a.status.needsUser : a.updatedMs > b.updatedMs
             }

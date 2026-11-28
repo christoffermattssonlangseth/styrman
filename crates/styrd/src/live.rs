@@ -68,6 +68,9 @@ impl LiveState {
             .iter()
             .filter(|s| s.shared && s.status != SessionStatus::Done)
             .collect();
+        // A helper that has answered waits for the agent that asked it, not you
+        // (an approval it needs is still yours).
+        live.retain(|s| !(s.helper_of.is_some() && s.status == SessionStatus::Waiting));
         // Waiting for you first, then working; newest first within each.
         live.sort_by_key(|s| (!s.status.needs_user(), std::cmp::Reverse(s.updated_ms)));
         let needs = live.iter().filter(|s| s.status.needs_user()).count() as u32;
@@ -290,5 +293,24 @@ mod tests {
             true,
         );
         assert_eq!(st.rows[0].line.as_deref(), Some("rm -rf secret"));
+    }
+
+    #[test]
+    fn a_helper_that_answered_doesnt_need_you() {
+        use styr_core::ids::AgentKind::*;
+        let mut done = s(Codex, "lighthouse", SessionStatus::Waiting, 2);
+        done.helper_of = Some("asker".into());
+        let mut asking = s(Codex, "beacon", SessionStatus::NeedsApproval, 3);
+        asking.helper_of = Some("asker".into());
+        let st = LiveState::of(
+            &[s(Claude, "harbor", SessionStatus::Working, 1), done, asking],
+            false,
+        );
+        assert_eq!(
+            (st.working, st.needs),
+            (1, 1),
+            "its approval is still yours"
+        );
+        assert_eq!(st.rows.len(), 2);
     }
 }
