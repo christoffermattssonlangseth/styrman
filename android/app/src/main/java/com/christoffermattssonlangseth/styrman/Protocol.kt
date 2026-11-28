@@ -82,6 +82,8 @@ data class SessionSummary(
     val mode: String? = null,
     /** Its wrapper predates a Styrman update and lacks stop / terminal. */
     val outdated: Boolean = false,
+    /** The session this one was started to help (`styr ask`), if any. */
+    val helperOf: String? = null,
 ) {
     /** Quit the agent from the phone: needs the wrapper. */
     val canEnd get() = inTerminalWrapper && status != SessionStatus.Done
@@ -113,6 +115,7 @@ data class SessionSummary(
             acceptsPrompts = o.bool("accepts_prompts") ?: true,
             mode = o.str("mode"),
             outdated = o.bool("outdated") ?: false,
+            helperOf = o.str("helper_of"),
         )
     }
 }
@@ -208,6 +211,8 @@ sealed interface EventKind {
     data object TurnEnded : EventKind
     data class Notice(val text: String, val warning: Boolean) : EventKind
     data class Error(val message: String) : EventKind
+    /** A background task (a tool call run with `run_in_background`) finished. */
+    data class TaskEnded(val call: String, val status: String, val summary: String?) : EventKind
     data class Unknown(val type: String) : EventKind
 
     companion object {
@@ -249,6 +254,7 @@ sealed interface EventKind {
             "turn_ended" -> TurnEnded
             "notice" -> Notice(o.str("text") ?: "", o.str("level") == "warning")
             "error" -> Error(o.str("message") ?: "")
+            "task_ended" -> TaskEnded(o.str("call") ?: "", o.str("status") ?: "completed", o.str("summary"))
             else -> Unknown(type ?: "?")
         }
     }

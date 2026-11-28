@@ -55,6 +55,8 @@ class DaemonConnection(context: Context) {
     var lastError: String? by mutableStateOf(null)
     /** A session to open (just started from the phone). */
     var requestedSession: String? by mutableStateOf(null)
+    /** Opened from inside a session (a helper's chip or chat): goes on top, Back returns. */
+    var pushedSession: String? by mutableStateOf(null)
     var folders: FolderListing? by mutableStateOf(null)
         private set
     /** True while connected over the local-network fallback (Tailscale unreachable). */

@@ -43,6 +43,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Mic
@@ -166,6 +168,7 @@ fun SessionScreen(connection: DaemonConnection, speaker: Speaker, sessionId: Str
 
     Scaffold(
         topBar = {
+          Column {
             TopAppBar(
                 // The bar takes the agent's colour, so it's always clear who you're talking to.
                 colors = androidx.compose.material3.TopAppBarDefaults.topAppBarColors(
@@ -216,6 +219,8 @@ fun SessionScreen(connection: DaemonConnection, speaker: Speaker, sessionId: Str
                     }
                 },
             )
+            summary?.let { HelperLinks(it, connection) }
+          }
         },
         bottomBar = {
             Surface(tonalElevation = 3.dp, modifier = Modifier.imePadding().navigationBarsPadding()) {
@@ -243,9 +248,18 @@ fun SessionScreen(connection: DaemonConnection, speaker: Speaker, sessionId: Str
             contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            items(timeline.items, key = { it.id }) { item ->
-                TimelineRow(item, summary?.cwd, agent, speaker, timeline) { request, option ->
-                    connection.resolvePermission(sessionId, request, option)
+            // An answered ask shows with its reply, where the reply came.
+            val exchanges = PeerNote.exchanges(timeline.items)
+            val answered = exchanges.map { it.askId }.toSet()
+            val openAsks = PeerNote.openAsks(timeline.items)
+            val rows = DisplayRow.rows(timeline.items.filter { it.id !in answered })
+            items(rows, key = { it.id }) { row ->
+                when (row) {
+                    is DisplayRow.Tools -> StepsRow(row.tools, summary?.cwd)
+                    is DisplayRow.Item -> TimelineRow(
+                        row.item, summary?.cwd, agent, speaker, timeline,
+                        Peers(sessionId, connection, openAsks, exchanges),
+                    ) { request, option -> connection.resolvePermission(sessionId, request, option) }
                 }
             }
             items(timeline.pending, key = { it.id }) { p ->
@@ -256,6 +270,7 @@ fun SessionScreen(connection: DaemonConnection, speaker: Speaker, sessionId: Str
             if (summary?.status == SessionStatus.Working && (status != null || preview == null)) item(key = "status") {
                 StatusRow(status, timeline.statusAtMs, timeline.thinkingSinceMs, agent)
             }
+            if (timeline.runningTasks.isNotEmpty()) item(key = "tasks") { RunningTasksLink(timeline, summary?.cwd) }
             if (timeline.isLive && !timeline.hasContent && timeline.pending.isEmpty()) item {
                 Notice("Nothing yet. Prompts, tool calls and replies show up here as they happen.")
             }
@@ -288,6 +303,9 @@ fun SessionScreen(connection: DaemonConnection, speaker: Speaker, sessionId: Str
     }
 }
 
+/** What a row needs to show agents talking to each other. */
+private class Peers(val sessionId: String, val connection: DaemonConnection, val openAsks: Set<String>, val exchanges: List<PeerExchange>)
+
 @Composable
 private fun TimelineRow(
     item: TimelineItem,
@@ -295,6 +313,7 @@ private fun TimelineRow(
     agent: AgentKind,
     speaker: Speaker,
     timeline: SessionTimeline,
+    peers: Peers,
     answer: (String, String) -> Boolean,
 ) {
     when (item) {
@@ -312,7 +331,7 @@ private fun TimelineRow(
             }
         }
         is TimelineItem.Assistant -> Reply(item, agent, speaker)
-        is TimelineItem.Tool -> ToolRow(item, displayTitle(item.tool, cwd), cwd)
+        is TimelineItem.Tool -> StepsRow(listOf(item), cwd)
         is TimelineItem.Permission -> PermissionCard(item, displayTitle(item.tool, cwd), timeline.diffs(item), cwd, answer)
         is TimelineItem.Plan -> Column(
             Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(12.dp)).padding(12.dp),
@@ -327,10 +346,24 @@ private fun TimelineRow(
                 )
             }
         }
-        is TimelineItem.Notice -> Text(
-            item.text, style = MaterialTheme.typography.bodySmall,
-            color = if (item.warning) Color(0xFFF29A2E) else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        is TimelineItem.Notice -> {
+            val exchange = peers.exchanges.firstOrNull { it.id == item.id }
+            val note = if (exchange == null) PeerNote.parse(item.text) else null
+            when {
+                exchange != null -> ExchangeCard(exchange, agent, peers.sessionId, peers.exchanges, peers.connection)
+                note != null -> PeerCard(note, agent, peers.sessionId, item.id in peers.openAsks, peers.connection)
+                // Another agent's reply quoted here is Markdown: bold as bold, not `**`.
+                else -> Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    val tint = if (item.warning) Color(0xFFF29A2E) else MaterialTheme.colorScheme.onSurfaceVariant
+                    Icon(if (item.warning) Icons.Filled.Warning else Icons.Filled.Notifications, null, tint = tint,
+                        modifier = Modifier.size(14.dp).padding(top = 2.dp))
+                    SelectionContainer {
+                        Text(markdown(item.text, MaterialTheme.colorScheme.surfaceContainerHighest),
+                            style = MaterialTheme.typography.bodySmall, color = tint)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -363,56 +396,6 @@ private fun Reply(item: TimelineItem.Assistant, agent: AgentKind, speaker: Speak
             }
         }
     }
-}
-
-@Composable
-private fun ToolRow(item: TimelineItem.Tool, title: String, cwd: String?) {
-    var open by remember { mutableStateOf(false) }
-    val diffs = remember(item.tool) { if (item.tool.kind == ToolKind.Edit) FileDiff.from(item.tool) else null }
-    Row(
-        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(8.dp))
-            .clickable { open = true }.padding(horizontal = 10.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        // Compact: one line, small type. Tap for the full command and output.
-        Icon(toolIcon(item.tool.kind), null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp))
-        Text(title, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
-            fontFamily = if (item.tool.kind == ToolKind.Execute) Mono else null,
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        diffs?.let { DiffCounts(it) }
-        when (item.status) {
-            ToolStatus.Pending, ToolStatus.Running -> CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-            ToolStatus.Completed -> Icon(Icons.Filled.Check, "Done", tint = Color(0xFF34A853), modifier = Modifier.size(16.dp))
-            ToolStatus.Failed -> Icon(Icons.Filled.Close, "Failed", tint = Color(0xFFD93025), modifier = Modifier.size(16.dp))
-        }
-    }
-    if (open) AlertDialog(
-        onDismissRequest = { open = false },
-        confirmButton = { TextButton(onClick = { open = false }) { Text("Done") } },
-        title = { Text(item.tool.name) },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                SelectionContainer { Text(title, fontFamily = Mono) }
-                diffs?.let {
-                    Spacer(Modifier.size(12.dp))
-                    Text("Changes", fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.size(6.dp))
-                    DiffPreview(it, cwd)
-                }
-                Spacer(Modifier.size(12.dp))
-                Text("Output", fontWeight = FontWeight.SemiBold)
-                SelectionContainer {
-                    Text(
-                        item.output?.ifEmpty { "(no output)" }
-                            ?: if (item.status == ToolStatus.Completed || item.status == ToolStatus.Failed) "(no output)" else "Still running…",
-                        fontFamily = Mono, style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    )
-                }
-            }
-        },
-    )
 }
 
 @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)

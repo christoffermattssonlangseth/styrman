@@ -28,6 +28,26 @@ sealed interface TimelineItem {
     data class Notice(override val id: String, val text: String, val warning: Boolean) : TimelineItem
 }
 
+/** A shell command or agent the agent left running in the background, from its start
+ *  until Claude Code says it's done. */
+data class AgentTask(
+    /** The tool call. */
+    val id: String,
+    val tool: ToolInfo,
+    val startedMs: Long,
+    val ended: Ended? = null,
+) {
+    /** When and how it ended: "completed", "failed", "killed", "ended", … */
+    data class Ended(val atMs: Long, val status: String, val summary: String?)
+
+    val isAgent get() = tool.name != "Bash"
+    val title: String
+        get() {
+            val o = tool.input as? kotlinx.serialization.json.JsonObject
+            return o?.str("description") ?: o?.str("command") ?: tool.title
+        }
+}
+
 /** A session's timeline, built from its events (same rules as the iOS app). */
 class SessionTimeline(val sessionId: String) {
     val items = mutableStateListOf<TimelineItem>()
@@ -136,6 +156,36 @@ class SessionTimeline(val sessionId: String) {
         if (i >= 0) pending[i] = change(pending[i])
     }
 
+    /** Shell commands and agents left running in the background, oldest first. */
+    val tasks = mutableStateListOf<AgentTask>()
+    val runningTasks get() = tasks.filter { it.ended == null }
+
+    private fun trackTask(e: Event) {
+        when (val k = e.kind) {
+            is EventKind.ToolCall -> {
+                val bg = (k.tool.input as? kotlinx.serialization.json.JsonObject)?.bool("run_in_background") == true
+                if (!bg || k.call.isEmpty() || e.atMs < TASKS_RECORDED_SINCE_MS) return
+                val i = tasks.indexOfFirst { it.id == k.call }
+                val failed = if (k.status == ToolStatus.Failed) AgentTask.Ended(e.atMs, "failed", null) else null
+                if (i >= 0) tasks[i] = tasks[i].copy(tool = k.tool, ended = tasks[i].ended ?: failed)
+                else tasks += AgentTask(k.call, k.tool, e.atMs, failed)
+            }
+            is EventKind.TaskEnded -> {
+                val i = tasks.indexOfFirst { it.id == k.call && it.ended == null }
+                if (i >= 0) tasks[i] = tasks[i].copy(ended = AgentTask.Ended(e.atMs, k.status, k.summary))
+            }
+            is EventKind.SessionEnded -> endAllTasks(e.atMs)
+            // Claude Code's background tasks don't outlive it (they do outlive a
+            // compaction or /clear, which start anew in the same process).
+            is EventKind.SessionStarted -> if (k.start == "new" || k.start == "resume") endAllTasks(e.atMs)
+            else -> {}
+        }
+    }
+
+    private fun endAllTasks(atMs: Long) {
+        for (i in tasks.indices) if (tasks[i].ended == null) tasks[i] = tasks[i].copy(ended = AgentTask.Ended(atMs, "ended", null))
+    }
+
     val hasContent get() = items.any { it !is TimelineItem.Divider }
 
     fun apply(events: List<Event>) {
@@ -146,6 +196,7 @@ class SessionTimeline(val sessionId: String) {
     }
 
     private fun apply(e: Event) {
+        trackTask(e)
         val key = e.seq.toString()
         when (e.kind) {
             is EventKind.AssistantMessage, is EventKind.UserMessage, is EventKind.ToolCall,
@@ -203,11 +254,15 @@ class SessionTimeline(val sessionId: String) {
             }
             is EventKind.Notice -> items += TimelineItem.Notice(key, k.text, k.warning)
             is EventKind.Error -> items += TimelineItem.Notice(key, k.message, true)
-            EventKind.TurnStarted, EventKind.TurnEnded, is EventKind.Unknown -> {}
+            EventKind.TurnStarted, EventKind.TurnEnded, is EventKind.Unknown, is EventKind.TaskEnded -> {}
         }
     }
 
     companion object {
+        /** When the Mac began recording when background tasks end (`task_ended`): tasks
+         *  started earlier have no ending on record and would look running forever. */
+        const val TASKS_RECORDED_SINCE_MS = 1_795_816_657_000L
+
         /** Whether [preview] is a reply already among [items]. The preview is read off
          *  the terminal (a heading as bold, code without backticks) and the message is
          *  Markdown: compare the words, not the markup. */

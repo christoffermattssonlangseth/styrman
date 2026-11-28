@@ -15,14 +15,21 @@ import com.christoffermattssonlangseth.styrman.Speaker
 /** Top-level navigation: pairing, the session list, a session, settings. */
 @Composable
 fun StyrmanApp(connection: DaemonConnection, speaker: Speaker, incomingLink: PairingLink?, consumeLink: () -> Unit) {
-    var open by rememberSaveable { mutableStateOf<String?>(null) }
+    // The open sessions, the top one shown; saved as one string so it survives rotation.
+    var stack by rememberSaveable { mutableStateOf("") }
+    val open = stack.split('\n').lastOrNull { it.isNotEmpty() }
+    fun back() { stack = stack.substringBeforeLast('\n', "") }
     var usage by rememberSaveable { mutableStateOf(false) }
     var settings by remember { mutableStateOf(false) }
     var newSession by remember { mutableStateOf(false) }
 
     // A session started from this phone opens as soon as the Mac answers.
     LaunchedEffect(connection.requestedSession) {
-        connection.requestedSession?.let { open = it; connection.requestedSession = null }
+        connection.requestedSession?.let { stack = it; connection.requestedSession = null }
+    }
+    LaunchedEffect(connection.pushedSession) {
+        connection.pushedSession?.let { if (it != open) stack = if (stack.isEmpty()) it else stack + "\n" + it }
+        connection.pushedSession = null
     }
 
     val paired = connection.credentials != null
@@ -37,12 +44,13 @@ fun StyrmanApp(connection: DaemonConnection, speaker: Speaker, incomingLink: Pai
             SettingsScreen(connection, speaker, onClose = { settings = false })
         }
         open != null -> {
-            BackHandler { open = null }
-            SessionScreen(connection, speaker, open!!, onBack = { open = null })
+            BackHandler { back() }
+            // Keyed: opening a helper from a session starts its screen afresh.
+            androidx.compose.runtime.key(open) { SessionScreen(connection, speaker, open, onBack = { back() }) }
         }
         else -> SessionListScreen(
             connection,
-            onOpen = { open = it },
+            onOpen = { stack = it },
             onUsage = { usage = true },
             onSettings = { settings = true },
             onNewSession = { newSession = true },
