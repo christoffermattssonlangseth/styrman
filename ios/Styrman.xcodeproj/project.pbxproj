@@ -31,6 +31,7 @@
 		819C0C4CF5B8CBADDBF409B9 /* Credentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00AE6AE82221B500B2447089 /* Credentials.swift */; };
 		855997F1E0F2B0131BC537D6 /* LiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56426288A6A544796DA60352 /* LiveActivity.swift */; };
 		86B5E7D5E4FF026347D46EF6 /* Credentials.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00AE6AE82221B500B2447089 /* Credentials.swift */; };
+		8C682A8094F98C11F99D6AB7 /* IconSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5232F7F0256CCBB7A99143F7 /* IconSettings.swift */; };
 		9A2CCECF57DD603D691229D5 /* Protocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72FCEE349C47E9D8119B9F44 /* Protocol.swift */; };
 		9B9388375EFD227C2D3B3ED8 /* Timeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = B220CBE574863299DA11C433 /* Timeline.swift */; };
 		9ED66E21B5E3DA0E70F364E6 /* ModelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0B96ABF8B49C638533AAE57 /* ModelView.swift */; };
@@ -97,6 +98,7 @@
 		3FB003D0B15D348C57FE29EC /* StyrmanNotify.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = StyrmanNotify.entitlements; sourceTree = "<group>"; };
 		45DBF7130A3704CEE2895C33 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		4BF41EF17F772721F413BA82 /* ChangesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChangesView.swift; sourceTree = "<group>"; };
+		5232F7F0256CCBB7A99143F7 /* IconSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IconSettings.swift; sourceTree = "<group>"; };
 		56426288A6A544796DA60352 /* LiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivity.swift; sourceTree = "<group>"; };
 		5E738BBCCAD6BD6F08131886 /* LiveActivities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveActivities.swift; sourceTree = "<group>"; };
 		6D0ACD1C6115207E5344249C /* SessionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionListView.swift; sourceTree = "<group>"; };
@@ -124,7 +126,7 @@
 		D4D877A57441234BC54A95F1 /* StyrmanWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = StyrmanWidgets.entitlements; sourceTree = "<group>"; };
 		E25ACD30D61B8467E406440F /* VoiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceTests.swift; sourceTree = "<group>"; };
 		ECC7E94075932B81BE650100 /* Styrman.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Styrman.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		"TEMP_7EDC33BA-3FEB-4A6A-A042-02F15FB005F3" /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
+		"TEMP_701FC2C4-CC20-4CA1-B8D4-430E25FC9160" /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -231,6 +233,7 @@
 			children = (
 				4BF41EF17F772721F413BA82 /* ChangesView.swift */,
 				CCECD309CC4A5AD3E872D83F /* DiffView.swift */,
+				5232F7F0256CCBB7A99143F7 /* IconSettings.swift */,
 				A0B96ABF8B49C638533AAE57 /* ModelView.swift */,
 				26784D644CF00DF837CCAA4B /* NewSessionView.swift */,
 				2B27AED31838D3975D0DCEFA /* PairingView.swift */,
@@ -262,10 +265,10 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		"TEMP_4A04267C-4BCF-4784-9AAF-971A900C308F" /* ios */ = {
+		"TEMP_3CFA9F99-ED65-4790-A095-80DC932E80E4" /* ios */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_7EDC33BA-3FEB-4A6A-A042-02F15FB005F3" /* Signing.xcconfig */,
+				"TEMP_701FC2C4-CC20-4CA1-B8D4-430E25FC9160" /* Signing.xcconfig */,
 			);
 			path = ios;
 			sourceTree = "<group>";
@@ -436,6 +439,7 @@
 				819C0C4CF5B8CBADDBF409B9 /* Credentials.swift in Sources */,
 				4B398F324DB74E7B8197541E /* DaemonConnection.swift in Sources */,
 				A8E466578293CA7ED3E90314 /* DiffView.swift in Sources */,
+				8C682A8094F98C11F99D6AB7 /* IconSettings.swift in Sources */,
 				2830F59013F4FC426AFE065E /* LiveActivities.swift in Sources */,
 				E30E53A9A11B15D50CA33B40 /* LiveActivity.swift in Sources */,
 				9ED66E21B5E3DA0E70F364E6 /* ModelView.swift in Sources */,
@@ -549,6 +553,7 @@
 		A7AF5E529F1C0AB0246E10F2 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "AppIcon-White AppIcon-Black AppIcon-Grey";
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Styrman/Styrman.entitlements;
@@ -568,7 +573,7 @@
 		};
 		BAA986BF9E9D340762FAAD97 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_7EDC33BA-3FEB-4A6A-A042-02F15FB005F3" /* Signing.xcconfig */;
+			baseConfigurationReference = "TEMP_701FC2C4-CC20-4CA1-B8D4-430E25FC9160" /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
@@ -632,6 +637,7 @@
 		C86B6475E4364AE4AA1FF51C /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES = "AppIcon-White AppIcon-Black AppIcon-Grey";
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = Styrman/Styrman.entitlements;
@@ -667,7 +673,7 @@
 		};
 		ED1BF44AF1A5A2C8867941FD /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_7EDC33BA-3FEB-4A6A-A042-02F15FB005F3" /* Signing.xcconfig */;
+			baseConfigurationReference = "TEMP_701FC2C4-CC20-4CA1-B8D4-430E25FC9160" /* Signing.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;

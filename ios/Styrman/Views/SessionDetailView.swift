@@ -380,12 +380,12 @@ struct SessionDetailView: View {
                 ConnectionPill()
                     .padding(8)
                     .frame(maxWidth: .infinity)
-                    .background(.bar)
+                    .background(Theme.canvas)
             }
             if summary == nil, connection.state == .connected {
                 Text("This session is no longer shared.")
                     .font(.footnote).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity).padding(10).background(.bar)
+                    .frame(maxWidth: .infinity).padding(10).background(Theme.canvas)
             } else if let summary {
                 HelperLinks(summary: summary)
                 if let p = openPermission(timeline) {
@@ -394,7 +394,7 @@ struct SessionDetailView: View {
                         .id(p.request)
                         .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 4)
                         .frame(maxWidth: .infinity)
-                        .background(.bar)
+                        .background(Theme.canvas)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
                 if summary.acceptsPrompts {
@@ -422,7 +422,7 @@ struct SessionDetailView: View {
                     }
                     .font(.footnote).foregroundStyle(.secondary)
                     .padding(.horizontal, 14).padding(.vertical, 10)
-                    .frame(maxWidth: .infinity, alignment: .leading).background(.bar)
+                    .frame(maxWidth: .infinity, alignment: .leading).background(Theme.canvas)
                 }
             }
         }
@@ -1985,7 +1985,7 @@ struct HelperLinks: View {
                 }
                 .padding(.horizontal, 12).padding(.vertical, 6)
             }
-            .background(.bar)
+            .background(Theme.canvas)
         }
     }
 

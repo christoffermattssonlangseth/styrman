@@ -64,6 +64,18 @@ private let tool = #"{"type":"tool_call","call":"c1","tool":{"name":"Bash","kind
         #expect(t.preview == nil)
     }
 
+    /// A screen still showing the reply before a step (and an older `styr` reading
+    /// Claude's status line as text) previews only what's new.
+    @Test func aPreviewShowsOnlyWhatsNew() throws {
+        let t = SessionTimeline(sessionId: "S")
+        t.apply([try event(1, ms: 1_000, source: "transcript",
+                           #"{"type":"assistant_message","message":"m1","text":"A JSON key bug (tuple keys from `groupby`). Fixing it:","mode":"final"}"#)])
+        t.showPreview("A JSON key bug (tuple keys from groupby). Fixing it:\n\nFixing JSON keys and rerunning smoke · 1m 47s")
+        #expect(t.preview == nil)
+        t.showPreview("A JSON key bug (tuple keys from groupby). Fixing it:\n\nAll green now.")
+        #expect(t.preview == "All green now.")
+    }
+
     /// A terminal flipping between a longer and a shorter reading (a blinking
     /// marker) mustn't make the preview, and the conversation, jump.
     @MainActor @Test func aFlipFloppingPreviewHoldsStill() async throws {

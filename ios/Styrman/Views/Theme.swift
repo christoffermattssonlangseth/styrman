@@ -18,15 +18,15 @@ enum Theme {
         Color(UIColor { UIColor(hex: $0.userInterfaceStyle == .dark ? dark : light) })
     }
     /// The page everything sits on.
-    static let canvas = dyn(0xFAF9F5, 0x262624)
+    static let canvas = dyn(0xFAF9F5, 0x1C1C1B)
     /// Cards, list blocks, the composer.
-    static let surface = dyn(0xFFFFFF, 0x30302E)
+    static let surface = dyn(0xFFFFFF, 0x262625)
     /// The user's messages and quiet fills.
-    static let bubble = dyn(0xF0EEE6, 0x1F1E1D)
-    static let hairline = dyn(0xE5E3DA, 0x3D3D3A)
+    static let bubble = dyn(0xF0EEE6, 0x32312F)
+    static let hairline = dyn(0xE5E3DA, 0x363633)
     static let textPrimary = dyn(0x141413, 0xF5F4EE)
     static let textSecondary = dyn(0x73726C, 0xA3A19A)
-    static let codeFill = dyn(0xEDEBE3, 0x3A3935)
+    static let codeFill = dyn(0xEDEBE3, 0x2E2E2B)
     static let live = dyn(0x2EA043, 0x3FB950)
     /// Diff lines: green added, red removed, legible as text in both modes.
     static let diffAdded = Color(UIColor { UIColor(hex: $0.userInterfaceStyle == .dark ? 0x56D364 : 0x1A7F37) })

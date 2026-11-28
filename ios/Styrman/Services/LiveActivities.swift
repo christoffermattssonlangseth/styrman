@@ -101,6 +101,10 @@ final class LiveActivities {
             WidgetCenter.shared.reloadAllTimelines()
         }
         guard enabled, ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        #if DEBUG
+        // Screenshots (simulator): starting one asks for notifications over the app.
+        if ProcessInfo.processInfo.environment["STYR_NO_PUSH"] == "1" { return }
+        #endif
         // ActivityKit's handles are safe to use from here; Swift can't tell.
         nonisolated(unsafe) let current = Activity<StyrmanActivityAttributes>.activities
         if state.isIdle {

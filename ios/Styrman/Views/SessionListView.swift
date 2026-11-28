@@ -704,6 +704,7 @@ struct SettingsView: View {
                     }
                     LabeledContent("Status", value: statusText)
                 }
+                IconSettings()
                 VoiceSettings()
                 Section {
                     Toggle("Notifications", isOn: $notify)

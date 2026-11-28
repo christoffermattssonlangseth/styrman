@@ -182,12 +182,23 @@ final class SessionTimeline {
 
     private func setPreview(_ text: String?) {
         guard let text, !text.isEmpty else { preview = nil; return }
-        // Already here as a message (the screen redrew a finished reply): no echo.
-        if Self.alreadySaid(text, in: items.suffix(12)) {
-            preview = nil
-            return
+        preview = Self.unsaid(text, in: items.suffix(12))
+    }
+
+    /// What of a preview isn't already here as a message: a screen that still shows
+    /// the reply before a step, with more under it, shows only the more. Claude's
+    /// status line under it ("Fixing the keys · 1m 47s", read by an older `styr`)
+    /// isn't reply either.
+    nonisolated static func unsaid(_ text: String, in items: some Collection<TimelineItem>) -> String? {
+        var paragraphs = text.components(separatedBy: "\n\n")
+        while let first = paragraphs.first, alreadySaid(first, in: items) || first.trimmingCharacters(in: .whitespaces).isEmpty {
+            paragraphs.removeFirst()
         }
-        preview = text
+        if let last = paragraphs.last, last.range(of: #"^[^\n]{1,120} · (\d+[hms] ?)+…?$"#, options: .regularExpression) != nil {
+            paragraphs.removeLast()
+        }
+        let rest = paragraphs.joined(separator: "\n\n")
+        return rest.isEmpty ? nil : rest
     }
     /// The history has been fully loaded at least once (it stays cached after that).
     private(set) var loaded = false
